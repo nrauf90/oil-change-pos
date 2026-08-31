@@ -1,0 +1,108 @@
+@extends('layouts.app')
+@section('title', 'Inventory')
+
+@section('content')
+<div class="mb-5 flex flex-wrap items-end justify-between gap-4">
+    <div>
+        <h1 class="text-3xl font-black tracking-tight">Inventory</h1>
+        <p class="mt-1 text-sm font-medium text-slate-500">Products and repair tasks available on the sale screen.</p>
+    </div>
+    <a href="{{ route('items.create') }}" class="btn-primary">+ New item</a>
+</div>
+
+<form method="GET" action="{{ route('items.index') }}" class="card mb-5 flex flex-wrap items-end gap-3 p-4">
+    <div class="min-w-56 flex-1">
+        <label class="label" for="q">Search</label>
+        <input id="q" name="q" type="search" class="field" placeholder="Item name&hellip;" value="{{ $search }}">
+    </div>
+    <div>
+        <label class="label" for="type">Type</label>
+        <select id="type" name="type" class="field">
+            <option value="">All types</option>
+            @foreach ($types as $type)
+                <option value="{{ $type->value }}" @selected($activeType === $type->value)>{{ $type->label() }}</option>
+            @endforeach
+        </select>
+    </div>
+    <div>
+        <label class="label" for="status">Status</label>
+        <select id="status" name="status" class="field">
+            <option value="">All statuses</option>
+            <option value="active" @selected($activeStatus === 'active')>Active only</option>
+            <option value="inactive" @selected($activeStatus === 'inactive')>Retired only</option>
+        </select>
+    </div>
+    <button type="submit" class="btn-dark">Filter</button>
+    @if ($search || $activeType || $activeStatus)
+        <a href="{{ route('items.index') }}" class="btn-ghost">Clear</a>
+    @endif
+</form>
+
+<div class="card overflow-hidden">
+    <table class="w-full text-left">
+        <thead class="border-b-2 border-slate-200 bg-slate-50 text-xs font-bold uppercase tracking-wide text-slate-500">
+            <tr>
+                <th class="px-4 py-3">Item</th>
+                <th class="px-4 py-3">Type</th>
+                <th class="px-4 py-3 text-right">Unit cost</th>
+                <th class="px-4 py-3 text-right">Stock</th>
+                <th class="px-4 py-3 text-right">Actions</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+            @forelse ($items as $item)
+                <tr class="hover:bg-amber-50/60">
+                    <td class="px-4 py-3 text-base font-bold">
+                        {{ $item->name }}
+                        @unless ($item->is_active)
+                            <span data-status-badge="inactive" class="pill ml-1 bg-slate-200 text-slate-600"
+                                  title="Hidden from the sale screen">Inactive</span>
+                        @endunless
+                    </td>
+                    <td class="px-4 py-3">
+                        <span class="pill {{ $item->type === \App\Enums\ItemType::Product ? 'bg-sky-100 text-sky-800' : 'bg-violet-100 text-violet-800' }}">
+                            {{ $item->type->label() }}
+                        </span>
+                    </td>
+                    @can('items.view_unit_cost')
+                        <td class="px-4 py-3 text-right font-mono tabular-nums text-slate-500">
+                            {{ $item->unit_cost !== null ? number_format((float) $item->unit_cost, 2) : '—' }}
+                        </td>
+                    @endcan
+                    <td class="px-4 py-3 text-right">
+                        @if ($item->stockLabel() === null)
+                            <span class="text-slate-400">Not tracked</span>
+                        @else
+                            {{-- Stock reads back in the item's own unit: "32.000 L", "13.000 kg", "7". --}}
+                            <span class="font-mono text-base font-bold tabular-nums">{{ $item->stockLabel() }}</span>
+                            @if ($item->isLowOnStock())
+                                <span class="pill ml-1 bg-red-100 text-red-800">Low stock</span>
+                            @endif
+                        @endif
+                        @if ($item->packContains() !== null)
+                            {{-- The derived pack size, so a mistyped bottle count is obvious at a glance. --}}
+                            <p class="mt-0.5 text-xs font-medium text-slate-500">
+                                One {{ $item->pack_label ?: 'pack' }} = {{ $item->packContains() }} {{ $item->unit_of_measure->abbreviation() }}
+                            </p>
+                        @endif
+                    </td>
+                    <td class="px-4 py-3">
+                        <div class="flex justify-end gap-2">
+                            <a href="{{ route('items.edit', $item) }}" class="btn-ghost !px-3 !py-1.5">Edit</a>
+                            <x-confirm-delete :action="route('items.destroy', $item)" :subject="$item->name" />
+                        </div>
+                    </td>
+                </tr>
+            @empty
+                <tr>
+                    <td colspan="5" class="px-4 py-12 text-center font-semibold text-slate-400">
+                        No items yet. Add one, or quick-add from the sale screen.
+                    </td>
+                </tr>
+            @endforelse
+        </tbody>
+    </table>
+</div>
+
+<div class="mt-4">{{ $items->links() }}</div>
+@endsection

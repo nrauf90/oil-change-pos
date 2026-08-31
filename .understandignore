@@ -1,0 +1,23 @@
+# Secrets and local configuration
+.env*
+auth.json
+*.key
+*.pem
+*.p12
+
+# Runtime data and customer/vendor evidence
+database/*.sqlite*
+storage/logs/
+storage/app/private/
+storage/app/public/
+public/storage/
+
+# Generated dependencies and build output
+vendor/
+node_modules/
+public/build/
+bootstrap/cache/
+
+# Tool output that should not feed back into analysis
+.ua/intermediate/
+.ua/diff-overlay.json
