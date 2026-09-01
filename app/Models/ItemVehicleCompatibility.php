@@ -30,10 +30,11 @@ class ItemVehicleCompatibility extends Model
         static::saving(function (self $compatibility): void {
             foreach (['year_from', 'year_to'] as $field) {
                 $year = $compatibility->{$field};
+                $currentYear = now()->year;
 
-                if ($year !== null && ($year < 1886 || $year > 2100)) {
+                if ($year !== null && ($year < 2000 || $year > $currentYear)) {
                     throw ValidationException::withMessages([
-                        $field => 'The year must be between 1886 and 2100.',
+                        $field => "The year must be between 2000 and {$currentYear}.",
                     ]);
                 }
             }

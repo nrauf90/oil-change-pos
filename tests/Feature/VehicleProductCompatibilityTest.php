@@ -61,11 +61,18 @@ class VehicleProductCompatibilityTest extends TestCase
         ItemVehicleCompatibility::factory()->for($product)->for($model)->create();
     }
 
-    public function test_compatibility_rejects_years_outside_the_supported_range(): void
+    public function test_compatibility_rejects_years_before_2000(): void
     {
         $this->expectException(ValidationException::class);
 
-        ItemVehicleCompatibility::factory()->create(['year_from' => 99]);
+        ItemVehicleCompatibility::factory()->create(['year_from' => 1999]);
+    }
+
+    public function test_compatibility_rejects_years_after_the_current_year(): void
+    {
+        $this->expectException(ValidationException::class);
+
+        ItemVehicleCompatibility::factory()->create(['year_to' => now()->year + 1]);
     }
 
     public function test_vehicle_filter_includes_universal_and_matching_specific_products(): void
