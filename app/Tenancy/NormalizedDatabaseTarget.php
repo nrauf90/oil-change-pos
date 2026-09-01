@@ -10,22 +10,34 @@ final readonly class NormalizedDatabaseTarget
 {
     private const SUPPORTED_DRIVERS = ['mysql', 'sqlite'];
 
+    /**
+     * @param  list<array{host: string, address: string, port: int}>  $mysqlEndpoints
+     * @param  list<string>  $claimFingerprints
+     */
     private function __construct(
         public string $driver,
         public string $database,
-        public ?string $host,
+        public array|string|null $host,
         public ?int $port,
         public ?string $socket,
         public string $fingerprint,
         public ?string $pendingSqliteFingerprint,
         public bool $hasStableFilesystemIdentity,
         public ?string $locatorFingerprint,
-        private array $collisionFingerprints,
+        public ?string $filesystemIdentity,
+        public array $mysqlEndpoints,
+        private array $claimFingerprints,
     ) {}
 
     public function collidesWith(self $other): bool
     {
-        return array_intersect($this->collisionFingerprints, $other->collisionFingerprints) !== [];
+        return array_intersect($this->claimFingerprints, $other->claimFingerprints) !== [];
+    }
+
+    /** @return list<string> */
+    public function claimFingerprints(): array
+    {
+        return $this->claimFingerprints;
     }
 
     public static function forTenant(
@@ -66,13 +78,14 @@ final readonly class NormalizedDatabaseTarget
         }
 
         return $normalizedTarget->withConnectionOverrides(
-            host: $target->host === null ? null : self::canonicalMySqlHost($target->host),
+            host: $target->host === null ? null : self::canonicalMySqlHostConfiguration($target->host),
             port: $target->port === null ? null : self::canonicalMySqlPort($target->port),
             socket: null,
         );
     }
 
-    private function withConnectionOverrides(?string $host, ?int $port, ?string $socket): self
+    /** @param list<string>|string|null $host */
+    private function withConnectionOverrides(array|string|null $host, ?int $port, ?string $socket): self
     {
         return new self(
             $this->driver,
@@ -84,7 +97,9 @@ final readonly class NormalizedDatabaseTarget
             $this->pendingSqliteFingerprint,
             $this->hasStableFilesystemIdentity,
             $this->locatorFingerprint,
-            $this->collisionFingerprints,
+            $this->filesystemIdentity,
+            $this->mysqlEndpoints,
+            $this->claimFingerprints,
         );
     }
 
@@ -118,7 +133,7 @@ final readonly class NormalizedDatabaseTarget
     private static function normalize(
         string $driver,
         string $database,
-        ?string $host,
+        array|string|null $host,
         ?int $port,
         ?string $socket,
         bool $allowSqliteMemoryDatabase,
@@ -141,10 +156,10 @@ final readonly class NormalizedDatabaseTarget
             $fingerprint = $filesystemIdentity === null
                 ? $pendingFingerprint
                 : self::fingerprint(['driver' => $driver, 'file' => $filesystemIdentity]);
-            $collisionFingerprints = [$pendingFingerprint];
+            $claimFingerprints = [$pendingFingerprint];
 
             if ($fingerprint !== $pendingFingerprint) {
-                $collisionFingerprints[] = $fingerprint;
+                $claimFingerprints[] = $fingerprint;
             }
 
             return new self(
@@ -157,7 +172,9 @@ final readonly class NormalizedDatabaseTarget
                 $pendingFingerprint,
                 $filesystemIdentity !== null,
                 $pendingFingerprint,
-                $collisionFingerprints,
+                $filesystemIdentity,
+                [],
+                $claimFingerprints,
             );
         }
 
@@ -168,21 +185,8 @@ final readonly class NormalizedDatabaseTarget
             $pathFingerprint = self::fingerprint([
                 'driver' => $driver,
                 'socket' => self::pathIdentity($socket),
-                'database' => $database,
+                'database' => self::mySqlSchemaIdentity($database),
             ]);
-            $filesystemIdentity = self::filesystemIdentity($socket);
-            $fingerprint = $filesystemIdentity === null
-                ? $pathFingerprint
-                : self::fingerprint([
-                    'driver' => $driver,
-                    'socket_file' => $filesystemIdentity,
-                    'database' => $database,
-                ]);
-            $collisionFingerprints = [$pathFingerprint];
-
-            if ($fingerprint !== $pathFingerprint) {
-                $collisionFingerprints[] = $fingerprint;
-            }
 
             return new self(
                 $driver,
@@ -190,24 +194,46 @@ final readonly class NormalizedDatabaseTarget
                 null,
                 null,
                 $socket,
-                $fingerprint,
+                $pathFingerprint,
                 null,
                 false,
                 $pathFingerprint,
-                $collisionFingerprints,
+                null,
+                [],
+                [$pathFingerprint],
             );
         }
 
-        $host = self::canonicalMySqlHost($host ?? '127.0.0.1');
+        $host = self::canonicalMySqlHostConfiguration($host ?? '127.0.0.1');
         $port = self::canonicalMySqlPort($port ?? 3306);
-        $identity = [
-            'driver' => $driver,
-            'host' => self::mySqlHostIdentity($host, $hostResolver),
-            'port' => $port,
-            'database' => $database,
-        ];
+        $hosts = is_array($host) ? $host : [$host];
+        $schemaIdentity = self::mySqlSchemaIdentity($database);
+        $claimFingerprints = [];
+        $mysqlEndpoints = [];
 
-        $fingerprint = self::fingerprint($identity);
+        foreach ($hosts as $configuredHost) {
+            foreach (self::resolveMySqlHostEndpoints($configuredHost, $hostResolver) as $endpoint) {
+                $claimFingerprints[] = self::fingerprint([
+                    'driver' => $driver,
+                    'endpoint' => $endpoint['identity'],
+                    'port' => $port,
+                    'database' => $schemaIdentity,
+                ]);
+                $mysqlEndpoints[] = [
+                    'host' => $configuredHost,
+                    'address' => $endpoint['address'],
+                    'port' => $port,
+                ];
+            }
+        }
+
+        $claimFingerprints = array_values(array_unique($claimFingerprints));
+        sort($claimFingerprints, SORT_STRING);
+        $mysqlEndpoints = self::uniqueMySqlEndpoints($mysqlEndpoints);
+        $fingerprint = self::fingerprint([
+            'driver' => $driver,
+            'claims' => implode(',', $claimFingerprints),
+        ]);
 
         return new self(
             $driver,
@@ -219,7 +245,9 @@ final readonly class NormalizedDatabaseTarget
             null,
             false,
             null,
-            [$fingerprint],
+            null,
+            $mysqlEndpoints,
+            $claimFingerprints,
         );
     }
 
@@ -241,6 +269,40 @@ final readonly class NormalizedDatabaseTarget
         }
 
         return $database;
+    }
+
+    private static function mySqlSchemaIdentity(string $database): string
+    {
+        return Str::lower($database);
+    }
+
+    /**
+     * @param  list<string>|string  $host
+     * @return list<string>|string
+     */
+    private static function canonicalMySqlHostConfiguration(array|string $host): array|string
+    {
+        if (is_string($host)) {
+            return self::canonicalMySqlHost($host);
+        }
+
+        if ($host === []) {
+            throw new InvalidArgumentException('MySQL tenant database host arrays cannot be empty.');
+        }
+
+        $hosts = [];
+
+        foreach ($host as $configuredHost) {
+            if (! is_string($configuredHost)) {
+                throw new InvalidArgumentException(
+                    'MySQL tenant database host arrays must contain only host names or IP addresses.',
+                );
+            }
+
+            $hosts[] = self::canonicalMySqlHost($configuredHost);
+        }
+
+        return array_values(array_unique($hosts));
     }
 
     private static function canonicalMySqlHost(string $host): string
@@ -300,47 +362,58 @@ final readonly class NormalizedDatabaseTarget
         return true;
     }
 
-    private static function mySqlHostIdentity(
+    /** @return list<array{address: string, identity: string}> */
+    private static function resolveMySqlHostEndpoints(
         string $host,
         DatabaseHostResolver $hostResolver,
-    ): string {
+    ): array {
         if ($host === 'localhost') {
-            return 'loopback';
+            return [[
+                'address' => '127.0.0.1',
+                'identity' => 'loopback',
+            ]];
         }
 
         $packedAddress = @inet_pton($host);
 
         if ($packedAddress === false) {
-            $addresses = array_map(
-                self::canonicalIpAddress(...),
+            $endpoints = array_map(
+                self::canonicalIpEndpoint(...),
                 $hostResolver->resolve($host),
             );
-            $addresses = array_values(array_unique($addresses));
-            sort($addresses, SORT_STRING);
+            $endpoints = self::uniqueResolvedEndpoints($endpoints);
 
-            if ($addresses === []) {
+            if ($endpoints === []) {
                 throw new InvalidArgumentException(
                     'MySQL tenant database hosts must resolve to a stable IP address.',
                 );
             }
 
-            return self::mySqlAddressSetIdentity($addresses);
+            return $endpoints;
         }
 
-        return self::mySqlAddressSetIdentity([
-            self::canonicalPackedIpAddress($packedAddress),
-        ]);
+        return [self::canonicalPackedIpEndpoint($packedAddress)];
     }
 
-    /** @param list<string> $addresses */
-    private static function mySqlAddressSetIdentity(array $addresses): string
+    /**
+     * @param  list<array{address: string, identity: string}>  $endpoints
+     * @return list<array{address: string, identity: string}>
+     */
+    private static function uniqueResolvedEndpoints(array $endpoints): array
     {
-        return $addresses === ['loopback']
-            ? 'loopback'
-            : 'addresses:'.implode(',', $addresses);
+        $uniqueEndpoints = [];
+
+        foreach ($endpoints as $endpoint) {
+            $uniqueEndpoints[$endpoint['address'].'|'.$endpoint['identity']] = $endpoint;
+        }
+
+        ksort($uniqueEndpoints, SORT_STRING);
+
+        return array_values($uniqueEndpoints);
     }
 
-    private static function canonicalIpAddress(string $address): string
+    /** @return array{address: string, identity: string} */
+    private static function canonicalIpEndpoint(string $address): array
     {
         $packedAddress = @inet_pton($address);
 
@@ -350,25 +423,46 @@ final readonly class NormalizedDatabaseTarget
             );
         }
 
-        return self::canonicalPackedIpAddress($packedAddress);
+        return self::canonicalPackedIpEndpoint($packedAddress);
     }
 
-    private static function canonicalPackedIpAddress(string $packedAddress): string
+    /** @return array{address: string, identity: string} */
+    private static function canonicalPackedIpEndpoint(string $packedAddress): array
     {
         if (strlen($packedAddress) === 16
             && substr($packedAddress, 0, 12) === str_repeat("\0", 10)."\xff\xff") {
             $packedAddress = substr($packedAddress, 12);
         }
 
+        $address = (string) inet_ntop($packedAddress);
+
         if (strlen($packedAddress) === 4 && ord($packedAddress[0]) === 127) {
-            return 'loopback';
+            return ['address' => $address, 'identity' => 'loopback'];
         }
 
         if ($packedAddress === inet_pton('::1')) {
-            return 'loopback';
+            return ['address' => $address, 'identity' => 'loopback'];
         }
 
-        return (string) inet_ntop($packedAddress);
+        return ['address' => $address, 'identity' => $address];
+    }
+
+    /**
+     * @param  list<array{host: string, address: string, port: int}>  $endpoints
+     * @return list<array{host: string, address: string, port: int}>
+     */
+    private static function uniqueMySqlEndpoints(array $endpoints): array
+    {
+        $uniqueEndpoints = [];
+
+        foreach ($endpoints as $endpoint) {
+            $key = $endpoint['host'].'|'.$endpoint['address'].'|'.$endpoint['port'];
+            $uniqueEndpoints[$key] = $endpoint;
+        }
+
+        ksort($uniqueEndpoints, SORT_STRING);
+
+        return array_values($uniqueEndpoints);
     }
 
     private static function canonicalMySqlPort(int $port): int

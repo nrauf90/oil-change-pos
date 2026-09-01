@@ -10,7 +10,8 @@ final readonly class DatabaseTargetConfiguration
     public function __construct(
         public ?string $driver,
         public ?string $database,
-        public ?string $host = null,
+        /** @var list<string>|string|null */
+        public array|string|null $host = null,
         public ?int $port = null,
         public ?string $socket = null,
     ) {}
@@ -82,7 +83,7 @@ final readonly class DatabaseTargetConfiguration
         return new self(
             driver: self::nullableString($identity['driver'] ?? null),
             database: self::nullableString($identity['database'] ?? null),
-            host: self::nullableString($identity['host'] ?? null),
+            host: self::nullableHost($identity['host'] ?? null),
             port: self::nullableInteger($identity['port'] ?? null),
             socket: self::nullableString($identity['unix_socket'] ?? null),
         );
@@ -106,6 +107,34 @@ final readonly class DatabaseTargetConfiguration
     private static function nullableString(mixed $value): ?string
     {
         return is_string($value) && trim($value) !== '' ? $value : null;
+    }
+
+    /** @return list<string>|string|null */
+    private static function nullableHost(mixed $value): array|string|null
+    {
+        if (is_string($value)) {
+            return trim($value) !== '' ? $value : null;
+        }
+
+        if (! is_array($value)) {
+            return null;
+        }
+
+        $hosts = [];
+
+        foreach ($value as $host) {
+            if (! is_string($host) || trim($host) === '') {
+                throw new InvalidArgumentException('Database host arrays must contain only non-empty strings.');
+            }
+
+            $hosts[] = $host;
+        }
+
+        if ($hosts === []) {
+            throw new InvalidArgumentException('Database host arrays cannot be empty.');
+        }
+
+        return $hosts;
     }
 
     private static function nullableInteger(mixed $value): ?int
