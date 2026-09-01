@@ -18,6 +18,8 @@ return [
 
     'default' => env('DB_CONNECTION', 'sqlite'),
 
+    'tenant_sqlite_root' => env('TENANT_SQLITE_ROOT', database_path('tenants')),
+
     /*
     |--------------------------------------------------------------------------
     | Database Connections

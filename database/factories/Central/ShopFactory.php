@@ -19,13 +19,17 @@ class ShopFactory extends Factory
     public function definition(): array
     {
         $slug = $this->faker->unique()->slug(2);
+        $tenantDatabaseRoot = rtrim(
+            (string) config('database.tenant_sqlite_root', database_path('tenants')),
+            '/\\',
+        );
 
         return [
             'name' => ucfirst(str($slug)->replace('-', ' ')->toString()),
             'slug' => $slug,
             'status' => ShopStatus::Provisioning,
             'database_driver' => 'sqlite',
-            'database_name' => database_path("tenants/{$slug}.sqlite"),
+            'database_name' => $tenantDatabaseRoot.DIRECTORY_SEPARATOR."{$slug}.sqlite",
             'timezone' => 'Asia/Karachi',
             'currency' => 'PKR',
         ];

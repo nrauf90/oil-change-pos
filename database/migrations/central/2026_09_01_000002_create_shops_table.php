@@ -18,8 +18,11 @@ return new class extends Migration
             $table->string('status')->index();
             $table->string('database_driver');
             $table->string('database_name');
+            $table->string('database_target_fingerprint', 64)
+                ->unique('shops_database_target_fingerprint_unique');
             $table->text('database_host')->nullable();
             $table->text('database_port')->nullable();
+            $table->text('database_socket')->nullable();
             $table->text('database_username')->nullable();
             $table->text('database_password')->nullable();
             $table->string('timezone')->default('Asia/Karachi');

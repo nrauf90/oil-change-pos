@@ -3,13 +3,15 @@
 namespace App\Models\Central;
 
 use App\Enums\ShopStatus;
+use App\Exceptions\TenantDatabaseTargetConflict;
+use App\Tenancy\NormalizedDatabaseTarget;
 use Database\Factories\Central\ShopFactory;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use InvalidArgumentException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use LogicException;
 
 class Shop extends CentralModel
@@ -21,17 +23,26 @@ class Shop extends CentralModel
         'slug',
         'database_driver',
         'database_name',
+        'database_target_fingerprint',
         'database_host',
         'database_port',
+        'database_socket',
         'database_username',
         'database_password',
     ];
 
-    private const SUPPORTED_DATABASE_DRIVERS = ['mysql', 'sqlite'];
+    private const DATABASE_TARGET_UNIQUE_INDEX = 'shops_database_target_fingerprint_unique';
 
     protected $fillable = ['name', 'timezone', 'currency'];
 
-    protected $hidden = ['database_host', 'database_port', 'database_username', 'database_password'];
+    protected $hidden = [
+        'database_target_fingerprint',
+        'database_host',
+        'database_port',
+        'database_socket',
+        'database_username',
+        'database_password',
+    ];
 
     private bool $allowsLifecycleTransition = false;
 
@@ -43,6 +54,7 @@ class Shop extends CentralModel
             'status' => ShopStatus::class,
             'database_host' => 'encrypted',
             'database_port' => 'encrypted',
+            'database_socket' => 'encrypted',
             'database_username' => 'encrypted',
             'database_password' => 'encrypted',
             'provisioning_failed_at' => 'datetime',
@@ -53,13 +65,7 @@ class Shop extends CentralModel
     protected static function booted(): void
     {
         static::saving(function (self $shop): void {
-            $databaseDriver = (string) $shop->database_driver;
-
-            self::assertSupportedDatabaseDriver($databaseDriver);
-            $shop->database_name = self::canonicalDatabaseName(
-                $databaseDriver,
-                (string) $shop->database_name,
-            );
+            $shop->normalizeDatabaseTarget();
 
             if ($shop->exists && $shop->isDirty('status') && ! $shop->allowsLifecycleTransition) {
                 throw new LogicException('Shop status must be changed through a lifecycle method.');
@@ -70,6 +76,8 @@ class Shop extends CentralModel
                 && ! $shop->allowsProvisioningTargetChange) {
                 throw new LogicException('Shop database targets must be changed through updateProvisioningTarget().');
             }
+
+            $shop->assertDatabaseTargetIsAvailable();
         });
     }
 
@@ -82,11 +90,10 @@ class Shop extends CentralModel
         ?int $databasePort = null,
         ?string $databaseUsername = null,
         ?string $databasePassword = null,
+        ?string $databaseSocket = null,
         string $timezone = 'Asia/Karachi',
         string $currency = 'PKR',
     ): self {
-        self::assertSupportedDatabaseDriver($databaseDriver);
-
         $shop = new self;
         $shop->forceFill([
             'name' => $name,
@@ -96,11 +103,13 @@ class Shop extends CentralModel
             'database_name' => $databaseName,
             'database_host' => $databaseHost,
             'database_port' => $databasePort,
+            'database_socket' => $databaseSocket,
             'database_username' => $databaseUsername,
             'database_password' => $databasePassword,
             'timezone' => $timezone,
             'currency' => $currency,
-        ])->save();
+        ]);
+        $shop->saveWithDatabaseTargetConflictTranslation();
 
         return $shop;
     }
@@ -113,9 +122,8 @@ class Shop extends CentralModel
         ?int $databasePort = null,
         ?string $databaseUsername = null,
         ?string $databasePassword = null,
+        ?string $databaseSocket = null,
     ): void {
-        self::assertSupportedDatabaseDriver($databaseDriver);
-
         $this->updateLocked(function (self $shop) use (
             $slug,
             $databaseDriver,
@@ -124,6 +132,7 @@ class Shop extends CentralModel
             $databasePort,
             $databaseUsername,
             $databasePassword,
+            $databaseSocket,
         ): void {
             if ($shop->provisioned_at !== null || in_array($shop->status, [ShopStatus::Active, ShopStatus::Suspended], true)) {
                 throw new LogicException('A provisioned shop database target is immutable.');
@@ -138,9 +147,11 @@ class Shop extends CentralModel
                     'database_name' => $databaseName,
                     'database_host' => $databaseHost,
                     'database_port' => $databasePort,
+                    'database_socket' => $databaseSocket,
                     'database_username' => $databaseUsername,
                     'database_password' => $databasePassword,
-                ])->save();
+                ]);
+                $shop->saveWithDatabaseTargetConflictTranslation();
             } finally {
                 $shop->allowsProvisioningTargetChange = false;
             }
@@ -202,6 +213,7 @@ class Shop extends CentralModel
             'database' => $this->database_name,
             'host' => $this->database_host,
             'port' => $this->database_port === null ? null : (int) $this->database_port,
+            'unix_socket' => $this->database_socket,
             'username' => $this->database_username,
             'password' => $this->database_password,
         ], static fn (mixed $value): bool => $value !== null);
@@ -276,70 +288,80 @@ class Shop extends CentralModel
         $this->setRawAttributes($attributes, true);
     }
 
-    private static function assertSupportedDatabaseDriver(string $databaseDriver): void
+    private function normalizeDatabaseTarget(): void
     {
-        if (! in_array($databaseDriver, self::SUPPORTED_DATABASE_DRIVERS, true)) {
-            throw new InvalidArgumentException("Unsupported shop database driver [{$databaseDriver}].");
+        $tenantConfiguration = config('database.connections.tenant');
+        $centralConfiguration = config('database.connections.central');
+        $sqliteRoot = config('database.tenant_sqlite_root');
+
+        if (! is_array($tenantConfiguration)
+            || ! is_array($centralConfiguration)
+            || ! is_string($sqliteRoot)
+            || $sqliteRoot === '') {
+            throw new LogicException('Tenant database target configuration is incomplete.');
+        }
+
+        $target = NormalizedDatabaseTarget::forTenant(
+            driver: (string) $this->database_driver,
+            database: (string) $this->database_name,
+            host: $this->database_host,
+            port: $this->database_port === null ? null : (int) $this->database_port,
+            socket: $this->database_socket,
+            tenantConfiguration: $tenantConfiguration,
+            centralConfiguration: $centralConfiguration,
+            sqliteRoot: $sqliteRoot,
+        );
+
+        $this->forceFill([
+            'database_driver' => $target->driver,
+            'database_name' => $target->database,
+            'database_target_fingerprint' => $target->fingerprint,
+            'database_host' => $target->host,
+            'database_port' => $target->port,
+            'database_socket' => $target->socket,
+        ]);
+    }
+
+    private function assertDatabaseTargetIsAvailable(): void
+    {
+        if (self::databaseTargetIsAssignedToAnotherShop(
+            (string) $this->database_target_fingerprint,
+            $this->exists ? (string) $this->getKey() : null,
+        )) {
+            throw TenantDatabaseTargetConflict::alreadyAssigned();
         }
     }
 
-    private static function canonicalDatabaseName(string $databaseDriver, string $databaseName): string
+    private function saveWithDatabaseTargetConflictTranslation(): void
     {
-        if ($databaseDriver === 'mysql') {
-            $databaseName = trim($databaseName);
+        try {
+            $this->save();
+        } catch (UniqueConstraintViolationException $exception) {
+            $violatedTargetIndex = in_array('database_target_fingerprint', $exception->columns, true)
+                || $exception->index === self::DATABASE_TARGET_UNIQUE_INDEX;
+            $targetIsNowAssigned = self::databaseTargetIsAssignedToAnotherShop(
+                (string) $this->database_target_fingerprint,
+                $this->exists ? (string) $this->getKey() : null,
+            );
 
-            if (strlen($databaseName) > 64 || preg_match('/\A[A-Za-z0-9_]+\z/', $databaseName) !== 1) {
-                throw new InvalidArgumentException(
-                    'MySQL database names may contain only 1-64 ASCII letters, numbers, or underscores.',
-                );
+            if ($violatedTargetIndex || $targetIsNowAssigned) {
+                throw TenantDatabaseTargetConflict::alreadyAssigned();
             }
 
-            return $databaseName;
+            throw $exception;
         }
-
-        return self::canonicalSqlitePath($databaseName);
     }
 
-    private static function canonicalSqlitePath(string $databaseName): string
-    {
-        $databaseName = trim($databaseName);
-        $databaseName = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $databaseName);
-        $hasControlCharacter = preg_match('/[\x00-\x1F\x7F]/', $databaseName) === 1;
-        $isUncPath = str_starts_with($databaseName, DIRECTORY_SEPARATOR.DIRECTORY_SEPARATOR);
-        $isAbsolutePath = DIRECTORY_SEPARATOR === '\\'
-            ? preg_match('/\A[A-Za-z]:\\\\/', $databaseName) === 1
-            : str_starts_with($databaseName, DIRECTORY_SEPARATOR);
+    private static function databaseTargetIsAssignedToAnotherShop(
+        string $fingerprint,
+        ?string $shopId,
+    ): bool {
+        $query = static::withTrashed()->where('database_target_fingerprint', $fingerprint);
 
-        if ($databaseName === '' || $hasControlCharacter || $isUncPath || ! $isAbsolutePath) {
-            throw new InvalidArgumentException('SQLite tenant databases require a canonical absolute file path.');
+        if ($shopId !== null) {
+            $query->whereKeyNot($shopId);
         }
 
-        $root = DIRECTORY_SEPARATOR === '\\'
-            ? strtoupper($databaseName[0]).':'.DIRECTORY_SEPARATOR
-            : DIRECTORY_SEPARATOR;
-        $relativePath = DIRECTORY_SEPARATOR === '\\'
-            ? substr($databaseName, 3)
-            : ltrim($databaseName, DIRECTORY_SEPARATOR);
-        $segments = [];
-
-        foreach (explode(DIRECTORY_SEPARATOR, $relativePath) as $segment) {
-            if ($segment === '' || $segment === '.') {
-                continue;
-            }
-
-            if ($segment === '..') {
-                throw new InvalidArgumentException('SQLite tenant databases require a canonical absolute file path.');
-            }
-
-            $segments[] = $segment;
-        }
-
-        if ($segments === []) {
-            throw new InvalidArgumentException('SQLite tenant databases require a canonical absolute file path.');
-        }
-
-        $canonicalPath = $root.implode(DIRECTORY_SEPARATOR, $segments);
-
-        return realpath($canonicalPath) ?: $canonicalPath;
+        return $query->exists();
     }
 }
