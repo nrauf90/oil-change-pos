@@ -6,12 +6,16 @@ use App\Enums\ItemType;
 use App\Enums\Permission;
 use App\Filament\Resources\Items\ItemResource;
 use App\Models\Item;
+use App\Models\VehicleMake;
+use App\Models\VehicleModel;
 use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
@@ -25,17 +29,22 @@ use Illuminate\Support\Str;
 
 class ItemsTable
 {
+    private const VEHICLE_YEAR_MIN = 2000;
+
+    private const VEHICLE_YEAR_MAX = 2026;
+
     public static function configure(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(fn (Builder $query): Builder => $query->with([
+                'vehicleCompatibilities.vehicleModel.vehicleMake',
+            ]))
             ->columns([
                 TextColumn::make('name')
                     ->searchable()
                     ->sortable()
                     ->weight('bold')
                     ->wrap()
-                    // The pack size rides along under the name so a mistyped
-                    // bottle count is visible without opening the item.
                     ->description(fn (Item $record): ?string => self::packDescription($record)),
 
                 TextColumn::make('type')
@@ -44,13 +53,17 @@ class ItemsTable
                     ->color(fn (ItemType $state): string => $state === ItemType::Product ? 'info' : 'warning')
                     ->sortable(),
 
+                TextColumn::make('compatibility_summary')
+                    ->label('Compatibility')
+                    ->state(fn (Item $record): string => self::compatibilitySummary($record))
+                    ->wrap(),
+
                 TextColumn::make('unit_cost')
                     ->label('Unit cost')
                     ->numeric(decimalPlaces: 2)
                     ->alignRight()
                     ->placeholder('—')
                     ->sortable()
-                    // Managers must not see costing; only the owner does.
                     ->visible(fn (): bool => auth()->user()?->can(Permission::ViewItemUnitCost->value) ?? false),
 
                 TextColumn::make('stock_level')
@@ -59,7 +72,6 @@ class ItemsTable
                     ->placeholder('not tracked')
                     ->sortable()
                     ->badge()
-                    // Stock reads back in the item's own unit: "32.000 L", "13.000 kg", "7".
                     ->state(fn (Item $record): ?string => $record->stockLabel())
                     ->color(fn (Model $record): string => $record->isLowOnStock() ? 'danger' : 'gray'),
 
@@ -84,6 +96,40 @@ class ItemsTable
                     ->label('On the sale screen')
                     ->placeholder('All items'),
 
+                Filter::make('vehicle_compatibility')
+                    ->schema([
+                        Select::make('make_id')
+                            ->label('Make')
+                            ->live()
+                            ->afterStateUpdated(fn (Set $set): mixed => $set('model_id', null))
+                            ->searchable()
+                            ->preload()
+                            ->options(fn (): array => VehicleMake::query()->orderBy('name')->pluck('name', 'id')->all()),
+                        Select::make('model_id')
+                            ->label('Model')
+                            ->searchable()
+                            ->preload()
+                            ->options(fn (Get $get): array => VehicleModel::query()
+                                ->when(
+                                    filled($get('make_id')),
+                                    fn (Builder $query): Builder => $query->where('vehicle_make_id', $get('make_id')),
+                                )
+                                ->orderBy('name')
+                                ->pluck('name', 'id')
+                                ->all()),
+                        TextInput::make('year')
+                            ->label('Year')
+                            ->numeric()
+                            ->integer()
+                            ->minValue(self::VEHICLE_YEAR_MIN)
+                            ->maxValue(self::VEHICLE_YEAR_MAX),
+                    ])
+                    ->query(fn (Builder $query, array $data): Builder => $query->compatibleWith(
+                        self::nullableInt($data['make_id'] ?? null),
+                        self::nullableInt($data['model_id'] ?? null),
+                        self::nullableInt($data['year'] ?? null),
+                    )),
+
                 Filter::make('low_stock')
                     ->label('Low on stock')
                     ->query(fn (Builder $query): Builder => $query->lowStock())
@@ -99,6 +145,46 @@ class ItemsTable
             ->emptyStateDescription('Add products and repair tasks here, or quick-add them straight from the sale screen.');
     }
 
+    private static function compatibilitySummary(Item $record): string
+    {
+        if ($record->is_universal) {
+            return 'Universal';
+        }
+
+        $summaries = $record->vehicleCompatibilities
+            ->map(fn ($compatibility): ?string => self::compatibilityLine(
+                $compatibility->vehicleModel?->vehicleMake?->name,
+                $compatibility->vehicleModel?->name,
+                $compatibility->year_from,
+                $compatibility->year_to,
+            ))
+            ->filter()
+            ->values();
+
+        if ($summaries->isEmpty()) {
+            return 'No compatibility set';
+        }
+
+        return $summaries->implode(', ');
+    }
+
+    private static function compatibilityLine(?string $make, ?string $model, ?int $yearFrom, ?int $yearTo): ?string
+    {
+        if (blank($model)) {
+            return null;
+        }
+
+        $label = trim(collect([$make, $model])->filter()->implode(' '));
+        $range = match (true) {
+            $yearFrom !== null && $yearTo !== null => "{$yearFrom}-{$yearTo}",
+            $yearFrom !== null => "{$yearFrom}+",
+            $yearTo !== null => "Up to {$yearTo}",
+            default => null,
+        };
+
+        return filled($range) ? "{$label} {$range}" : $label;
+    }
+
     /**
      * Booking in a delivery: whole packs for anything with packaging described,
      * a loose amount otherwise — and always as a fallback, because a recount
@@ -110,18 +196,12 @@ class ItemsTable
             ->label('Receive stock')
             ->icon(Heroicon::OutlinedInboxArrowDown)
             ->color('success')
-            // Admin and Manager keep the shelves stocked; a technician never
-            // touches a count. The action is a live endpoint, so this is the
-            // gate, not the button's visibility.
             ->authorize(fn (): bool => ItemResource::canManageStock())
             ->modalHeading(fn (Item $record): string => "Receive stock — {$record->name}")
             ->modalDescription(fn (Item $record): string => self::packDescription($record) ?? 'Type the amount that arrived.')
             ->modalSubmitActionLabel('Add to stock')
             ->schema(fn (Item $record): array => self::receiveStockSchema($record))
             ->action(function (Item $record, array $data): void {
-                // increment() leaves NULL where it finds it, and NULL means "never
-                // counted" — so a first delivery opens the count at zero instead
-                // of silently doing nothing.
                 if ($record->stock_level === null) {
                     $record->update(['stock_level' => 0]);
                 }
@@ -152,7 +232,6 @@ class ItemsTable
             $pack = $record->pack_label ?: 'pack';
 
             $fields[] = TextInput::make('packs')
-                // The modal speaks the shop's own language: "How many Cartons?"
                 ->label('How many '.Str::plural($pack).'?')
                 ->helperText(self::packDescription($record))
                 ->numeric()
@@ -171,7 +250,6 @@ class ItemsTable
             ->minValue(0.001)
             ->maxValue(999999)
             ->step(0.001)
-            // Something has to be typed: with no pack count, this is the amount.
             ->required(fn (Get $get): bool => blank($get('packs')))
             ->autofocus($contains === null);
 
@@ -187,7 +265,6 @@ class ItemsTable
             : "Loose amount ({$abbreviation})";
     }
 
-    /** "One Carton = 16.000 L", or null when the shop has not described the packaging. */
     private static function packDescription(Item $record): ?string
     {
         $contains = $record->packContains();
@@ -200,7 +277,16 @@ class ItemsTable
             'One %s = %s %s',
             $record->pack_label ?: 'pack',
             $contains,
-            $record->unit_of_measure->abbreviation()
+            $record->unit_of_measure->abbreviation(),
         );
+    }
+
+    private static function nullableInt(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        return (int) $value;
     }
 }

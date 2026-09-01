@@ -5,6 +5,8 @@ namespace Tests\Feature;
 use App\Enums\UnitOfMeasure;
 use App\Models\Item;
 use App\Models\User;
+use App\Models\VehicleMake;
+use App\Models\VehicleModel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -21,6 +23,15 @@ class PosDispenseUiTest extends TestCase
         parent::setUp();
 
         $this->actingAs(User::factory()->admin()->create());
+    }
+
+    public function test_the_sale_screen_preserves_visit_and_next_checkup_mileage_fields(): void
+    {
+        $this->get(route('pos.create'))
+            ->assertOk()
+            ->assertSee('Visit odometer reading (km)')
+            ->assertSee('Next checkup mileage (km)')
+            ->assertSee('name="next_checkup_mileage"', false);
     }
 
     private function oil(): Item
@@ -80,5 +91,26 @@ class PosDispenseUiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.0.unit_of_measure', 'piece')
             ->assertJsonPath('data.0.is_measured', false);
+    }
+
+    public function test_the_sale_screen_renders_vehicle_specific_quick_add_controls_for_products(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+
+        $this->get(route('pos.create'))
+            ->assertOk()
+            ->assertSee('Universal')
+            ->assertSee('Vehicle specific')
+            ->assertSee('Compatible vehicles')
+            ->assertSee('compatibilities', false)
+            ->assertSee('vehicle_make_id', false)
+            ->assertSee('vehicle_make_name', false)
+            ->assertSee('vehicle_model_id', false)
+            ->assertSee('vehicle_model_name', false)
+            ->assertSee('year_from', false)
+            ->assertSee('year_to', false)
+            ->assertSee('addCompatibilityRow()', false)
+            ->assertSee("compatibilityMessages(index, 'vehicle_model_id')", false);
     }
 }

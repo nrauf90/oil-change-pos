@@ -20,7 +20,7 @@
         ->values()
         ->all();
 
-    $customerFields = ['customer_name', 'phone', 'vehicle_model', 'vehicle_plate', 'mileage', 'notes'];
+    $customerFields = ['customer_name', 'phone', 'vehicle_model', 'vehicle_plate', 'mileage', 'next_checkup_mileage', 'notes'];
 
     $customer = collect($customerFields)
         ->mapWithKeys(fn (string $field) => [$field => (string) old($field, '')])
@@ -37,6 +37,9 @@
       x-data="posCounter(@js([
           'items' => $items,
           'groups' => $groups,
+          'vehicleMakes' => $vehicle_makes,
+          'vehicleYears' => range(2000, 2026),
+          'currentYear' => 2026,
           'lines' => $initialLines,
           'labor' => (string) old('labor_charge', ''),
           'misc' => (string) old('misc_charge', ''),
@@ -45,6 +48,7 @@
           'customerVehicleSearchUrl' => route('customer-vehicles.index'),
           'customerOpen' => $customerOpen,
           'quickAddUrl' => route('quick-items.store'),
+          'saleUrl' => route('pos.create'),
       ]))"
       x-ref="shell"
       x-on:submit="submitting = true"
@@ -146,9 +150,14 @@
                            x-model="customer.vehicle_plate" placeholder="ABC-123">
                 </div>
                 <div>
-                    <label class="label" for="mileage">Odometer mileage</label>
+                    <label class="label" for="mileage">Visit odometer reading (km)</label>
                     <input id="mileage" name="mileage" type="text" inputmode="numeric" class="field !py-2"
                            x-model="customer.mileage" placeholder="84500">
+                </div>
+                <div>
+                    <label class="label" for="next_checkup_mileage">Next checkup mileage (km)</label>
+                    <input id="next_checkup_mileage" name="next_checkup_mileage" type="text" inputmode="numeric" class="field !py-2"
+                           x-model="customer.next_checkup_mileage" placeholder="90000">
                 </div>
                 <div>
                     <label class="label" for="notes">Notes</label>
@@ -240,6 +249,53 @@
                 <button type="button" class="btn-dark shrink-0 !px-3 !py-2 !text-xs" @click="openQuickAdd(null)">
                     + New item
                 </button>
+            </div>
+
+            <div class="shrink-0 border-b border-slate-200 bg-slate-50/80 px-3 py-3">
+                <div class="flex flex-wrap items-end gap-3">
+                    <div class="min-w-32">
+                        <label class="label" for="vehicle_make_filter">Vehicle filters</label>
+                        <select id="vehicle_make_filter" class="field !py-2"
+                                x-model="vehicleFilter.makeId"
+                                @change="syncVehicleFilterModel()">
+                            <option value="">Make</option>
+                            <template x-for="make in vehicleMakes" :key="'vf-make-' + make.id">
+                                <option :value="String(make.id)" x-text="make.name"></option>
+                            </template>
+                        </select>
+                    </div>
+
+                    <div class="min-w-32">
+                        <label class="label" for="vehicle_model_filter">Model</label>
+                        <select id="vehicle_model_filter" class="field !py-2"
+                                x-model="vehicleFilter.modelId"
+                                :disabled="vehicleFilter.makeId === ''">
+                            <option value="" x-text="vehicleFilter.makeId === '' ? 'Choose make first' : 'Model'"></option>
+                            <template x-for="model in vehicleModelsForFilter" :key="'vf-model-' + model.id">
+                                <option :value="String(model.id)" x-text="model.name"></option>
+                            </template>
+                        </select>
+                    </div>
+
+                    <div class="min-w-28">
+                        <label class="label" for="vehicle_year_filter">Year</label>
+                        <select id="vehicle_year_filter" class="field !py-2" x-model="vehicleFilter.year">
+                            <option value="">Year</option>
+                            <template x-for="year in vehicleYearsDescending" :key="'vf-year-' + year">
+                                <option :value="String(year)" x-text="year"></option>
+                            </template>
+                        </select>
+                    </div>
+
+                    <button type="button" class="btn-ghost !py-2"
+                            @click="resetVehicleFilters()"
+                            :disabled="! vehicleFilterActive">
+                        All vehicles
+                    </button>
+
+                    <span class="text-xs font-semibold text-slate-500"
+                          x-text="vehicleFilterActive ? 'Universal products stay visible alongside matching vehicle-specific parts.' : 'Showing every vehicle-compatible product and every service.'"></span>
+                </div>
             </div>
 
             {{-- Categories collapse into a scrolling chip row on a narrow screen. --}}
@@ -532,13 +588,144 @@
                 @endcan
 
                 {{-- Repairs never carry stock, so this only exists for products. --}}
-                <div x-show="quickAdd.type === 'product'" x-cloak>
-                    <label class="label" for="qa_stock">Opening stock <span class="text-slate-400 normal-case">(optional)</span></label>
-                    <input id="qa_stock" type="text" inputmode="numeric" class="field"
-                           x-model="quickAdd.stock_level" placeholder="Leave blank to not track stock">
-                    <template x-for="message in quickAdd.errors.stock_level || []" :key="message">
-                        <p class="mt-1 text-sm font-semibold text-red-600" x-text="message"></p>
-                    </template>
+                <div x-show="quickAdd.type === 'product'" x-cloak class="space-y-4">
+                    <div>
+                        <label class="label" for="qa_stock">Opening stock <span class="text-slate-400 normal-case">(optional)</span></label>
+                        <input id="qa_stock" type="text" inputmode="numeric" class="field"
+                               x-model="quickAdd.stock_level" placeholder="Leave blank to not track stock">
+                        <template x-for="message in quickAdd.errors.stock_level || []" :key="message">
+                            <p class="mt-1 text-sm font-semibold text-red-600" x-text="message"></p>
+                        </template>
+                    </div>
+
+                    <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <span class="label">Compatibility</span>
+                        <div class="mt-2 grid grid-cols-2 gap-2">
+                            <button type="button"
+                                    class="rounded-lg border-2 px-3 py-2.5 text-sm font-bold"
+                                    :class="quickAdd.is_universal
+                                        ? 'border-amber-500 bg-amber-100 text-amber-900'
+                                        : 'border-slate-300 bg-white text-slate-700'"
+                                    @click="setQuickAddScope(true)">
+                                Universal
+                            </button>
+                            <button type="button"
+                                    class="rounded-lg border-2 px-3 py-2.5 text-sm font-bold"
+                                    :class="! quickAdd.is_universal
+                                        ? 'border-amber-500 bg-amber-100 text-amber-900'
+                                        : 'border-slate-300 bg-white text-slate-700'"
+                                    @click="setQuickAddScope(false)">
+                                Vehicle specific
+                            </button>
+                        </div>
+                        <template x-for="message in quickAdd.errors.compatibilities || []" :key="message">
+                            <p class="mt-2 text-sm font-semibold text-red-600" x-text="message"></p>
+                        </template>
+                    </div>
+
+                    <div x-show="! quickAdd.is_universal" x-cloak class="space-y-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <p class="text-sm font-bold text-slate-900">Compatible vehicles</p>
+                                <p class="text-xs font-medium text-slate-500">Pick an existing make/model or type a missing one right here.</p>
+                            </div>
+                            <button type="button" class="btn-ghost !py-2" @click="addCompatibilityRow()">+ Add vehicle</button>
+                        </div>
+
+                        <template x-for="(compatibility, index) in quickAdd.compatibilities" :key="compatibility.uid">
+                            <div class="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+                                <div class="flex items-center justify-between gap-3">
+                                    <p class="text-xs font-black tracking-wide text-slate-500 uppercase"
+                                       x-text="'Vehicle ' + (index + 1)"></p>
+                                    <button type="button" class="text-xs font-bold text-slate-500 hover:text-slate-900"
+                                            x-show="quickAdd.compatibilities.length > 1"
+                                            @click="removeCompatibilityRow(compatibility.uid)">
+                                        Remove
+                                    </button>
+                                </div>
+
+                                <div class="grid gap-3 md:grid-cols-2">
+                                    <div>
+                                        <label class="label" :for="'qa_vehicle_make_' + compatibility.uid">Make</label>
+                                        <select class="field !py-2"
+                                                :id="'qa_vehicle_make_' + compatibility.uid"
+                                                x-model="compatibility.vehicle_make_id"
+                                                @change="syncCompatibilityMake(compatibility)">
+                                            <option value="">Choose existing make</option>
+                                            <template x-for="make in vehicleMakes" :key="'qa-make-' + compatibility.uid + '-' + make.id">
+                                                <option :value="String(make.id)" x-text="make.name"></option>
+                                            </template>
+                                        </select>
+                                        <template x-for="message in compatibilityMessages(index, 'vehicle_make_id')" :key="'make-id-' + compatibility.uid + message">
+                                            <p class="mt-1 text-sm font-semibold text-red-600" x-text="message"></p>
+                                        </template>
+                                    </div>
+
+                                    <div>
+                                        <label class="label" :for="'qa_vehicle_make_name_' + compatibility.uid">Or new make</label>
+                                        <input type="text" class="field !py-2"
+                                               :id="'qa_vehicle_make_name_' + compatibility.uid"
+                                               x-model="compatibility.vehicle_make_name"
+                                               @input="syncTypedCompatibilityMake(compatibility)"
+                                               placeholder="Type a missing make">
+                                        <template x-for="message in compatibilityMessages(index, 'vehicle_make_name')" :key="'make-name-' + compatibility.uid + message">
+                                            <p class="mt-1 text-sm font-semibold text-red-600" x-text="message"></p>
+                                        </template>
+                                    </div>
+
+                                    <div>
+                                        <label class="label" :for="'qa_vehicle_model_' + compatibility.uid">Model</label>
+                                        <select class="field !py-2"
+                                                :id="'qa_vehicle_model_' + compatibility.uid"
+                                                x-model="compatibility.vehicle_model_id"
+                                                :disabled="quickAddVehicleModels(compatibility).length === 0">
+                                            <option value="" x-text="quickAddVehicleModels(compatibility).length === 0 ? 'Type or choose a make first' : 'Choose existing model'"></option>
+                                            <template x-for="model in quickAddVehicleModels(compatibility)" :key="'qa-model-' + compatibility.uid + '-' + model.id">
+                                                <option :value="String(model.id)" x-text="model.name"></option>
+                                            </template>
+                                        </select>
+                                        <template x-for="message in compatibilityMessages(index, 'vehicle_model_id')" :key="'model-id-' + compatibility.uid + message">
+                                            <p class="mt-1 text-sm font-semibold text-red-600" x-text="message"></p>
+                                        </template>
+                                    </div>
+
+                                    <div>
+                                        <label class="label" :for="'qa_vehicle_model_name_' + compatibility.uid">Or new model</label>
+                                        <input type="text" class="field !py-2"
+                                               :id="'qa_vehicle_model_name_' + compatibility.uid"
+                                               x-model="compatibility.vehicle_model_name"
+                                               @input="compatibility.vehicle_model_id = ''"
+                                               placeholder="Type a missing model">
+                                        <template x-for="message in compatibilityMessages(index, 'vehicle_model_name')" :key="'model-name-' + compatibility.uid + message">
+                                            <p class="mt-1 text-sm font-semibold text-red-600" x-text="message"></p>
+                                        </template>
+                                    </div>
+
+                                    <div>
+                                        <label class="label" :for="'qa_vehicle_year_from_' + compatibility.uid">Year from</label>
+                                        <input type="text" inputmode="numeric" class="field !py-2"
+                                               :id="'qa_vehicle_year_from_' + compatibility.uid"
+                                               x-model="compatibility.year_from"
+                                               placeholder="2000">
+                                        <template x-for="message in compatibilityMessages(index, 'year_from')" :key="'year-from-' + compatibility.uid + message">
+                                            <p class="mt-1 text-sm font-semibold text-red-600" x-text="message"></p>
+                                        </template>
+                                    </div>
+
+                                    <div>
+                                        <label class="label" :for="'qa_vehicle_year_to_' + compatibility.uid">Year to</label>
+                                        <input type="text" inputmode="numeric" class="field !py-2"
+                                               :id="'qa_vehicle_year_to_' + compatibility.uid"
+                                               x-model="compatibility.year_to"
+                                               :placeholder="String(currentYear)">
+                                        <template x-for="message in compatibilityMessages(index, 'year_to')" :key="'year-to-' + compatibility.uid + message">
+                                            <p class="mt-1 text-sm font-semibold text-red-600" x-text="message"></p>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
                 </div>
 
                 <p x-show="quickAdd.failed" x-cloak class="rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
@@ -566,6 +753,9 @@
         return {
             items: config.items,
             groups: config.groups,
+            vehicleMakes: config.vehicleMakes || [],
+            vehicleYears: config.vehicleYears || [],
+            currentYear: config.currentYear,
             lines: config.lines,
             labor: config.labor,
             misc: config.misc,
@@ -573,6 +763,7 @@
             customerVehicles: config.customerVehicles,
             recentCustomerVehicles: config.customerVehicles,
             customerVehicleSearchUrl: config.customerVehicleSearchUrl,
+            saleUrl: config.saleUrl,
             customerVehicleSearch: '',
             customerVehicleResultsOpen: false,
             searchingCustomerVehicles: false,
@@ -580,12 +771,14 @@
             customerOpen: config.customerOpen,
 
             query: '',
+            vehicleFilter: { makeId: '', modelId: '', year: '' },
             activeGroup: 'all',
             lowStockOnly: false,
             ticketOpen: false,
             submitting: false,
             clearArmed: false,
             seq: 0,
+            compatibilitySeq: 0,
 
             // Purely visual acknowledgements: the tile that was just tapped, and
             // the ticket line it landed on.
@@ -594,6 +787,7 @@
 
             quickAdd: {
                 open: false, name: '', type: 'product', unit_cost: '', stock_level: '',
+                is_universal: true, compatibilities: [],
                 saving: false, failed: false, errors: {}, targetUid: null,
             },
 
@@ -673,6 +867,50 @@
                 this.customerVehicleResultsOpen = false;
             },
 
+            get vehicleFilterActive() {
+                return this.vehicleFilter.makeId !== ''
+                    || this.vehicleFilter.modelId !== ''
+                    || this.vehicleFilter.year !== '';
+            },
+
+            get vehicleModelsForFilter() {
+                const selectedMake = this.findVehicleMake(this.vehicleFilter.makeId);
+
+                return selectedMake?.vehicle_models || [];
+            },
+
+            get vehicleYearsDescending() {
+                return [...this.vehicleYears].reverse();
+            },
+
+            findVehicleMake(makeId) {
+                return this.vehicleMakes.find(make => String(make.id) === String(makeId));
+            },
+
+            findVehicleMakeByName(name) {
+                const needle = this.normaliseName(name).toLowerCase();
+
+                if (needle === '') {
+                    return null;
+                }
+
+                return this.vehicleMakes.find(make => make.name.toLowerCase() === needle) || null;
+            },
+
+            syncVehicleFilterModel() {
+                const knownIds = this.vehicleModelsForFilter.map(model => String(model.id));
+
+                if (! knownIds.includes(String(this.vehicleFilter.modelId))) {
+                    this.vehicleFilter.modelId = '';
+                }
+            },
+
+            resetVehicleFilters() {
+                this.vehicleFilter.makeId = '';
+                this.vehicleFilter.modelId = '';
+                this.vehicleFilter.year = '';
+            },
+
             /**
              * Size the till to the window so the three panes scroll inside
              * themselves and the page itself never does.
@@ -717,7 +955,7 @@
              * current search — a zero tells the counter to stop looking there.
              */
             get railGroups() {
-                const pool = this.searchedItems;
+                const pool = this.vehicleFilteredItems;
 
                 return [{ key: 'all', label: 'All items', glyph: '▦', count: pool.length }].concat(
                     this.groups.map(group => ({
@@ -730,7 +968,7 @@
             },
 
             get lowStockCount() {
-                return this.searchedItems.filter(item => item.is_low_on_stock).length;
+                return this.vehicleFilteredItems.filter(item => item.is_low_on_stock).length;
             },
 
             get searchedItems() {
@@ -741,8 +979,12 @@
                     : this.items.filter(item => item.haystack.includes(needle));
             },
 
+            get vehicleFilteredItems() {
+                return this.searchedItems.filter(item => this.compatibleWithVehicle(item));
+            },
+
             get visibleItems() {
-                return this.searchedItems.filter(item => {
+                return this.vehicleFilteredItems.filter(item => {
                     if (this.activeGroup !== 'all' && item.group !== this.activeGroup) return false;
                     if (this.lowStockOnly && ! item.is_low_on_stock) return false;
 
@@ -751,6 +993,10 @@
             },
 
             get emptyWallTitle() {
+                if (this.query.trim() === '' && this.vehicleFilterActive) {
+                    return 'No item fits this vehicle.';
+                }
+
                 return this.query.trim() === ''
                     ? 'Nothing on this shelf.'
                     : 'No item matches “' + this.query.trim() + '”.';
@@ -758,8 +1004,41 @@
 
             resetFilters() {
                 this.query = '';
+                this.resetVehicleFilters();
                 this.activeGroup = 'all';
                 this.lowStockOnly = false;
+            },
+
+            compatibleWithVehicle(item) {
+                if (! this.vehicleFilterActive) return true;
+                if (item.type !== 'product') return true;
+                if (item.is_universal) return true;
+
+                return item.compatibilities.some(compatibility => this.compatibilityMatchesVehicle(compatibility));
+            },
+
+            compatibilityMatchesVehicle(compatibility) {
+                if (this.vehicleFilter.makeId !== '' && String(compatibility.vehicle_make_id) !== String(this.vehicleFilter.makeId)) {
+                    return false;
+                }
+
+                if (this.vehicleFilter.modelId !== '' && String(compatibility.vehicle_model_id) !== String(this.vehicleFilter.modelId)) {
+                    return false;
+                }
+
+                if (this.vehicleFilter.year !== '') {
+                    const year = parseInt(this.vehicleFilter.year, 10);
+
+                    if (compatibility.year_from !== null && compatibility.year_from > year) {
+                        return false;
+                    }
+
+                    if (compatibility.year_to !== null && compatibility.year_to < year) {
+                        return false;
+                    }
+                }
+
+                return true;
             },
 
             railClassFor(group) {
@@ -1042,12 +1321,147 @@
 
             /* ---------------- on-the-fly item creation ---------------- */
 
+            normaliseName(value) {
+                return String(value ?? '').replace(/\s+/g, ' ').trim();
+            },
+
+            newCompatibilityRow() {
+                this.compatibilitySeq += 1;
+
+                return {
+                    uid: 'compatibility-' + this.compatibilitySeq,
+                    vehicle_make_id: '',
+                    vehicle_make_name: '',
+                    vehicle_model_id: '',
+                    vehicle_model_name: '',
+                    year_from: '',
+                    year_to: '',
+                };
+            },
+
+            addCompatibilityRow() {
+                this.quickAdd.compatibilities.push(this.newCompatibilityRow());
+            },
+
+            removeCompatibilityRow(uid) {
+                this.quickAdd.compatibilities = this.quickAdd.compatibilities.filter(compatibility => compatibility.uid !== uid);
+
+                if (this.quickAdd.compatibilities.length === 0) {
+                    this.addCompatibilityRow();
+                }
+            },
+
+            setQuickAddScope(isUniversal) {
+                this.quickAdd.is_universal = isUniversal;
+
+                if (! isUniversal && this.quickAdd.compatibilities.length === 0) {
+                    this.addCompatibilityRow();
+                }
+            },
+
+            quickAddVehicleModels(compatibility) {
+                if (compatibility.vehicle_make_id !== '') {
+                    return this.findVehicleMake(compatibility.vehicle_make_id)?.vehicle_models || [];
+                }
+
+                return this.findVehicleMakeByName(compatibility.vehicle_make_name)?.vehicle_models || [];
+            },
+
+            syncCompatibilityMake(compatibility) {
+                compatibility.vehicle_make_name = '';
+
+                const knownIds = this.quickAddVehicleModels(compatibility).map(model => String(model.id));
+
+                if (! knownIds.includes(String(compatibility.vehicle_model_id))) {
+                    compatibility.vehicle_model_id = '';
+                }
+            },
+
+            syncTypedCompatibilityMake(compatibility) {
+                compatibility.vehicle_make_id = '';
+                compatibility.vehicle_model_id = '';
+            },
+
+            compatibilityMessages(index, field) {
+                return this.quickAdd.errors[`compatibilities.${index}.${field}`] || [];
+            },
+
+            quickAddPayload() {
+                return {
+                    name: this.quickAdd.name,
+                    type: this.quickAdd.type,
+                    unit_cost: this.quickAdd.unit_cost,
+                    stock_level: this.quickAdd.type === 'product' ? this.quickAdd.stock_level : '',
+                    is_universal: this.quickAdd.type === 'product' ? this.quickAdd.is_universal : undefined,
+                    compatibilities: this.quickAdd.type === 'product' && ! this.quickAdd.is_universal
+                        ? this.quickAdd.compatibilities.map(compatibility => ({
+                            vehicle_make_id: compatibility.vehicle_make_id,
+                            vehicle_make_name: this.normaliseName(compatibility.vehicle_make_name),
+                            vehicle_model_id: compatibility.vehicle_model_id,
+                            vehicle_model_name: this.normaliseName(compatibility.vehicle_model_name),
+                            year_from: compatibility.year_from,
+                            year_to: compatibility.year_to,
+                        }))
+                        : [],
+                };
+            },
+
+            quickAddNeedsVehicleRefresh() {
+                return this.quickAdd.type === 'product'
+                    && ! this.quickAdd.is_universal
+                    && this.quickAdd.compatibilities.some(compatibility =>
+                        this.normaliseName(compatibility.vehicle_make_name) !== ''
+                        || this.normaliseName(compatibility.vehicle_model_name) !== ''
+                    );
+            },
+
+            async refreshVehicleMakes() {
+                try {
+                    const response = await fetch(this.saleUrl, {
+                        headers: {
+                            'Accept': 'text/html',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                    });
+
+                    if (! response.ok) {
+                        return;
+                    }
+
+                    const html = await response.text();
+                    const config = this.saleScreenConfig(html);
+
+                    if (Array.isArray(config?.vehicleMakes)) {
+                        this.vehicleMakes = config.vehicleMakes;
+                    }
+                } catch (error) {
+                    // Keep the created item on screen even if the follow-up
+                    // vehicle option refresh cannot be parsed.
+                }
+            },
+
+            saleScreenConfig(html) {
+                const page = new DOMParser().parseFromString(html, 'text/html');
+                const shell = page.querySelector('form[x-data]');
+                const expression = shell?.getAttribute('x-data') || '';
+                const prefix = "posCounter(JSON.parse('";
+                const suffix = "'))";
+
+                if (! expression.startsWith(prefix) || ! expression.endsWith(suffix)) {
+                    return null;
+                }
+
+                return JSON.parse(expression.slice(prefix.length, expression.length - suffix.length));
+            },
+
             openQuickAdd(line) {
                 this.quickAdd.targetUid = line ? line.uid : null;
                 this.quickAdd.type = line && line.mode === 'repair' ? 'repair' : 'product';
                 this.quickAdd.name = this.query.trim();
                 this.quickAdd.unit_cost = '';
                 this.quickAdd.stock_level = '';
+                this.quickAdd.is_universal = true;
+                this.quickAdd.compatibilities = [];
                 this.quickAdd.errors = {};
                 this.quickAdd.failed = false;
                 this.quickAdd.open = true;
@@ -1067,6 +1481,7 @@
                 this.quickAdd.failed = false;
 
                 try {
+                    const shouldRefreshVehicleMakes = this.quickAddNeedsVehicleRefresh();
                     const response = await fetch(config.quickAddUrl, {
                         method: 'POST',
                         headers: {
@@ -1075,13 +1490,7 @@
                             'X-Requested-With': 'XMLHttpRequest',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
                         },
-                        body: JSON.stringify({
-                            name: this.quickAdd.name,
-                            type: this.quickAdd.type,
-                            unit_cost: this.quickAdd.unit_cost,
-                            // Repairs must not carry stock; the server rejects it outright.
-                            stock_level: this.quickAdd.type === 'product' ? this.quickAdd.stock_level : '',
-                        }),
+                        body: JSON.stringify(this.quickAddPayload()),
                     });
 
                     if (response.status === 422) {
@@ -1099,6 +1508,10 @@
                     // 1. Onto the wall, so every future bill can reach it too.
                     this.items.push(created);
                     this.items.sort((a, b) => a.name.localeCompare(b.name));
+
+                    if (shouldRefreshVehicleMakes) {
+                        await this.refreshVehicleMakes();
+                    }
 
                     // 2. Onto the ticket. A row that asked for it is filled in
                     //    place; otherwise the new item is simply billed.

@@ -6,7 +6,10 @@ use App\Enums\ItemType;
 use App\Enums\UnitOfMeasure;
 use App\Http\Controllers\PosController;
 use App\Models\Item;
+use App\Models\ItemVehicleCompatibility;
 use App\Models\User;
+use App\Models\VehicleMake;
+use App\Models\VehicleModel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -139,5 +142,36 @@ class PosCategoryRailTest extends TestCase
         foreach ($response->viewData('items') as $tile) {
             $this->assertContains($tile['group'], $shelves);
         }
+    }
+
+    public function test_the_sale_screen_renders_vehicle_filters_and_a_reset_for_the_product_wall(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+        $specific = Item::factory()->create(['name' => 'Toyota Oil Filter', 'is_universal' => false]);
+        Item::factory()->create(['name' => 'Universal Fluid', 'is_universal' => true]);
+        Item::factory()->repair()->create(['name' => 'Wheel Alignment']);
+
+        ItemVehicleCompatibility::factory()->for($specific)->for($corolla)->create([
+            'year_from' => 2009,
+            'year_to' => 2013,
+        ]);
+
+        $this->get(route('pos.create'))
+            ->assertOk()
+            ->assertSee('Vehicle filters')
+            ->assertSee('All vehicles')
+            ->assertSee('Make')
+            ->assertSee('Model')
+            ->assertSee('Year')
+            ->assertSee('vehicleFilter', false)
+            ->assertSee("makeId: ''", false)
+            ->assertSee("modelId: ''", false)
+            ->assertSee("year: ''", false)
+            ->assertSee('compatibleWithVehicle(item)', false)
+            ->assertSee('item.is_universal', false)
+            ->assertSee('vehicle_make_id', false)
+            ->assertSee('year_from', false)
+            ->assertSee((string) now()->year, false);
     }
 }

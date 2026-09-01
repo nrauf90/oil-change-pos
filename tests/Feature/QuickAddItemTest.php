@@ -3,7 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\Item;
+use App\Models\ItemVehicleCompatibility;
 use App\Models\User;
+use App\Models\VehicleMake;
+use App\Models\VehicleModel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -298,5 +301,438 @@ class QuickAddItemTest extends TestCase
         $this->getJson(route('quick-items.index'))
             ->assertOk()
             ->assertJsonPath('data.0.name', 'Fuel Injector Cleaning');
+    }
+
+    public function test_store_creates_a_universal_product_without_compatibilities(): void
+    {
+        $this->postJson(route('quick-items.store'), [
+            'name' => 'Universal Cabin Filter',
+            'type' => 'product',
+            'is_universal' => true,
+        ])
+            ->assertCreated()
+            ->assertJsonPath('data.name', 'Universal Cabin Filter')
+            ->assertJsonPath('data.is_universal', true)
+            ->assertJsonPath('data.compatibilities', []);
+
+        $item = Item::where('name', 'Universal Cabin Filter')->sole();
+
+        $this->assertTrue($item->is_universal);
+        $this->assertSame(0, $item->vehicleCompatibilities()->count());
+    }
+
+    public function test_store_creates_a_specific_product_with_multiple_existing_model_compatibilities(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+        $yaris = VehicleModel::factory()->for($toyota)->create(['name' => 'Yaris']);
+
+        $response = $this->postJson(route('quick-items.store'), [
+            'name' => 'Toyota Oil Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [
+                [
+                    'vehicle_make_id' => $toyota->id,
+                    'vehicle_model_id' => $corolla->id,
+                    'year_from' => 2009,
+                    'year_to' => 2013,
+                ],
+                [
+                    'vehicle_make_id' => $toyota->id,
+                    'vehicle_model_id' => $yaris->id,
+                    'year_from' => 2014,
+                    'year_to' => null,
+                ],
+            ],
+        ])->assertCreated();
+
+        $item = Item::where('name', 'Toyota Oil Filter')->sole();
+
+        $this->assertFalse($item->is_universal);
+        $this->assertDatabaseHas('item_vehicle_compatibilities', [
+            'item_id' => $item->id,
+            'vehicle_model_id' => $corolla->id,
+            'year_from' => 2009,
+            'year_to' => 2013,
+        ]);
+        $this->assertDatabaseHas('item_vehicle_compatibilities', [
+            'item_id' => $item->id,
+            'vehicle_model_id' => $yaris->id,
+            'year_from' => 2014,
+            'year_to' => null,
+        ]);
+
+        $response->assertJsonFragment([
+            'vehicle_make_id' => $toyota->id,
+            'vehicle_model_id' => $corolla->id,
+            'year_from' => 2009,
+            'year_to' => 2013,
+        ])->assertJsonFragment([
+            'vehicle_make_id' => $toyota->id,
+            'vehicle_model_id' => $yaris->id,
+            'year_from' => 2014,
+            'year_to' => null,
+        ]);
+    }
+
+    public function test_store_creates_missing_make_and_model_names_from_the_payload(): void
+    {
+        $this->postJson(route('quick-items.store'), [
+            'name' => 'Suzuki Alto Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [
+                [
+                    'vehicle_make_name' => ' Suzuki ',
+                    'vehicle_model_name' => ' Alto ',
+                    'year_from' => 2018,
+                    'year_to' => null,
+                ],
+            ],
+        ])->assertCreated();
+
+        $make = VehicleMake::where('name', 'Suzuki')->sole();
+        $model = VehicleModel::where('name', 'Alto')->sole();
+        $item = Item::where('name', 'Suzuki Alto Filter')->sole();
+
+        $this->assertSame($make->id, $model->vehicle_make_id);
+        $this->assertDatabaseHas('item_vehicle_compatibilities', [
+            'item_id' => $item->id,
+            'vehicle_model_id' => $model->id,
+            'year_from' => 2018,
+            'year_to' => null,
+        ]);
+    }
+
+    public function test_store_reuses_existing_make_and_model_names_without_case_only_duplication(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+
+        $this->postJson(route('quick-items.store'), [
+            'name' => 'Toyota Brake Pad',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [
+                [
+                    'vehicle_make_name' => ' toyota ',
+                    'vehicle_model_name' => ' corolla ',
+                ],
+            ],
+        ])->assertCreated();
+
+        $item = Item::where('name', 'Toyota Brake Pad')->sole();
+
+        $this->assertDatabaseCount('vehicle_makes', 1);
+        $this->assertDatabaseCount('vehicle_models', 1);
+        $this->assertDatabaseHas('item_vehicle_compatibilities', [
+            'item_id' => $item->id,
+            'vehicle_model_id' => $corolla->id,
+            'year_from' => null,
+            'year_to' => null,
+        ]);
+    }
+
+    public function test_store_returns_422_when_a_selected_model_does_not_belong_to_the_selected_make(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $honda = VehicleMake::factory()->create(['name' => 'Honda']);
+        $civic = VehicleModel::factory()->for($honda)->create(['name' => 'Civic']);
+
+        $response = $this->postJson(route('quick-items.store'), [
+            'name' => 'Wrong Pairing Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [
+                [
+                    'vehicle_make_id' => $toyota->id,
+                    'vehicle_model_id' => $civic->id,
+                ],
+            ],
+        ]);
+
+        $response->assertUnprocessable()
+            ->assertJsonValidationErrors('compatibilities.0.vehicle_model_id');
+        $this->assertSame(
+            ['The selected model does not belong to the selected make.'],
+            $response->json('errors')['compatibilities.0.vehicle_model_id']
+        );
+
+        $this->assertDatabaseMissing('items', ['name' => 'Wrong Pairing Filter']);
+    }
+
+    public function test_store_returns_422_when_a_compatibility_year_range_is_inverted(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+
+        $response = $this->postJson(route('quick-items.store'), [
+            'name' => 'Inverted Range Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [
+                [
+                    'vehicle_make_id' => $toyota->id,
+                    'vehicle_model_id' => $corolla->id,
+                    'year_from' => 2020,
+                    'year_to' => 2015,
+                ],
+            ],
+        ]);
+
+        $response->assertUnprocessable()
+            ->assertJsonValidationErrors('compatibilities.0.year_to');
+        $this->assertSame(
+            ['The ending year must be after or equal to the starting year.'],
+            $response->json('errors')['compatibilities.0.year_to']
+        );
+
+        $this->assertDatabaseMissing('items', ['name' => 'Inverted Range Filter']);
+    }
+
+    public function test_store_returns_422_when_a_compatibility_year_is_outside_2000_through_2026(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+        $currentYear = now()->year;
+
+        $response = $this->postJson(route('quick-items.store'), [
+            'name' => 'Out Of Range Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [
+                [
+                    'vehicle_make_id' => $toyota->id,
+                    'vehicle_model_id' => $corolla->id,
+                    'year_from' => 1999,
+                    'year_to' => $currentYear + 1,
+                ],
+            ],
+        ]);
+
+        $response->assertUnprocessable()
+            ->assertJsonValidationErrors(['compatibilities.0.year_from', 'compatibilities.0.year_to']);
+        $this->assertSame(
+            ["The year must be between 2000 and {$currentYear}."],
+            $response->json('errors')['compatibilities.0.year_from']
+        );
+        $this->assertSame(
+            ["The year must be between 2000 and {$currentYear}."],
+            $response->json('errors')['compatibilities.0.year_to']
+        );
+
+        $this->assertDatabaseMissing('items', ['name' => 'Out Of Range Filter']);
+    }
+
+    public function test_store_returns_422_when_a_compatibility_model_id_is_malformed(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+
+        $response = $this->postJson(route('quick-items.store'), [
+            'name' => 'Malformed Model Id Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [
+                [
+                    'vehicle_make_id' => $toyota->id,
+                    'vehicle_model_id' => $corolla->id.'foo',
+                ],
+            ],
+        ]);
+
+        $response->assertUnprocessable()
+            ->assertJsonValidationErrors('compatibilities.0.vehicle_model_id');
+
+        $this->assertDatabaseMissing('items', ['name' => 'Malformed Model Id Filter']);
+        $this->assertDatabaseCount('item_vehicle_compatibilities', 0);
+    }
+
+    public function test_store_returns_422_when_a_compatibility_year_is_malformed(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+
+        $response = $this->postJson(route('quick-items.store'), [
+            'name' => 'Malformed Year Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [
+                [
+                    'vehicle_make_id' => $toyota->id,
+                    'vehicle_model_id' => $corolla->id,
+                    'year_from' => '2000.5',
+                ],
+            ],
+        ]);
+
+        $response->assertUnprocessable()
+            ->assertJsonValidationErrors('compatibilities.0.year_from');
+
+        $this->assertDatabaseMissing('items', ['name' => 'Malformed Year Filter']);
+        $this->assertDatabaseCount('item_vehicle_compatibilities', 0);
+    }
+
+    public function test_store_returns_422_when_a_specific_product_has_no_compatibility_rows(): void
+    {
+        $this->postJson(route('quick-items.store'), [
+            'name' => 'Vehicle Specific Oil Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [],
+        ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('compatibilities')
+            ->assertJsonPath(
+                'errors.compatibilities.0',
+                'Add at least one compatible vehicle for a vehicle-specific product.'
+            );
+
+        $this->assertDatabaseMissing('items', ['name' => 'Vehicle Specific Oil Filter']);
+    }
+
+    public function test_store_requires_a_make_when_an_existing_model_is_selected(): void
+    {
+        $model = VehicleModel::factory()->create();
+
+        $this->postJson(route('quick-items.store'), [
+            'name' => 'Incomplete Compatibility Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [[
+                'vehicle_model_id' => $model->id,
+            ]],
+        ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('compatibilities.0.vehicle_make_id');
+
+        $this->assertDatabaseMissing('items', ['name' => 'Incomplete Compatibility Filter']);
+    }
+
+    public function test_store_rejects_vehicle_names_longer_than_the_database_columns(): void
+    {
+        $this->postJson(route('quick-items.store'), [
+            'name' => 'Long Vehicle Name Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [[
+                'vehicle_make_name' => str_repeat('M', 101),
+                'vehicle_model_name' => str_repeat('N', 101),
+            ]],
+        ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'compatibilities.0.vehicle_make_name',
+                'compatibilities.0.vehicle_model_name',
+            ]);
+    }
+
+    public function test_store_ignores_compatibility_fields_for_repairs(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+
+        $this->postJson(route('quick-items.store'), [
+            'name' => 'Corolla Engine Flush',
+            'type' => 'repair',
+            'is_universal' => false,
+            'compatibilities' => [
+                [
+                    'vehicle_make_id' => $toyota->id,
+                    'vehicle_model_id' => $corolla->id,
+                    'year_from' => 2015,
+                    'year_to' => 2020,
+                ],
+            ],
+        ])
+            ->assertCreated()
+            ->assertJsonPath('data.type', 'repair')
+            ->assertJsonPath('data.is_universal', false)
+            ->assertJsonPath('data.compatibilities', []);
+
+        $item = Item::where('name', 'Corolla Engine Flush')->sole();
+
+        $this->assertFalse($item->is_universal);
+        $this->assertSame(0, $item->vehicleCompatibilities()->count());
+    }
+
+    public function test_store_rolls_back_the_item_and_compatibilities_when_any_row_fails(): void
+    {
+        $response = $this->postJson(route('quick-items.store'), [
+            'name' => 'Duplicate Compatibility Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [
+                [
+                    'vehicle_make_name' => 'Suzuki',
+                    'vehicle_model_name' => 'Alto',
+                    'year_from' => 2010,
+                    'year_to' => 2014,
+                ],
+                [
+                    'vehicle_make_name' => 'Suzuki',
+                    'vehicle_model_name' => 'Alto',
+                    'year_from' => 2010,
+                    'year_to' => 2014,
+                ],
+            ],
+        ]);
+
+        $response->assertUnprocessable()
+            ->assertJsonValidationErrors('compatibilities.1.vehicle_model_id');
+        $this->assertSame(
+            ['This vehicle compatibility range already exists.'],
+            $response->json('errors')['compatibilities.1.vehicle_model_id']
+        );
+
+        $this->assertDatabaseMissing('items', ['name' => 'Duplicate Compatibility Filter']);
+        $this->assertDatabaseCount('vehicle_makes', 0);
+        $this->assertDatabaseCount('vehicle_models', 0);
+        $this->assertDatabaseCount('item_vehicle_compatibilities', 0);
+    }
+
+    public function test_the_sale_screen_seeds_vehicle_makes_and_item_compatibilities(): void
+    {
+        $honda = VehicleMake::factory()->create(['name' => 'Honda']);
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $fit = VehicleModel::factory()->for($honda)->create(['name' => 'Fit']);
+        $civic = VehicleModel::factory()->for($honda)->create(['name' => 'Civic']);
+        $yaris = VehicleModel::factory()->for($toyota)->create(['name' => 'Yaris']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+        $specific = Item::factory()->create(['name' => 'Specific Filter', 'is_universal' => false]);
+        $universal = Item::factory()->create(['name' => 'Universal Fluid', 'is_universal' => true]);
+
+        ItemVehicleCompatibility::factory()->for($specific)->for($corolla)->create(['year_from' => 2009, 'year_to' => 2013]);
+        ItemVehicleCompatibility::factory()->for($specific)->for($yaris)->create(['year_from' => 2014, 'year_to' => null]);
+
+        $response = $this->get(route('pos.create'))->assertOk();
+
+        $vehicleMakes = collect($response->viewData('vehicle_makes'));
+        $items = collect($response->viewData('items'));
+        $specificPayload = $items->firstWhere('id', $specific->id);
+        $universalPayload = $items->firstWhere('id', $universal->id);
+
+        $this->assertSame(['Honda', 'Toyota'], $vehicleMakes->pluck('name')->all());
+        $this->assertSame(['Civic', 'Fit'], collect($vehicleMakes->firstWhere('name', 'Honda')['vehicle_models'])->pluck('name')->all());
+        $this->assertSame(['Corolla', 'Yaris'], collect($vehicleMakes->firstWhere('name', 'Toyota')['vehicle_models'])->pluck('name')->all());
+
+        $this->assertFalse($specificPayload['is_universal']);
+        $this->assertSame([
+            [
+                'vehicle_make_id' => $toyota->id,
+                'vehicle_model_id' => $corolla->id,
+                'year_from' => 2009,
+                'year_to' => 2013,
+            ],
+            [
+                'vehicle_make_id' => $toyota->id,
+                'vehicle_model_id' => $yaris->id,
+                'year_from' => 2014,
+                'year_to' => null,
+            ],
+        ], $specificPayload['compatibilities']);
+        $this->assertTrue($universalPayload['is_universal']);
+        $this->assertSame([], $universalPayload['compatibilities']);
     }
 }

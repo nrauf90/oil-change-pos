@@ -7,6 +7,9 @@ use App\Enums\Permission;
 use App\Enums\UnitOfMeasure;
 use App\Models\CustomerVehicle;
 use App\Models\Item;
+use App\Models\ItemVehicleCompatibility;
+use App\Models\VehicleMake;
+use App\Models\VehicleModel;
 use App\Support\ServiceHistory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -19,7 +22,7 @@ class PosController extends Controller
      * The counter's category rail.
      *
      * The shop has no user-defined categories, so the rail is derived from the
-     * two facts inventory already records — what kind of thing it is, and how
+     * two facts inventory already records - what kind of thing it is, and how
      * it is measured. That is exactly how an oil-change counter thinks about
      * its shelves: oils are poured, gas is weighed, parts are picked, work is
      * done. Each entry carries its own colour and glyph so a tile is
@@ -39,16 +42,32 @@ class PosController extends Controller
         $showCost = request()->user()?->can(Permission::ViewItemUnitCost->value) ?? false;
 
         return view('pos.create', [
-            // Seeded into Alpine so the first render of the picker needs no round trip.
-            // The quick-add modal appends to this list in place, without a reload.
             'items' => Item::query()
+                ->with('vehicleCompatibilities.vehicleModel')
                 ->active()
                 ->orderBy('name')
-                ->get(['id', 'name', 'type', 'unit_cost', 'unit_of_measure', 'stock_level', 'low_stock_alert'])
+                ->get(['id', 'name', 'type', 'is_universal', 'unit_cost', 'unit_of_measure', 'stock_level', 'low_stock_alert'])
                 ->map(fn (Item $item) => self::present($item, $showCost))
                 ->values(),
             'groups' => self::GROUPS,
             'types' => ItemType::cases(),
+            'vehicle_makes' => VehicleMake::query()
+                ->with(['vehicleModels' => fn ($query) => $query->orderBy('name')])
+                ->orderBy('name')
+                ->get(['id', 'name'])
+                ->map(fn (VehicleMake $make): array => [
+                    'id' => $make->id,
+                    'name' => $make->name,
+                    'vehicle_models' => $make->vehicleModels
+                        ->map(fn (VehicleModel $model): array => [
+                            'id' => $model->id,
+                            'name' => $model->name,
+                        ])
+                        ->values()
+                        ->all(),
+                ])
+                ->values()
+                ->all(),
             'customerVehicles' => CustomerVehicle::query()
                 ->latest('updated_at')
                 ->latest('id')
@@ -86,33 +105,31 @@ class PosController extends Controller
      * One item as the sale screen's tile grid needs it.
      *
      * Kept public and static because the quick-add endpoint has to hand back a
-     * payload the tile grid can render without a page reload — the two must
+     * payload the tile grid can render without a page reload - the two must
      * never drift apart.
      *
      * @return array<string, mixed>
      */
     public static function present(Item $item, bool $showCost): array
     {
+        $item->loadMissing('vehicleCompatibilities.vehicleModel');
+
         return [
             'id' => $item->id,
             'name' => $item->name,
             'type' => $item->type->value,
             'type_label' => $item->type->label(),
-            // Drives the litres/kg box on the cart row. A piece item gets none.
+            'is_universal' => $item->is_universal,
+            'compatibilities' => self::presentCompatibilities($item),
             'unit_of_measure' => $item->unit_of_measure->value,
             'unit_abbreviation' => $item->unit_of_measure->abbreviation(),
             'is_measured' => $item->isMeasured(),
-            // Owner-only. A manager's browser never receives the figure at
-            // all, so it cannot leak through the page source either.
             ...($showCost ? ['unit_cost' => $item->unit_cost] : []),
             'stock_level' => $item->stock_level,
             'stock_label' => $item->stockLabel(),
             'is_low_on_stock' => $item->isLowOnStock(),
-            // Which shelf of the category rail this tile sits on.
             'group' => self::groupFor($item),
             'glyph' => self::glyphFor($item),
-            // Pre-lowercased so filtering a 500-item catalogue on every
-            // keystroke never re-walks the strings.
             'haystack' => mb_strtolower($item->name),
         ];
     }
@@ -121,7 +138,7 @@ class PosController extends Controller
      * How a thing is measured decides its shelf before what kind of thing it is
      * does. An AC gas refill is billed as labour but is drawn by the kilo out of
      * a cylinder, so it belongs on the AC gas shelf beside the other things the
-     * counter pours — not filed among the wrench-and-spanner jobs, where nobody
+     * counter pours - not filed among the wrench-and-spanner jobs, where nobody
      * weighing out gas would think to look for it.
      *
      * Reading the type first is what left that shelf permanently empty: a
@@ -136,6 +153,32 @@ class PosController extends Controller
             $item->type === ItemType::Repair => 'service',
             default => 'part',
         };
+    }
+
+    /**
+     * @return list<array{vehicle_make_id: int, vehicle_model_id: int, year_from: ?int, year_to: ?int}>
+     */
+    private static function presentCompatibilities(Item $item): array
+    {
+        if ($item->type !== ItemType::Product) {
+            return [];
+        }
+
+        return $item->vehicleCompatibilities
+            ->sortBy(fn (ItemVehicleCompatibility $compatibility): string => implode('|', [
+                (string) $compatibility->vehicleModel->vehicle_make_id,
+                mb_strtolower($compatibility->vehicleModel->name),
+                (string) ($compatibility->year_from ?? 0),
+                (string) ($compatibility->year_to ?? 0),
+            ]))
+            ->values()
+            ->map(fn (ItemVehicleCompatibility $compatibility): array => [
+                'vehicle_make_id' => $compatibility->vehicleModel->vehicle_make_id,
+                'vehicle_model_id' => $compatibility->vehicle_model_id,
+                'year_from' => $compatibility->year_from,
+                'year_to' => $compatibility->year_to,
+            ])
+            ->all();
     }
 
     private static function glyphFor(Item $item): string

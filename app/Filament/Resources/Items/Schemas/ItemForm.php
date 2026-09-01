@@ -5,17 +5,26 @@ namespace App\Filament\Resources\Items\Schemas;
 use App\Enums\ItemType;
 use App\Enums\Permission;
 use App\Enums\UnitOfMeasure;
+use App\Models\VehicleMake;
+use App\Models\VehicleModel;
+use Filament\Actions\Action;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Radio;
+use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 
 class ItemForm
 {
+    private const VEHICLE_YEAR_MIN = 2000;
+
+    private const VEHICLE_YEAR_MAX = 2026;
+
     public static function configure(Schema $schema): Schema
     {
         return $schema->components([
@@ -36,6 +45,12 @@ class ItemForm
                         ->inline()
                         ->live()
                         ->default(ItemType::Product->value)
+                        ->afterStateUpdated(function (Set $set, ?string $state): void {
+                            if ($state !== ItemType::Product->value) {
+                                $set('is_universal', false);
+                                $set('vehicleCompatibilities', []);
+                            }
+                        })
                         ->options(collect(ItemType::cases())->mapWithKeys(
                             fn (ItemType $type) => [$type->value => $type->label()]
                         )),
@@ -44,6 +59,115 @@ class ItemForm
                         ->label('Available on the sale screen')
                         ->default(true)
                         ->helperText('Switch off to retire an item without losing its sales history.'),
+
+                    Toggle::make('is_universal')
+                        ->label('Universal fit')
+                        ->visible(fn (Get $get): bool => $get('type') === ItemType::Product->value)
+                        ->live()
+                        ->default(true)
+                        ->afterStateUpdated(function (Set $set, bool $state): void {
+                            if ($state) {
+                                $set('vehicleCompatibilities', []);
+                            }
+                        })
+                        ->helperText('Leave this on when the product fits any vehicle. Switch it off to enter make, model, and year ranges.'),
+                ]),
+
+            Section::make('Vehicle compatibility')
+                ->description('Use exact makes, models, and model years for vehicle-specific products.')
+                ->visible(fn (Get $get): bool => self::showsVehicleCompatibility($get))
+                ->schema([
+                    Repeater::make('vehicleCompatibilities')
+                        ->relationship()
+                        ->defaultItems(0)
+                        ->required(fn (Get $get): bool => self::showsVehicleCompatibility($get))
+                        ->minItems(fn (Get $get): int => self::showsVehicleCompatibility($get) ? 1 : 0)
+                        ->addActionLabel('Add compatibility')
+                        ->columns(4)
+                        ->mutateRelationshipDataBeforeFillUsing(function (array $data): array {
+                            $vehicleMakeId = VehicleModel::query()
+                                ->whereKey($data['vehicle_model_id'] ?? null)
+                                ->value('vehicle_make_id');
+
+                            return [
+                                ...$data,
+                                'vehicle_make_id' => $vehicleMakeId,
+                            ];
+                        })
+                        ->mutateRelationshipDataBeforeCreateUsing(fn (array $data): array => self::stripVehicleMakeId($data))
+                        ->mutateRelationshipDataBeforeSaveUsing(fn (array $data): array => self::stripVehicleMakeId($data))
+                        ->schema([
+                            Select::make('vehicle_make_id')
+                                ->label('Make')
+                                ->required()
+                                ->live()
+                                ->dehydrated(false)
+                                ->searchable()
+                                ->preload()
+                                ->afterStateUpdated(fn (Set $set): mixed => $set('vehicle_model_id', null))
+                                ->options(fn (): array => VehicleMake::query()->orderBy('name')->pluck('name', 'id')->all())
+                                ->createOptionForm([
+                                    TextInput::make('name')
+                                        ->label('Make name')
+                                        ->required()
+                                        ->maxLength(100),
+                                ])
+                                ->createOptionAction(fn (Action $action): Action => $action->visible(
+                                    fn (): bool => auth()->user()?->isAdmin() ?? false,
+                                ))
+                                ->createOptionUsing(fn (array $data): int => VehicleMake::query()->firstOrCreate([
+                                    'name' => $data['name'],
+                                ])->getKey()),
+
+                            Select::make('vehicle_model_id')
+                                ->label('Model')
+                                ->required()
+                                ->searchable()
+                                ->preload()
+                                ->disabled(fn (Get $get): bool => blank($get('vehicle_make_id')))
+                                ->options(fn (Get $get): array => VehicleModel::query()
+                                    ->when(
+                                        filled($get('vehicle_make_id')),
+                                        fn ($query) => $query->where('vehicle_make_id', $get('vehicle_make_id')),
+                                    )
+                                    ->orderBy('name')
+                                    ->pluck('name', 'id')
+                                    ->all())
+                                ->createOptionForm([
+                                    TextInput::make('name')
+                                        ->label('Model name')
+                                        ->required()
+                                        ->maxLength(100),
+                                ])
+                                ->createOptionAction(fn (Action $action): Action => $action->visible(
+                                    fn (): bool => auth()->user()?->isAdmin() ?? false,
+                                ))
+                                ->createOptionUsing(function (Select $component, array $data): int {
+                                    $vehicleMakeId = $component->getContainer()->getState()['vehicle_make_id'] ?? null;
+
+                                    return VehicleModel::query()->firstOrCreate([
+                                        'vehicle_make_id' => $vehicleMakeId,
+                                        'name' => $data['name'],
+                                    ])->getKey();
+                                }),
+
+                            TextInput::make('year_from')
+                                ->label('From year')
+                                ->numeric()
+                                ->integer()
+                                ->minValue(self::VEHICLE_YEAR_MIN)
+                                ->maxValue(self::VEHICLE_YEAR_MAX)
+                                ->placeholder((string) self::VEHICLE_YEAR_MIN),
+
+                            TextInput::make('year_to')
+                                ->label('To year')
+                                ->numeric()
+                                ->integer()
+                                ->minValue(self::VEHICLE_YEAR_MIN)
+                                ->maxValue(self::VEHICLE_YEAR_MAX)
+                                ->gte('year_from')
+                                ->placeholder((string) self::VEHICLE_YEAR_MAX),
+                        ]),
                 ]),
 
             Section::make('Costing')
@@ -77,9 +201,6 @@ class ItemForm
                         )),
                 ]),
 
-            // Packaging is how the supplier delivers a measured item — a carton of
-            // four 4-litre bottles. It says nothing about a filter, so it is hidden
-            // outright for pieces rather than sitting there inviting a wrong answer.
             Section::make('How it is bought')
                 ->key('packaging')
                 ->description('Describe one pack, so a delivery can be booked in without doing sums on paper.')
@@ -87,41 +208,37 @@ class ItemForm
                 ->visible(fn (Get $get): bool => self::isMeasured($get))
                 ->schema([
                     TextInput::make('pack_label')
-                        ->label('Pack is called')
+                        ->label('Pack name')
                         ->maxLength(50)
                         ->live(onBlur: true)
                         ->placeholder('e.g. Carton'),
 
                     TextInput::make('units_per_pack')
-                        ->label('Units per pack')
+                        ->label('Units in one pack')
                         ->numeric()
                         ->integer()
                         ->minValue(1)
                         ->maxValue(9999)
                         ->live(onBlur: true)
-                        ->helperText('Bottles in a carton, cylinders in a delivery.'),
+                        ->helperText('e.g. bottles in a carton'),
 
                     TextInput::make('measure_per_unit')
-                        ->label('Amount per unit')
+                        ->label('Amount in each unit')
                         ->numeric()
                         ->minValue(0)
                         ->maxValue(99999)
                         ->live(onBlur: true)
-                        ->helperText('Litres in one bottle, kilograms in one cylinder.'),
+                        ->helperText(fn (Get $get): string => 'e.g. '.self::packMeasureExample($get)),
 
                     Placeholder::make('pack_size')
-                        ->label('One pack holds')
+                        ->label('Pack summary')
                         ->columnSpanFull()
-                        // Reflecting the sum back is what makes a mistyped bottle
-                        // count obvious before it is saved.
                         ->content(fn (Get $get): string => self::packSummary($get)),
                 ]),
 
             Section::make('Stock')
                 ->description('Leave blank for items you do not count.')
                 ->columns(2)
-                // A repair task is normally labour with no shelf to count it on —
-                // but a measured repair, like an AC gas refill, empties a cylinder.
                 ->visible(fn (Get $get): bool => $get('type') === ItemType::Product->value || self::isMeasured($get))
                 ->schema([
                     TextInput::make('stock_level')
@@ -141,6 +258,22 @@ class ItemForm
                         ->helperText('Flag the item once stock falls to this amount or below.'),
                 ]),
         ]);
+    }
+
+    private static function showsVehicleCompatibility(Get $get): bool
+    {
+        return $get('type') === ItemType::Product->value && ! $get('is_universal');
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    private static function stripVehicleMakeId(array $data): array
+    {
+        unset($data['vehicle_make_id']);
+
+        return $data;
     }
 
     private static function unit(Get $get): UnitOfMeasure
@@ -163,6 +296,15 @@ class ItemForm
         return $abbreviation === '' ? '' : " ({$abbreviation})";
     }
 
+    private static function packMeasureExample(Get $get): string
+    {
+        return match (self::unit($get)) {
+            UnitOfMeasure::Litre => '4 L per bottle',
+            UnitOfMeasure::Kilogram => '13 kg per cylinder',
+            default => '1 unit',
+        };
+    }
+
     private static function packSummary(Get $get): string
     {
         $units = (float) $get('units_per_pack');
@@ -170,11 +312,11 @@ class ItemForm
         $unit = self::unit($get);
 
         if ($units <= 0 || $per <= 0) {
-            return 'Fill in both numbers to see the pack size.';
+            return 'Fill in both numbers to see the pack summary.';
         }
 
-        $label = trim((string) $get('pack_label')) ?: 'pack';
+        $label = trim((string) $get('pack_label')) ?: 'Pack';
 
-        return sprintf('One %s = %s %s', $label, number_format($units * $per, $unit->precision(), '.', ''), $unit->abbreviation());
+        return sprintf('1 %s = %s %s', $label, number_format($units * $per, $unit->precision(), '.', ''), $unit->abbreviation());
     }
 }

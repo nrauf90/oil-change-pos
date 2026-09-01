@@ -21,7 +21,7 @@ class Item extends Model
     protected $attributes = ['unit_of_measure' => 'piece'];
 
     protected $fillable = [
-        'name', 'type', 'unit_cost', 'unit_of_measure', 'pack_label',
+        'name', 'type', 'is_universal', 'unit_cost', 'unit_of_measure', 'pack_label',
         'units_per_pack', 'measure_per_unit', 'stock_level', 'low_stock_alert', 'is_active',
     ];
 
@@ -30,6 +30,7 @@ class Item extends Model
     {
         return [
             'type' => ItemType::class,
+            'is_universal' => 'boolean',
             'unit_of_measure' => UnitOfMeasure::class,
             'units_per_pack' => 'integer',
             'measure_per_unit' => 'decimal:3',
@@ -44,6 +45,12 @@ class Item extends Model
     public function saleItems(): HasMany
     {
         return $this->hasMany(SaleItem::class);
+    }
+
+    /** @return HasMany<ItemVehicleCompatibility, $this> */
+    public function vehicleCompatibilities(): HasMany
+    {
+        return $this->hasMany(ItemVehicleCompatibility::class);
     }
 
     /** Oil and gas are drawn by the litre or kilo; filters come off the shelf whole. */
@@ -163,6 +170,29 @@ class Item extends Model
                 $q->getQuery()->getGrammar()->wrap('name').' like ? escape ?',
                 ['%'.addcslashes((string) $term, '%_\\').'%', '\\'],
             );
+        });
+    }
+
+    /** @param Builder<Item> $query */
+    public function scopeCompatibleWith(Builder $query, ?int $makeId, ?int $modelId, ?int $year): void
+    {
+        if ($makeId === null && $modelId === null && $year === null) {
+            return;
+        }
+
+        $query->where(function (Builder $items) use ($makeId, $modelId, $year): void {
+            $items->where('is_universal', true)
+                ->orWhereHas('vehicleCompatibilities', function (Builder $compatibilities) use ($makeId, $modelId, $year): void {
+                    $compatibilities
+                        ->when($makeId !== null, fn (Builder $matching) => $matching->whereHas(
+                            'vehicleModel',
+                            fn (Builder $models) => $models->where('vehicle_make_id', $makeId),
+                        ))
+                        ->when($modelId !== null, fn (Builder $matching) => $matching->where('vehicle_model_id', $modelId))
+                        ->when($year !== null, fn (Builder $matching) => $matching
+                            ->where(fn (Builder $bounds) => $bounds->whereNull('year_from')->orWhere('year_from', '<=', $year))
+                            ->where(fn (Builder $bounds) => $bounds->whereNull('year_to')->orWhere('year_to', '>=', $year)));
+                });
         });
     }
 }

@@ -7,6 +7,8 @@ use App\Enums\Role;
 use App\Enums\UnitOfMeasure;
 use App\Models\Item;
 use App\Models\User;
+use App\Models\VehicleMake;
+use App\Models\VehicleModel;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Hash;
@@ -17,6 +19,7 @@ class DatabaseSeeder extends Seeder
     {
         $this->staff();
         $this->catalogue();
+        $this->referenceVehicles();
     }
 
     /**
@@ -174,5 +177,35 @@ class DatabaseSeeder extends Seeder
         ];
 
         return $rows;
+    }
+
+    /**
+     * Curated Pakistan-market fitment references for common 2000-2026 vehicles.
+     * They help staff begin classifying products without guessing compatibility.
+     */
+    private function referenceVehicles(): void
+    {
+        $makes = [
+            'Daihatsu' => ['Cuore', 'Hijet', 'Mira'],
+            'FAW' => ['V2', 'XPV'],
+            'Honda' => ['BR-V', 'City', 'Civic', 'HR-V'],
+            'Hyundai' => ['Elantra', 'Tucson'],
+            'Kia' => ['Picanto', 'Sportage'],
+            'Mitsubishi' => ['Lancer', 'Pajero'],
+            'Nissan' => ['Dayz', 'Sunny'],
+            'Suzuki' => ['Alto', 'Bolan', 'Cultus', 'Mehran', 'Ravi', 'Swift', 'Wagon R'],
+            'Toyota' => ['Aqua', 'Corolla', 'Hilux', 'Prado', 'Vitz', 'Yaris'],
+        ];
+
+        foreach ($makes as $makeName => $modelNames) {
+            $make = VehicleMake::firstOrCreate(['name' => $makeName]);
+
+            foreach ($modelNames as $modelName) {
+                VehicleModel::firstOrCreate([
+                    'vehicle_make_id' => $make->id,
+                    'name' => $modelName,
+                ]);
+            }
+        }
     }
 }
