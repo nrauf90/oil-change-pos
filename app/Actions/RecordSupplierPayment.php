@@ -7,7 +7,6 @@ use App\Models\Expense;
 use App\Models\SupplierPayment;
 use App\Models\Supply;
 use App\Models\User;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class RecordSupplierPayment
@@ -15,7 +14,7 @@ class RecordSupplierPayment
     /** @param array<string, mixed> $data */
     public function __invoke(Supply $supply, User $user, array $data): SupplierPayment
     {
-        return DB::transaction(function () use ($supply, $user, $data): SupplierPayment {
+        return $supply->getConnection()->transaction(function () use ($supply, $user, $data): SupplierPayment {
             $lockedSupply = Supply::query()->lockForUpdate()->findOrFail($supply->id);
             $paidCents = $lockedSupply->payments()->pluck('amount')
                 ->sum(fn (mixed $amount): int => $this->toCents((string) $amount));

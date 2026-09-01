@@ -2,12 +2,10 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
-
 /**
  * Persisted on/off state for one App\Modules\Module.
  */
-class ModuleSetting extends Model
+class ModuleSetting extends TenantModel
 {
     protected $table = 'modules';
 

@@ -5,11 +5,10 @@ namespace App\Models;
 use App\Enums\PaymentMethod;
 use Database\Factories\SupplierPaymentFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
-class SupplierPayment extends Model
+class SupplierPayment extends TenantModel
 {
     /** @use HasFactory<SupplierPaymentFactory> */
     use HasFactory;

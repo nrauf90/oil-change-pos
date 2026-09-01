@@ -186,7 +186,15 @@ class CentralDomainTest extends TestCase
             $parameters = collect((new ReflectionMethod(Shop::class, $methodName))->getParameters())
                 ->keyBy(static fn (ReflectionParameter $parameter): string => $parameter->getName());
 
-            foreach (['databaseUsername', 'databasePassword'] as $parameterName) {
+            foreach ([
+                'databaseDriver',
+                'databaseName',
+                'databaseHost',
+                'databasePort',
+                'databaseUsername',
+                'databasePassword',
+                'databaseSocket',
+            ] as $parameterName) {
                 $this->assertCount(
                     1,
                     $parameters->get($parameterName)?->getAttributes(\SensitiveParameter::class) ?? [],
@@ -194,17 +202,22 @@ class CentralDomainTest extends TestCase
             }
         }
 
-        $encryptedAttributes = (new ReflectionMethod(
+        $credentialParameters = (new ReflectionMethod(
             Shop::class,
-            'forceFillEncryptedAttributesIfChanged',
-        ))->getParameters()[0];
-        $encryptedValue = (new ReflectionMethod(
+            'setProvisioningCredentials',
+        ))->getParameters();
+        $encryptedSetterValue = (new ReflectionMethod(Shop::class, 'setEncryptedAttribute'))->getParameters()[1];
+        $encryptedComparisonValue = (new ReflectionMethod(
             Shop::class,
             'encryptedAttributeMatches',
         ))->getParameters()[1];
 
-        $this->assertCount(1, $encryptedAttributes->getAttributes(\SensitiveParameter::class));
-        $this->assertCount(1, $encryptedValue->getAttributes(\SensitiveParameter::class));
+        foreach ($credentialParameters as $parameter) {
+            $this->assertCount(1, $parameter->getAttributes(\SensitiveParameter::class));
+        }
+
+        $this->assertCount(1, $encryptedSetterValue->getAttributes(\SensitiveParameter::class));
+        $this->assertCount(1, $encryptedComparisonValue->getAttributes(\SensitiveParameter::class));
     }
 
     public function test_database_target_normalizer_accepts_only_identity_configuration(): void
@@ -355,6 +368,93 @@ class CentralDomainTest extends TestCase
         $this->assertFalse($valueContainsSecret($caughtException->getTrace()));
     }
 
+    public function test_invalid_registration_topology_is_not_captured_in_exception_traces(): void
+    {
+        $secrets = [
+            'trace-invalid-database!',
+            'trace-host.internal',
+            'trace-socket-path',
+            'trace-topology-user',
+            'trace-topology-password',
+        ];
+        $previousIgnoreArguments = ini_get('zend.exception_ignore_args');
+        $caughtException = null;
+        ini_set('zend.exception_ignore_args', '0');
+
+        try {
+            Shop::registerForProvisioning(
+                name: 'Trace topology shop',
+                slug: 'trace-topology-shop',
+                databaseDriver: 'mysql',
+                databaseName: $secrets[0],
+                databaseHost: $secrets[1],
+                databasePort: 64321,
+                databaseUsername: $secrets[3],
+                databasePassword: $secrets[4],
+                databaseSocket: $secrets[2],
+            );
+        } catch (Throwable $exception) {
+            $caughtException = $exception;
+        } finally {
+            if (is_string($previousIgnoreArguments)) {
+                ini_set('zend.exception_ignore_args', $previousIgnoreArguments);
+            }
+        }
+
+        $matchedTopology = [];
+        $visitedObjects = new \SplObjectStorage;
+        $valueContainsTopology = function (mixed $value) use (
+            &$valueContainsTopology,
+            &$matchedTopology,
+            $secrets,
+            $visitedObjects,
+        ): bool {
+            if ($value instanceof \SensitiveParameterValue) {
+                return false;
+            }
+
+            if (is_string($value)) {
+                foreach ($secrets as $secret) {
+                    if (str_contains($value, $secret)) {
+                        $matchedTopology[] = $secret;
+
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            if (is_object($value)) {
+                if ($visitedObjects->contains($value)) {
+                    return false;
+                }
+
+                $visitedObjects->attach($value);
+
+                return $valueContainsTopology((array) $value);
+            }
+
+            if (! is_array($value)) {
+                return false;
+            }
+
+            foreach ($value as $nestedValue) {
+                if ($valueContainsTopology($nestedValue)) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        $this->assertInstanceOf(InvalidArgumentException::class, $caughtException);
+        $this->assertFalse(
+            $valueContainsTopology($caughtException->getTrace()),
+            'Trace exposed: '.implode(', ', array_unique($matchedTopology)),
+        );
+    }
+
     public function test_shop_database_config_omits_missing_connection_overrides(): void
     {
         $shop = Shop::factory()->create();
@@ -367,8 +467,8 @@ class CentralDomainTest extends TestCase
 
     public function test_generic_database_url_cannot_override_shop_database_targets(): void
     {
-        $shopADatabasePath = $this->newTemporaryDatabasePath('shop-a-');
-        $shopBDatabasePath = $this->newTemporaryDatabasePath('shop-b-');
+        $shopADatabasePath = $this->newTenantDatabasePath('shop-a-');
+        $shopBDatabasePath = $this->newTenantDatabasePath('shop-b-');
         $this->writeDatabaseMarker($shopADatabasePath, 'shop-a');
         $this->writeDatabaseMarker($shopBDatabasePath, 'shop-b');
         $tenantTemplate = $this->tenantTemplateWithDatabaseUrl('sqlite:///:memory:');
@@ -1683,8 +1783,7 @@ class CentralDomainTest extends TestCase
         }
 
         $this->assertNull($caughtException->getPrevious());
-        $this->assertSame(1, Shop::query()->count());
-        $this->assertSame('competing-shop', Shop::query()->value('slug'));
+        $this->assertSame(0, Shop::query()->count());
     }
 
     public function test_endpoint_claim_unique_race_removes_the_unassigned_shop_and_translates_the_conflict(): void
@@ -1747,8 +1846,109 @@ class CentralDomainTest extends TestCase
         }
 
         $this->assertNull($caughtException->getPrevious());
-        $this->assertSame(['competing-claim-shop'], Shop::query()->pluck('slug')->all());
-        $this->assertSame(1, DB::connection('central')->table('shop_database_target_claims')->count());
+        $this->assertSame([], Shop::query()->pluck('slug')->all());
+        $this->assertSame(0, DB::connection('central')->table('shop_database_target_claims')->count());
+    }
+
+    public function test_claim_insert_failure_rolls_back_the_shop_and_every_claim(): void
+    {
+        DB::connection('central')->unprepared(<<<'SQL'
+            CREATE TRIGGER reject_shop_database_target_claim
+            BEFORE INSERT ON shop_database_target_claims
+            BEGIN
+                SELECT RAISE(ABORT, 'forced claim publication failure');
+            END
+            SQL);
+
+        try {
+            $this->registerShop(
+                slug: 'atomic-claim-publication',
+                databaseDriver: 'mysql',
+                databaseName: 'atomic_claim_publication',
+                databaseHost: '192.0.2.97',
+            );
+            $this->fail('A forced claim publication failure was ignored.');
+        } catch (QueryException $exception) {
+            $this->assertStringContainsString('forced claim publication failure', $exception->getMessage());
+        }
+
+        $this->assertDatabaseMissing('shops', ['slug' => 'atomic-claim-publication'], 'central');
+        $this->assertDatabaseCount('shop_database_target_claims', 0, 'central');
+    }
+
+    public function test_validated_connection_rejects_a_missing_or_extra_owned_claim(): void
+    {
+        $shop = $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'exact_claim_ownership',
+            databaseHost: '192.0.2.98',
+        );
+        $registeredClaim = $shop->databaseTargetClaims()->firstOrFail();
+        $registeredClaim->delete();
+        DB::connection('central')->table('shop_database_target_claims')->insert([
+            'shop_id' => $shop->getKey(),
+            'fingerprint' => hash('sha256', 'unexpected replacement claim'),
+        ]);
+
+        $this->assertTenantTargetConflict(
+            fn () => $shop->validatedDatabaseConnection(),
+            'The tenant database target identity changed after registration.',
+        );
+    }
+
+    public function test_hard_deletion_cannot_release_database_target_claims(): void
+    {
+        $shop = Shop::factory()->create();
+        $shopId = (string) $shop->getKey();
+        $claimCount = $shop->databaseTargetClaims()->count();
+
+        try {
+            $shop->forceDeleteQuietly();
+            $this->fail('A shop database reservation was hard deleted.');
+        } catch (LogicException $exception) {
+            $this->assertSame(
+                'Shop hard deletion requires the future verified tenant cleanup workflow.',
+                $exception->getMessage(),
+            );
+        }
+
+        try {
+            Shop::query()->whereKey($shopId)->forceDelete();
+            $this->fail('A query builder bypass released a shop database reservation.');
+        } catch (QueryException) {
+            $this->addToAssertionCount(1);
+        }
+
+        $this->assertDatabaseHas('shops', ['id' => $shopId], 'central');
+        $this->assertDatabaseCount('shop_database_target_claims', $claimCount, 'central');
+    }
+
+    public function test_connection_snapshot_resolves_database_hosts_once(): void
+    {
+        $resolver = new class implements DatabaseHostResolver
+        {
+            public int $calls = 0;
+
+            public function resolve(string $host): array
+            {
+                $this->calls++;
+
+                return ['192.0.2.99'];
+            }
+        };
+        app()->instance(DatabaseHostResolver::class, $resolver);
+        $shop = $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'single_resolution',
+            databaseHost: 'single-resolution.example.test',
+        );
+        $resolver->calls = 0;
+
+        $snapshot = $shop->validatedDatabaseConnection();
+
+        $this->assertSame(1, $resolver->calls);
+        $this->assertSame('mysql', $snapshot->target()->driver);
+        $this->assertSame('single_resolution', $snapshot->connectionOverrides()['database']);
     }
 
     public function test_sqlite_path_unique_race_is_translated_to_a_tenant_target_conflict(): void
@@ -1782,8 +1982,7 @@ class CentralDomainTest extends TestCase
         }
 
         $this->assertNull($caughtException->getPrevious());
-        $this->assertSame(1, Shop::query()->count());
-        $this->assertSame('competing-shop', Shop::query()->value('slug'));
+        $this->assertSame(0, Shop::query()->count());
     }
 
     public function test_shop_lifecycle_transitions_are_explicit(): void
@@ -2119,8 +2318,11 @@ class CentralDomainTest extends TestCase
         try {
             $shop->forceDelete();
             $this->fail('A shop with support audit history was force deleted.');
-        } catch (QueryException) {
-            // The foreign key must preserve the audit history.
+        } catch (LogicException $exception) {
+            $this->assertSame(
+                'Shop hard deletion requires the future verified tenant cleanup workflow.',
+                $exception->getMessage(),
+            );
         }
 
         $this->assertDatabaseHas('shops', ['id' => $shop->getKey()], 'central');

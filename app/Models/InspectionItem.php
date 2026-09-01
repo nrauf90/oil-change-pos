@@ -6,14 +6,13 @@ use App\Enums\InspectionPoint;
 use App\Enums\InspectionStatus;
 use Database\Factories\InspectionItemFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * One check-point of one inspection: what was looked at, the verdict, and an
  * optional note. There is no price column here by design.
  */
-class InspectionItem extends Model
+class InspectionItem extends TenantModel
 {
     /** @use HasFactory<InspectionItemFactory> */
     use HasFactory;

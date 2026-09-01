@@ -8,7 +8,6 @@ use App\Support\ServiceHistory;
 use Database\Factories\InspectionFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -19,7 +18,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * session in the controller, so a forged user_id in the request body can never
  * put someone else's name on a report.
  */
-class Inspection extends Model
+class Inspection extends TenantModel
 {
     /** @use HasFactory<InspectionFactory> */
     use HasFactory;

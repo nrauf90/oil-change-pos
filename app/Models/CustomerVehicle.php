@@ -4,9 +4,8 @@ namespace App\Models;
 
 use Database\Factories\CustomerVehicleFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
 
-class CustomerVehicle extends Model
+class CustomerVehicle extends TenantModel
 {
     /** @use HasFactory<CustomerVehicleFactory> */
     use HasFactory;

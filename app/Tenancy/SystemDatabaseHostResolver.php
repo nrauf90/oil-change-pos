@@ -7,7 +7,7 @@ final class SystemDatabaseHostResolver implements DatabaseHostResolver
     /** @var array<string, list<string>> */
     private array $resolvedAddresses = [];
 
-    public function resolve(string $host): array
+    public function resolve(#[\SensitiveParameter] string $host): array
     {
         if (array_key_exists($host, $this->resolvedAddresses)) {
             return $this->resolvedAddresses[$host];

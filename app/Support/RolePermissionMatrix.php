@@ -4,9 +4,9 @@ namespace App\Support;
 
 use App\Enums\Permission;
 use App\Enums\Role;
+use App\Models\Role as RoleModel;
 use App\Modules\Module;
 use App\Modules\ModuleRegistry;
-use Spatie\Permission\Models\Role as RoleModel;
 use Spatie\Permission\PermissionRegistrar;
 
 /**

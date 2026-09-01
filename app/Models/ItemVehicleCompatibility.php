@@ -6,11 +6,10 @@ use App\Enums\ItemType;
 use Database\Factories\ItemVehicleCompatibilityFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Validation\ValidationException;
 
-class ItemVehicleCompatibility extends Model
+class ItemVehicleCompatibility extends TenantModel
 {
     private const MAX_VEHICLE_YEAR = 2026;
 

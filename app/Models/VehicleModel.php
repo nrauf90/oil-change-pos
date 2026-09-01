@@ -4,13 +4,12 @@ namespace App\Models;
 
 use Database\Factories\VehicleModelFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
-class VehicleModel extends Model
+class VehicleModel extends TenantModel
 {
     /** @use HasFactory<VehicleModelFactory> */
     use HasFactory;

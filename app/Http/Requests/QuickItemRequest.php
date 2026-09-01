@@ -6,6 +6,9 @@ namespace App\Http\Requests;
 
 use App\Enums\ItemType;
 use App\Enums\Permission;
+use App\Models\Item;
+use App\Models\VehicleMake;
+use App\Models\VehicleModel;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Arr;
 use Illuminate\Validation\Rule;
@@ -17,16 +20,16 @@ class QuickItemRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => ['required', 'string', 'max:150', Rule::unique('items', 'name')],
+            'name' => ['required', 'string', 'max:150', Rule::unique(Item::class, 'name')],
             'type' => ['required', Rule::enum(ItemType::class)],
             'is_universal' => ['sometimes', 'boolean'],
             'unit_cost' => ['nullable', 'numeric', 'min:0', 'max:99999999'],
             'stock_level' => ['nullable', 'integer', 'min:0', 'max:99999999'],
             'low_stock_alert' => ['nullable', 'integer', 'min:0', 'max:99999999'],
             'compatibilities' => ['nullable', 'array'],
-            'compatibilities.*.vehicle_make_id' => ['nullable', 'integer', Rule::exists('vehicle_makes', 'id')],
+            'compatibilities.*.vehicle_make_id' => ['nullable', 'integer', Rule::exists(VehicleMake::class, 'id')],
             'compatibilities.*.vehicle_make_name' => ['nullable', 'string', 'max:100'],
-            'compatibilities.*.vehicle_model_id' => ['nullable', 'integer', Rule::exists('vehicle_models', 'id')],
+            'compatibilities.*.vehicle_model_id' => ['nullable', 'integer', Rule::exists(VehicleModel::class, 'id')],
             'compatibilities.*.vehicle_model_name' => ['nullable', 'string', 'max:100'],
             'compatibilities.*.year_from' => ['nullable', 'integer'],
             'compatibilities.*.year_to' => ['nullable', 'integer'],

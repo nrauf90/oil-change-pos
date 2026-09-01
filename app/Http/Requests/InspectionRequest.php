@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Enums\InspectionPoint;
 use App\Enums\InspectionStatus;
+use App\Models\Sale;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -21,7 +22,7 @@ class InspectionRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'sale_id' => ['nullable', 'integer', Rule::exists('sales', 'id')],
+            'sale_id' => ['nullable', 'integer', Rule::exists(Sale::class, 'id')],
             'customer_name' => ['nullable', 'string', 'max:150'],
             'phone' => ['nullable', 'string', 'max:40'],
             'vehicle_plate' => ['required', 'string', 'max:40'],

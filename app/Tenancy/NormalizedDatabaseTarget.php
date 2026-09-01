@@ -15,10 +15,15 @@ final readonly class NormalizedDatabaseTarget
      * @param  list<string>  $claimFingerprints
      */
     private function __construct(
+        #[\SensitiveParameter]
         public string $driver,
+        #[\SensitiveParameter]
         public string $database,
+        #[\SensitiveParameter]
         public array|string|null $host,
+        #[\SensitiveParameter]
         public ?int $port,
+        #[\SensitiveParameter]
         public ?string $socket,
         public string $fingerprint,
         public ?string $pendingSqliteFingerprint,
@@ -29,7 +34,7 @@ final readonly class NormalizedDatabaseTarget
         private array $claimFingerprints,
     ) {}
 
-    public function collidesWith(self $other): bool
+    public function collidesWith(#[\SensitiveParameter] self $other): bool
     {
         return array_intersect($this->claimFingerprints, $other->claimFingerprints) !== [];
     }
@@ -40,10 +45,38 @@ final readonly class NormalizedDatabaseTarget
         return $this->claimFingerprints;
     }
 
+    public function hasCurrentMySqlEndpoints(DatabaseHostResolver $hostResolver): bool
+    {
+        if ($this->driver !== 'mysql') {
+            return false;
+        }
+
+        if ($this->socket !== null) {
+            return true;
+        }
+
+        $currentTarget = self::normalize(
+            driver: $this->driver,
+            database: $this->database,
+            host: $this->host,
+            port: $this->port,
+            socket: null,
+            allowSqliteMemoryDatabase: false,
+            hostResolver: $hostResolver,
+            sqliteBasePath: null,
+        );
+
+        return $currentTarget->mysqlEndpoints === $this->mysqlEndpoints;
+    }
+
     public static function forTenant(
+        #[\SensitiveParameter]
         DatabaseTargetConfiguration $target,
+        #[\SensitiveParameter]
         DatabaseTargetConfiguration $defaults,
+        #[\SensitiveParameter]
         ?DatabaseTargetConfiguration $central,
+        #[\SensitiveParameter]
         string $sqliteRoot,
         DatabaseHostResolver $hostResolver,
     ): self {
@@ -85,8 +118,14 @@ final readonly class NormalizedDatabaseTarget
     }
 
     /** @param list<string>|string|null $host */
-    private function withConnectionOverrides(array|string|null $host, ?int $port, ?string $socket): self
-    {
+    private function withConnectionOverrides(
+        #[\SensitiveParameter]
+        array|string|null $host,
+        #[\SensitiveParameter]
+        ?int $port,
+        #[\SensitiveParameter]
+        ?string $socket,
+    ): self {
         return new self(
             $this->driver,
             $this->database,
@@ -104,6 +143,7 @@ final readonly class NormalizedDatabaseTarget
     }
 
     private static function fromCentralConfiguration(
+        #[\SensitiveParameter]
         ?DatabaseTargetConfiguration $configuration,
         DatabaseHostResolver $hostResolver,
     ): ?self {
@@ -131,13 +171,19 @@ final readonly class NormalizedDatabaseTarget
     }
 
     private static function normalize(
+        #[\SensitiveParameter]
         string $driver,
+        #[\SensitiveParameter]
         string $database,
+        #[\SensitiveParameter]
         array|string|null $host,
+        #[\SensitiveParameter]
         ?int $port,
+        #[\SensitiveParameter]
         ?string $socket,
         bool $allowSqliteMemoryDatabase,
         DatabaseHostResolver $hostResolver,
+        #[\SensitiveParameter]
         ?string $sqliteBasePath,
     ): self {
         self::assertSupportedDriver($driver);
@@ -251,14 +297,14 @@ final readonly class NormalizedDatabaseTarget
         );
     }
 
-    private static function assertSupportedDriver(string $driver): void
+    private static function assertSupportedDriver(#[\SensitiveParameter] string $driver): void
     {
         if (! in_array($driver, self::SUPPORTED_DRIVERS, true)) {
             throw new InvalidArgumentException("Unsupported shop database driver [{$driver}].");
         }
     }
 
-    private static function canonicalMySqlDatabaseName(string $database): string
+    private static function canonicalMySqlDatabaseName(#[\SensitiveParameter] string $database): string
     {
         $database = trim($database);
 
@@ -271,7 +317,7 @@ final readonly class NormalizedDatabaseTarget
         return $database;
     }
 
-    private static function mySqlSchemaIdentity(string $database): string
+    private static function mySqlSchemaIdentity(#[\SensitiveParameter] string $database): string
     {
         return Str::lower($database);
     }
@@ -280,8 +326,10 @@ final readonly class NormalizedDatabaseTarget
      * @param  list<string>|string  $host
      * @return list<string>|string
      */
-    private static function canonicalMySqlHostConfiguration(array|string $host): array|string
-    {
+    private static function canonicalMySqlHostConfiguration(
+        #[\SensitiveParameter]
+        array|string $host,
+    ): array|string {
         if (is_string($host)) {
             return self::canonicalMySqlHost($host);
         }
@@ -305,7 +353,7 @@ final readonly class NormalizedDatabaseTarget
         return array_values(array_unique($hosts));
     }
 
-    private static function canonicalMySqlHost(string $host): string
+    private static function canonicalMySqlHost(#[\SensitiveParameter] string $host): string
     {
         $host = Str::lower(trim($host));
         $hasOpeningBracket = str_starts_with($host, '[');
@@ -347,7 +395,7 @@ final readonly class NormalizedDatabaseTarget
         return $packedAddress === false ? $host : (string) inet_ntop($packedAddress);
     }
 
-    private static function isCanonicalHostName(string $host): bool
+    private static function isCanonicalHostName(#[\SensitiveParameter] string $host): bool
     {
         if (strlen($host) > 253) {
             return false;
@@ -364,6 +412,7 @@ final readonly class NormalizedDatabaseTarget
 
     /** @return list<array{address: string, identity: string}> */
     private static function resolveMySqlHostEndpoints(
+        #[\SensitiveParameter]
         string $host,
         DatabaseHostResolver $hostResolver,
     ): array {
@@ -399,7 +448,7 @@ final readonly class NormalizedDatabaseTarget
      * @param  list<array{address: string, identity: string}>  $endpoints
      * @return list<array{address: string, identity: string}>
      */
-    private static function uniqueResolvedEndpoints(array $endpoints): array
+    private static function uniqueResolvedEndpoints(#[\SensitiveParameter] array $endpoints): array
     {
         $uniqueEndpoints = [];
 
@@ -413,7 +462,7 @@ final readonly class NormalizedDatabaseTarget
     }
 
     /** @return array{address: string, identity: string} */
-    private static function canonicalIpEndpoint(string $address): array
+    private static function canonicalIpEndpoint(#[\SensitiveParameter] string $address): array
     {
         $packedAddress = @inet_pton($address);
 
@@ -427,7 +476,7 @@ final readonly class NormalizedDatabaseTarget
     }
 
     /** @return array{address: string, identity: string} */
-    private static function canonicalPackedIpEndpoint(string $packedAddress): array
+    private static function canonicalPackedIpEndpoint(#[\SensitiveParameter] string $packedAddress): array
     {
         if (strlen($packedAddress) === 16
             && substr($packedAddress, 0, 12) === str_repeat("\0", 10)."\xff\xff") {
@@ -451,7 +500,7 @@ final readonly class NormalizedDatabaseTarget
      * @param  list<array{host: string, address: string, port: int}>  $endpoints
      * @return list<array{host: string, address: string, port: int}>
      */
-    private static function uniqueMySqlEndpoints(array $endpoints): array
+    private static function uniqueMySqlEndpoints(#[\SensitiveParameter] array $endpoints): array
     {
         $uniqueEndpoints = [];
 
@@ -465,7 +514,7 @@ final readonly class NormalizedDatabaseTarget
         return array_values($uniqueEndpoints);
     }
 
-    private static function canonicalMySqlPort(int $port): int
+    private static function canonicalMySqlPort(#[\SensitiveParameter] int $port): int
     {
         if ($port < 1 || $port > 65535) {
             throw new InvalidArgumentException('MySQL tenant database ports must be between 1 and 65535.');
@@ -474,7 +523,7 @@ final readonly class NormalizedDatabaseTarget
         return $port;
     }
 
-    private static function canonicalMySqlSocket(?string $socket): ?string
+    private static function canonicalMySqlSocket(#[\SensitiveParameter] ?string $socket): ?string
     {
         if ($socket === null || trim($socket) === '') {
             return null;
@@ -491,8 +540,10 @@ final readonly class NormalizedDatabaseTarget
     }
 
     private static function canonicalSqlitePath(
+        #[\SensitiveParameter]
         string $database,
         bool $allowMemoryDatabase,
+        #[\SensitiveParameter]
         ?string $basePath,
     ): string {
         if ($allowMemoryDatabase && trim($database) === ':memory:') {
@@ -519,7 +570,7 @@ final readonly class NormalizedDatabaseTarget
         }
     }
 
-    private static function canonicalAbsolutePath(string $path): string
+    private static function canonicalAbsolutePath(#[\SensitiveParameter] string $path): string
     {
         $path = trim($path);
         $path = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path);
@@ -572,7 +623,7 @@ final readonly class NormalizedDatabaseTarget
         return $resolvedParent.DIRECTORY_SEPARATOR.basename($canonicalPath);
     }
 
-    private static function isAbsoluteLocalPath(string $path): bool
+    private static function isAbsoluteLocalPath(#[\SensitiveParameter] string $path): bool
     {
         $path = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, trim($path));
 
@@ -581,7 +632,7 @@ final readonly class NormalizedDatabaseTarget
             : str_starts_with($path, DIRECTORY_SEPARATOR);
     }
 
-    private static function resolveParentPath(string $parent): string
+    private static function resolveParentPath(#[\SensitiveParameter] string $parent): string
     {
         $missingSegments = [];
         $currentPath = $parent;
@@ -610,8 +661,12 @@ final readonly class NormalizedDatabaseTarget
             : $resolvedPath.DIRECTORY_SEPARATOR.implode(DIRECTORY_SEPARATOR, $missingSegments);
     }
 
-    private static function assertWithinSqliteRoot(string $database, string $sqliteRoot): void
-    {
+    private static function assertWithinSqliteRoot(
+        #[\SensitiveParameter]
+        string $database,
+        #[\SensitiveParameter]
+        string $sqliteRoot,
+    ): void {
         $resolvedRoot = realpath($sqliteRoot);
 
         if ($resolvedRoot === false || ! is_dir($resolvedRoot)) {
@@ -631,19 +686,19 @@ final readonly class NormalizedDatabaseTarget
     }
 
     /** @param array<string, int|string> $identity */
-    private static function fingerprint(array $identity): string
+    private static function fingerprint(#[\SensitiveParameter] array $identity): string
     {
         return hash('sha256', json_encode($identity, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
     }
 
-    private static function pathIdentity(string $path): string
+    private static function pathIdentity(#[\SensitiveParameter] string $path): string
     {
         $path = self::normalizeSeparators($path);
 
         return DIRECTORY_SEPARATOR === '\\' ? Str::lower($path) : $path;
     }
 
-    private static function filesystemIdentity(string $path): ?string
+    private static function filesystemIdentity(#[\SensitiveParameter] string $path): ?string
     {
         clearstatcache(true, $path);
         $metadata = @stat($path);
@@ -658,7 +713,7 @@ final readonly class NormalizedDatabaseTarget
         return $metadata['dev'].':'.$metadata['ino'];
     }
 
-    private static function normalizeSeparators(string $path): string
+    private static function normalizeSeparators(#[\SensitiveParameter] string $path): string
     {
         return str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path);
     }

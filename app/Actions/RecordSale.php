@@ -10,7 +10,6 @@ use App\Models\Sale;
 use App\Support\SaleTotalCalculator;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 
 /**
  * Turns a validated checkout payload into a persisted Sale.
@@ -26,7 +25,7 @@ class RecordSale
     {
         $lines = $this->resolveLines($data['lines'] ?? []);
 
-        return DB::transaction(function () use ($data, $lines): Sale {
+        return (new Sale)->getConnection()->transaction(function () use ($data, $lines): Sale {
             $sale = new Sale([
                 'customer_name' => $data['customer_name'] ?? null,
                 'phone' => $data['phone'] ?? null,

@@ -7,6 +7,7 @@ namespace App\Http\Requests;
 use App\Enums\ItemType;
 use App\Enums\Permission;
 use App\Enums\UnitOfMeasure;
+use App\Models\Item;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -19,7 +20,7 @@ class ItemRequest extends FormRequest
         return [
             'name' => [
                 'required', 'string', 'max:150',
-                Rule::unique('items', 'name')->ignore($this->route('item')),
+                Rule::unique(Item::class, 'name')->ignore($this->route('item')),
             ],
             'type' => ['required', Rule::enum(ItemType::class)],
             'unit_of_measure' => ['required', Rule::enum(UnitOfMeasure::class)],

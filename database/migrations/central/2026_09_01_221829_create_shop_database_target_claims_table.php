@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::connection('central')->create('shop_database_target_claims', function (Blueprint $table) {
             $table->id();
-            $table->foreignUuid('shop_id')->constrained('shops')->cascadeOnDelete();
+            $table->foreignUuid('shop_id')->constrained('shops')->restrictOnDelete();
             $table->string('fingerprint', 64)
                 ->unique('shop_database_target_claims_fingerprint_unique');
             $table->index('shop_id');

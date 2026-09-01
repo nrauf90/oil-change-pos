@@ -11,11 +11,11 @@ use App\Filament\Resources\Items\ItemResource;
 use App\Filament\Resources\Items\Pages\CreateItem;
 use App\Filament\Resources\Items\Pages\ListItems;
 use App\Models\Item;
+use App\Models\Role as SpatieRole;
 use App\Models\User;
 use Filament\Schemas\Components\Component;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
-use Spatie\Permission\Models\Role as SpatieRole;
 use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
 

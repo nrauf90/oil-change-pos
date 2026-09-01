@@ -20,7 +20,7 @@ use LogicException;
  * artisan command, a future screen nobody has built yet — cannot quietly bypass
  * it.
  */
-class ActivityLog extends Model
+class ActivityLog extends TenantModel
 {
     /** @use HasFactory<ActivityLogFactory> */
     use HasFactory;

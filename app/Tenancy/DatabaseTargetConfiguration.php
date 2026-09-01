@@ -8,11 +8,16 @@ use InvalidArgumentException;
 final readonly class DatabaseTargetConfiguration
 {
     public function __construct(
+        #[\SensitiveParameter]
         public ?string $driver,
+        #[\SensitiveParameter]
         public ?string $database,
         /** @var list<string>|string|null */
+        #[\SensitiveParameter]
         public array|string|null $host = null,
+        #[\SensitiveParameter]
         public ?int $port = null,
+        #[\SensitiveParameter]
         public ?string $socket = null,
     ) {}
 
@@ -89,7 +94,7 @@ final readonly class DatabaseTargetConfiguration
         );
     }
 
-    private static function parseStringToNativeType(mixed $value): mixed
+    private static function parseStringToNativeType(#[\SensitiveParameter] mixed $value): mixed
     {
         if (is_array($value)) {
             return array_map(self::parseStringToNativeType(...), $value);
@@ -104,13 +109,13 @@ final readonly class DatabaseTargetConfiguration
         return json_last_error() === JSON_ERROR_NONE ? $parsedValue : $value;
     }
 
-    private static function nullableString(mixed $value): ?string
+    private static function nullableString(#[\SensitiveParameter] mixed $value): ?string
     {
         return is_string($value) && trim($value) !== '' ? $value : null;
     }
 
     /** @return list<string>|string|null */
-    private static function nullableHost(mixed $value): array|string|null
+    private static function nullableHost(#[\SensitiveParameter] mixed $value): array|string|null
     {
         if (is_string($value)) {
             return trim($value) !== '' ? $value : null;
@@ -137,7 +142,7 @@ final readonly class DatabaseTargetConfiguration
         return $hosts;
     }
 
-    private static function nullableInteger(mixed $value): ?int
+    private static function nullableInteger(#[\SensitiveParameter] mixed $value): ?int
     {
         if (is_int($value)) {
             return $value;

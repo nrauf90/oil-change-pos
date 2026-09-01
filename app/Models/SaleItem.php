@@ -7,10 +7,9 @@ namespace App\Models;
 use App\Enums\SaleLineType;
 use Database\Factories\SaleItemFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class SaleItem extends Model
+class SaleItem extends TenantModel
 {
     /** @use HasFactory<SaleItemFactory> */
     use HasFactory;

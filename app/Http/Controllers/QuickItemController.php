@@ -12,7 +12,6 @@ use App\Models\VehicleMake;
 use App\Models\VehicleModel;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -48,7 +47,7 @@ class QuickItemController extends Controller
 
     public function store(QuickItemRequest $request): JsonResponse
     {
-        $item = DB::transaction(function () use ($request): Item {
+        $item = (new Item)->getConnection()->transaction(function () use ($request): Item {
             $item = Item::create($request->safe()->only([
                 'name',
                 'type',

@@ -7,12 +7,18 @@ use InvalidArgumentException;
 final readonly class SqliteDatabaseIdentitySnapshot
 {
     private function __construct(
+        #[\SensitiveParameter]
         public string $database,
+        #[\SensitiveParameter]
         public string $filesystemIdentity,
     ) {}
 
-    public static function capture(string $database, mixed $exclusiveFileHandle): self
-    {
+    public static function capture(
+        #[\SensitiveParameter]
+        string $database,
+        #[\SensitiveParameter]
+        mixed $exclusiveFileHandle,
+    ): self {
         if (! is_resource($exclusiveFileHandle)) {
             throw new InvalidArgumentException('SQLite identity capture requires an open exclusive file handle.');
         }
@@ -38,7 +44,7 @@ final readonly class SqliteDatabaseIdentitySnapshot
         );
     }
 
-    public function matchesDatabase(string $database): bool
+    public function matchesDatabase(#[\SensitiveParameter] string $database): bool
     {
         $expected = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $this->database);
         $actual = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $database);

@@ -7,11 +7,10 @@ use App\Enums\PaymentMethod;
 use Database\Factories\ExpenseFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
 
-class Expense extends Model
+class Expense extends TenantModel
 {
     /** @use HasFactory<ExpenseFactory> */
     use HasFactory;

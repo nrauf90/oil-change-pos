@@ -8,7 +8,6 @@ use App\Http\Requests\InspectionRequest;
 use App\Models\Inspection;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 
 /**
@@ -44,7 +43,7 @@ class InspectionController extends Controller
 
     public function store(InspectionRequest $request): RedirectResponse
     {
-        $inspection = DB::transaction(function () use ($request): Inspection {
+        $inspection = (new Inspection)->getConnection()->transaction(function () use ($request): Inspection {
             $inspection = new Inspection($request->details());
 
             // The inspector is whoever is signed in. Never the request body —
@@ -86,7 +85,7 @@ class InspectionController extends Controller
 
     public function update(InspectionRequest $request, Inspection $inspection): RedirectResponse
     {
-        DB::transaction(function () use ($request, $inspection): void {
+        $inspection->getConnection()->transaction(function () use ($request, $inspection): void {
             // inspected_by is untouched: the report belongs to whoever walked
             // around the car, not to whoever last corrected a typo.
             $inspection->update($request->details());

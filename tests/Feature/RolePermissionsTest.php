@@ -5,12 +5,12 @@ namespace Tests\Feature;
 use App\Enums\Permission;
 use App\Enums\Role;
 use App\Filament\Pages\RolePermissions;
+use App\Models\Permission as PermissionModel;
+use App\Models\Role as RoleModel;
 use App\Models\User;
 use App\Modules\ModuleRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
-use Spatie\Permission\Models\Permission as PermissionModel;
-use Spatie\Permission\Models\Role as RoleModel;
 use Tests\TestCase;
 
 class RolePermissionsTest extends TestCase

@@ -8,13 +8,12 @@ use App\Support\SaleTotalCalculator;
 use Database\Factories\SaleFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 
-class Sale extends Model
+class Sale extends TenantModel
 {
     /** @use HasFactory<SaleFactory> */
     use HasFactory;

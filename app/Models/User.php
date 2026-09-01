@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\Role as RoleEnum;
+use App\Models\Concerns\UsesTenantConnection;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
@@ -16,7 +17,7 @@ use Spatie\Permission\Traits\HasRoles;
 class User extends Authenticatable implements FilamentUser
 {
     /** @use HasFactory<UserFactory> */
-    use HasFactory, HasRoles, Notifiable;
+    use HasFactory, HasRoles, Notifiable, UsesTenantConnection;
 
     protected $fillable = ['name', 'username', 'password', 'is_active'];
 
