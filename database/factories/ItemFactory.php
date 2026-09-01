@@ -17,6 +17,7 @@ class ItemFactory extends Factory
         return [
             'name' => ucwords($this->faker->unique()->words(3, true)),
             'type' => ItemType::Product,
+            'is_universal' => false,
             'unit_cost' => $this->faker->randomFloat(2, 500, 9000),
             'stock_level' => null,
             'low_stock_alert' => null,
