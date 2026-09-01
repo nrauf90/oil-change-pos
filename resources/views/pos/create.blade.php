@@ -20,7 +20,7 @@
         ->values()
         ->all();
 
-    $customerFields = ['customer_name', 'phone', 'vehicle_model', 'vehicle_plate', 'mileage', 'notes'];
+    $customerFields = ['customer_name', 'phone', 'vehicle_model', 'vehicle_plate', 'mileage', 'next_checkup_mileage', 'notes'];
 
     $customer = collect($customerFields)
         ->mapWithKeys(fn (string $field) => [$field => (string) old($field, '')])
@@ -38,8 +38,8 @@
           'items' => $items,
           'groups' => $groups,
           'vehicleMakes' => $vehicle_makes,
-          'vehicleYears' => range(2000, now()->year),
-          'currentYear' => now()->year,
+          'vehicleYears' => range(2000, 2026),
+          'currentYear' => 2026,
           'lines' => $initialLines,
           'labor' => (string) old('labor_charge', ''),
           'misc' => (string) old('misc_charge', ''),
@@ -150,9 +150,14 @@
                            x-model="customer.vehicle_plate" placeholder="ABC-123">
                 </div>
                 <div>
-                    <label class="label" for="mileage">Odometer mileage</label>
+                    <label class="label" for="mileage">Visit odometer reading (km)</label>
                     <input id="mileage" name="mileage" type="text" inputmode="numeric" class="field !py-2"
                            x-model="customer.mileage" placeholder="84500">
+                </div>
+                <div>
+                    <label class="label" for="next_checkup_mileage">Next checkup mileage (km)</label>
+                    <input id="next_checkup_mileage" name="next_checkup_mileage" type="text" inputmode="numeric" class="field !py-2"
+                           x-model="customer.next_checkup_mileage" placeholder="90000">
                 </div>
                 <div>
                     <label class="label" for="notes">Notes</label>

@@ -317,6 +317,22 @@ class ItemManagementTest extends TestCase
         );
     }
 
+    public function test_a_vehicle_specific_product_requires_a_compatibility_row(): void
+    {
+        Livewire::actingAs(User::factory()->admin()->create())
+            ->test(CreateItem::class)
+            ->fillForm([
+                'name' => 'Incomplete Specific Filter',
+                'type' => ItemType::Product->value,
+                'is_universal' => false,
+                'vehicleCompatibilities' => [],
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['vehicleCompatibilities']);
+
+        $this->assertDatabaseMissing('items', ['name' => 'Incomplete Specific Filter']);
+    }
+
     public function test_editing_a_vehicle_specific_product_replaces_compatibility_rows_without_leaving_stale_links(): void
     {
         $restoreRepeaterUuids = Repeater::fake();

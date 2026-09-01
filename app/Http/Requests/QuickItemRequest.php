@@ -25,9 +25,9 @@ class QuickItemRequest extends FormRequest
             'low_stock_alert' => ['nullable', 'integer', 'min:0', 'max:99999999'],
             'compatibilities' => ['nullable', 'array'],
             'compatibilities.*.vehicle_make_id' => ['nullable', 'integer', Rule::exists('vehicle_makes', 'id')],
-            'compatibilities.*.vehicle_make_name' => ['nullable', 'string', 'max:150'],
+            'compatibilities.*.vehicle_make_name' => ['nullable', 'string', 'max:100'],
             'compatibilities.*.vehicle_model_id' => ['nullable', 'integer', Rule::exists('vehicle_models', 'id')],
-            'compatibilities.*.vehicle_model_name' => ['nullable', 'string', 'max:150'],
+            'compatibilities.*.vehicle_model_name' => ['nullable', 'string', 'max:100'],
             'compatibilities.*.year_from' => ['nullable', 'integer'],
             'compatibilities.*.year_to' => ['nullable', 'integer'],
         ];
@@ -156,7 +156,7 @@ class QuickItemRequest extends FormRequest
         $modelName = Arr::get($compatibility, 'vehicle_model_name');
         $yearFrom = Arr::get($compatibility, 'year_from');
         $yearTo = Arr::get($compatibility, 'year_to');
-        $currentYear = now()->year;
+        $maximumYear = 2026;
 
         if ($modelId === null && $modelName === null) {
             $validator->errors()->add(
@@ -165,7 +165,7 @@ class QuickItemRequest extends FormRequest
             );
         }
 
-        if ($makeId === null && $makeName === null && $modelName !== null) {
+        if ($makeId === null && $makeName === null) {
             $validator->errors()->add(
                 "compatibilities.{$index}.vehicle_make_id",
                 'Choose a make or type a new one.',
@@ -173,10 +173,10 @@ class QuickItemRequest extends FormRequest
         }
 
         foreach (['year_from' => $yearFrom, 'year_to' => $yearTo] as $field => $year) {
-            if ($year !== null && ($year < 2000 || $year > $currentYear)) {
+            if ($year !== null && ($year < 2000 || $year > $maximumYear)) {
                 $validator->errors()->add(
                     "compatibilities.{$index}.{$field}",
-                    "The year must be between 2000 and {$currentYear}.",
+                    'The year must be between 2000 and 2026.',
                 );
             }
         }

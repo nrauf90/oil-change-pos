@@ -20,7 +20,7 @@ class ItemVehicleCompatibilityFactory extends Factory
     public function definition(): array
     {
         return [
-            'item_id' => Item::factory(),
+            'item_id' => Item::factory()->state(['is_universal' => false]),
             'vehicle_model_id' => VehicleModel::factory(),
             'year_from' => null,
             'year_to' => null,

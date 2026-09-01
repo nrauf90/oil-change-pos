@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\ItemType;
 use Database\Factories\ItemVehicleCompatibilityFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -11,6 +12,8 @@ use Illuminate\Validation\ValidationException;
 
 class ItemVehicleCompatibility extends Model
 {
+    private const MAX_VEHICLE_YEAR = 2026;
+
     /** @use HasFactory<ItemVehicleCompatibilityFactory> */
     use HasFactory;
 
@@ -30,13 +33,19 @@ class ItemVehicleCompatibility extends Model
         static::saving(function (self $compatibility): void {
             foreach (['year_from', 'year_to'] as $field) {
                 $year = $compatibility->{$field};
-                $currentYear = now()->year;
-
-                if ($year !== null && ($year < 2000 || $year > $currentYear)) {
+                if ($year !== null && ($year < 2000 || $year > self::MAX_VEHICLE_YEAR)) {
                     throw ValidationException::withMessages([
-                        $field => "The year must be between 2000 and {$currentYear}.",
+                        $field => 'The year must be between 2000 and 2026.',
                     ]);
                 }
+            }
+
+            $item = Item::query()->find($compatibility->item_id);
+
+            if ($item === null || $item->type !== ItemType::Product || $item->is_universal) {
+                throw ValidationException::withMessages([
+                    'item_id' => 'Vehicle compatibility can only be assigned to vehicle-specific products.',
+                ]);
             }
 
             if ($compatibility->year_from !== null

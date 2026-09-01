@@ -17,7 +17,7 @@ class ItemFactory extends Factory
         return [
             'name' => ucwords($this->faker->unique()->words(3, true)),
             'type' => ItemType::Product,
-            'is_universal' => false,
+            'is_universal' => true,
             'unit_cost' => $this->faker->randomFloat(2, 500, 9000),
             'stock_level' => null,
             'low_stock_alert' => null,
@@ -27,7 +27,10 @@ class ItemFactory extends Factory
 
     public function repair(): static
     {
-        return $this->state(fn () => ['type' => ItemType::Repair]);
+        return $this->state(fn () => [
+            'type' => ItemType::Repair,
+            'is_universal' => false,
+        ]);
     }
 
     public function withoutUnitCost(): static

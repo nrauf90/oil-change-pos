@@ -7,6 +7,7 @@ use App\Enums\Permission;
 use App\Enums\UnitOfMeasure;
 use App\Models\VehicleMake;
 use App\Models\VehicleModel;
+use Filament\Actions\Action;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Repeater;
@@ -79,6 +80,8 @@ class ItemForm
                     Repeater::make('vehicleCompatibilities')
                         ->relationship()
                         ->defaultItems(0)
+                        ->required(fn (Get $get): bool => self::showsVehicleCompatibility($get))
+                        ->minItems(fn (Get $get): int => self::showsVehicleCompatibility($get) ? 1 : 0)
                         ->addActionLabel('Add compatibility')
                         ->columns(4)
                         ->mutateRelationshipDataBeforeFillUsing(function (array $data): array {
@@ -109,6 +112,9 @@ class ItemForm
                                         ->required()
                                         ->maxLength(100),
                                 ])
+                                ->createOptionAction(fn (Action $action): Action => $action->visible(
+                                    fn (): bool => auth()->user()?->isAdmin() ?? false,
+                                ))
                                 ->createOptionUsing(fn (array $data): int => VehicleMake::query()->firstOrCreate([
                                     'name' => $data['name'],
                                 ])->getKey()),
@@ -133,6 +139,9 @@ class ItemForm
                                         ->required()
                                         ->maxLength(100),
                                 ])
+                                ->createOptionAction(fn (Action $action): Action => $action->visible(
+                                    fn (): bool => auth()->user()?->isAdmin() ?? false,
+                                ))
                                 ->createOptionUsing(function (Select $component, array $data): int {
                                     $vehicleMakeId = $component->getContainer()->getState()['vehicle_make_id'] ?? null;
 

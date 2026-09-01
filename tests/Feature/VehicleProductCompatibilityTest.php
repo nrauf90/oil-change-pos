@@ -9,7 +9,6 @@ use App\Models\ItemVehicleCompatibility;
 use App\Models\VehicleMake;
 use App\Models\VehicleModel;
 use Database\Seeders\DatabaseSeeder;
-use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
@@ -79,7 +78,7 @@ class VehicleProductCompatibilityTest extends TestCase
         $toyota = VehicleMake::factory()->create();
         VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
 
-        $this->expectException(QueryException::class);
+        $this->expectException(ValidationException::class);
 
         VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
     }
@@ -109,11 +108,42 @@ class VehicleProductCompatibilityTest extends TestCase
         ItemVehicleCompatibility::factory()->create(['year_from' => 1999]);
     }
 
-    public function test_compatibility_rejects_years_after_the_current_year(): void
+    public function test_compatibility_rejects_years_after_2026(): void
     {
         $this->expectException(ValidationException::class);
 
-        ItemVehicleCompatibility::factory()->create(['year_to' => now()->year + 1]);
+        ItemVehicleCompatibility::factory()->create(['year_to' => 2027]);
+    }
+
+    public function test_repairs_cannot_receive_vehicle_compatibilities(): void
+    {
+        $repair = Item::factory()->repair()->create();
+
+        $this->expectException(ValidationException::class);
+
+        ItemVehicleCompatibility::factory()->for($repair)->create();
+    }
+
+    public function test_universal_products_cannot_receive_vehicle_compatibilities(): void
+    {
+        $product = Item::factory()->create(['is_universal' => true]);
+
+        $this->expectException(ValidationException::class);
+
+        ItemVehicleCompatibility::factory()->for($product)->create();
+    }
+
+    public function test_vehicle_names_are_trimmed_and_case_insensitively_unique(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => ' Toyota ']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => ' Corolla ']);
+
+        $this->assertSame('Toyota', $toyota->name);
+        $this->assertSame('Corolla', $corolla->name);
+
+        $this->expectException(ValidationException::class);
+
+        VehicleMake::factory()->create(['name' => 'TOYOTA']);
     }
 
     public function test_vehicle_filter_includes_universal_and_matching_specific_products(): void

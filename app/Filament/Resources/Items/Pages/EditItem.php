@@ -9,6 +9,8 @@ use Filament\Resources\Pages\EditRecord;
 
 class EditItem extends EditRecord
 {
+    protected ?bool $hasDatabaseTransactions = true;
+
     protected static string $resource = ItemResource::class;
 
     protected function getHeaderActions(): array

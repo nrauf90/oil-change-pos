@@ -15,6 +15,7 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
@@ -100,6 +101,7 @@ class ItemsTable
                         Select::make('make_id')
                             ->label('Make')
                             ->live()
+                            ->afterStateUpdated(fn (Set $set): mixed => $set('model_id', null))
                             ->searchable()
                             ->preload()
                             ->options(fn (): array => VehicleMake::query()->orderBy('name')->pluck('name', 'id')->all()),

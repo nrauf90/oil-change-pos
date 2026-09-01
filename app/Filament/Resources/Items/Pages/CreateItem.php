@@ -8,6 +8,8 @@ use Filament\Resources\Pages\CreateRecord;
 
 class CreateItem extends CreateRecord
 {
+    protected ?bool $hasDatabaseTransactions = true;
+
     protected static string $resource = ItemResource::class;
 
     protected function beforeValidate(): void

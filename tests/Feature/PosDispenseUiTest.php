@@ -25,6 +25,15 @@ class PosDispenseUiTest extends TestCase
         $this->actingAs(User::factory()->admin()->create());
     }
 
+    public function test_the_sale_screen_preserves_visit_and_next_checkup_mileage_fields(): void
+    {
+        $this->get(route('pos.create'))
+            ->assertOk()
+            ->assertSee('Visit odometer reading (km)')
+            ->assertSee('Next checkup mileage (km)')
+            ->assertSee('name="next_checkup_mileage"', false);
+    }
+
     private function oil(): Item
     {
         return Item::factory()->create([

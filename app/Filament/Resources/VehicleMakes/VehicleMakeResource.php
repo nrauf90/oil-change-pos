@@ -2,7 +2,6 @@
 
 namespace App\Filament\Resources\VehicleMakes;
 
-use App\Enums\Permission;
 use App\Filament\Resources\VehicleMakes\Pages\CreateVehicleMake;
 use App\Filament\Resources\VehicleMakes\Pages\EditVehicleMake;
 use App\Filament\Resources\VehicleMakes\Pages\ListVehicleMakes;
@@ -65,25 +64,25 @@ class VehicleMakeResource extends Resource
     public static function canViewAny(): bool
     {
         return self::moduleEnabled()
-            && (auth()->user()?->can(Permission::ViewAnyItem->value) ?? false);
+            && (auth()->user()?->isAdmin() ?? false);
     }
 
     public static function canCreate(): bool
     {
         return self::moduleEnabled()
-            && (auth()->user()?->can(Permission::CreateItem->value) ?? false);
+            && (auth()->user()?->isAdmin() ?? false);
     }
 
     public static function canEdit(Model $record): bool
     {
         return self::moduleEnabled()
-            && (auth()->user()?->can(Permission::UpdateItem->value) ?? false);
+            && (auth()->user()?->isAdmin() ?? false);
     }
 
     public static function canDelete(Model $record): bool
     {
         return self::moduleEnabled()
-            && (auth()->user()?->can(Permission::DeleteItem->value) ?? false);
+            && (auth()->user()?->isAdmin() ?? false);
     }
 
     public static function makeDeleteAction(): DeleteAction

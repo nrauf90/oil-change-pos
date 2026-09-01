@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Filament\Resources\VehicleMakes\Pages\CreateVehicleMake;
 use App\Filament\Resources\VehicleMakes\Pages\EditVehicleMake;
 use App\Filament\Resources\VehicleMakes\Pages\ListVehicleMakes;
+use App\Filament\Resources\VehicleMakes\VehicleMakeResource;
 use App\Models\Item;
 use App\Models\User;
 use App\Models\VehicleMake;
@@ -20,6 +21,18 @@ use Tests\TestCase;
 class VehicleCatalogueManagementTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_managers_cannot_manage_the_shared_vehicle_catalogue(): void
+    {
+        $manager = User::factory()->manager()->create();
+        $make = VehicleMake::factory()->create();
+
+        $this->actingAs($manager);
+
+        $this->assertFalse(VehicleMakeResource::canViewAny());
+        $this->assertFalse(VehicleMakeResource::canCreate());
+        $this->assertFalse(VehicleMakeResource::canEdit($make));
+    }
 
     /**
      * Vehicle makes and models live in one admin flow so the owner can keep the

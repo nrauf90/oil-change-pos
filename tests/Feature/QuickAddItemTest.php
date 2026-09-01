@@ -592,6 +592,42 @@ class QuickAddItemTest extends TestCase
         $this->assertDatabaseMissing('items', ['name' => 'Vehicle Specific Oil Filter']);
     }
 
+    public function test_store_requires_a_make_when_an_existing_model_is_selected(): void
+    {
+        $model = VehicleModel::factory()->create();
+
+        $this->postJson(route('quick-items.store'), [
+            'name' => 'Incomplete Compatibility Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [[
+                'vehicle_model_id' => $model->id,
+            ]],
+        ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('compatibilities.0.vehicle_make_id');
+
+        $this->assertDatabaseMissing('items', ['name' => 'Incomplete Compatibility Filter']);
+    }
+
+    public function test_store_rejects_vehicle_names_longer_than_the_database_columns(): void
+    {
+        $this->postJson(route('quick-items.store'), [
+            'name' => 'Long Vehicle Name Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [[
+                'vehicle_make_name' => str_repeat('M', 101),
+                'vehicle_model_name' => str_repeat('N', 101),
+            ]],
+        ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'compatibilities.0.vehicle_make_name',
+                'compatibilities.0.vehicle_model_name',
+            ]);
+    }
+
     public function test_store_ignores_compatibility_fields_for_repairs(): void
     {
         $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
