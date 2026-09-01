@@ -16,4 +16,9 @@ final class TenantDatabaseTargetConflict extends DomainException implements Shou
     {
         return new self('The tenant database target is already assigned to another shop.');
     }
+
+    public static function identityChanged(): self
+    {
+        return new self('The tenant database target identity changed after registration.');
+    }
 }

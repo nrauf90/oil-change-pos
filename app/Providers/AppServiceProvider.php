@@ -18,6 +18,8 @@ use App\Observers\SupplierObserver;
 use App\Observers\SupplierPaymentObserver;
 use App\Observers\SupplyObserver;
 use App\Observers\UserObserver;
+use App\Tenancy\DatabaseHostResolver;
+use App\Tenancy\SystemDatabaseHostResolver;
 use Illuminate\Auth\EloquentUserProvider;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Eloquent\Builder;
@@ -31,7 +33,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->bind(DatabaseHostResolver::class, SystemDatabaseHostResolver::class);
     }
 
     /**

@@ -20,6 +20,9 @@ return new class extends Migration
             $table->string('database_name');
             $table->string('database_target_fingerprint', 64)
                 ->unique('shops_database_target_fingerprint_unique');
+            $table->string('database_target_locator_fingerprint', 64)
+                ->nullable()
+                ->unique('shops_database_target_locator_fingerprint_unique');
             $table->text('database_host')->nullable();
             $table->text('database_port')->nullable();
             $table->text('database_socket')->nullable();

@@ -4,8 +4,11 @@ namespace App\Models\Central;
 
 use App\Enums\ShopStatus;
 use App\Exceptions\TenantDatabaseTargetConflict;
+use App\Tenancy\DatabaseHostResolver;
+use App\Tenancy\DatabaseTargetConfiguration;
 use App\Tenancy\NormalizedDatabaseTarget;
 use Database\Factories\Central\ShopFactory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -24,6 +27,7 @@ class Shop extends CentralModel
         'database_driver',
         'database_name',
         'database_target_fingerprint',
+        'database_target_locator_fingerprint',
         'database_host',
         'database_port',
         'database_socket',
@@ -33,10 +37,13 @@ class Shop extends CentralModel
 
     private const DATABASE_TARGET_UNIQUE_INDEX = 'shops_database_target_fingerprint_unique';
 
+    private const DATABASE_TARGET_LOCATOR_UNIQUE_INDEX = 'shops_database_target_locator_fingerprint_unique';
+
     protected $fillable = ['name', 'timezone', 'currency'];
 
     protected $hidden = [
         'database_target_fingerprint',
+        'database_target_locator_fingerprint',
         'database_host',
         'database_port',
         'database_socket',
@@ -65,7 +72,7 @@ class Shop extends CentralModel
     protected static function booted(): void
     {
         static::saving(function (self $shop): void {
-            $shop->normalizeDatabaseTarget();
+            $target = $shop->normalizeDatabaseTarget();
 
             if ($shop->exists && $shop->isDirty('status') && ! $shop->allowsLifecycleTransition) {
                 throw new LogicException('Shop status must be changed through a lifecycle method.');
@@ -77,7 +84,7 @@ class Shop extends CentralModel
                 throw new LogicException('Shop database targets must be changed through updateProvisioningTarget().');
             }
 
-            $shop->assertDatabaseTargetIsAvailable();
+            $shop->assertDatabaseTargetIsAvailable($target);
         });
     }
 
@@ -88,7 +95,9 @@ class Shop extends CentralModel
         string $databaseName,
         ?string $databaseHost = null,
         ?int $databasePort = null,
+        #[\SensitiveParameter]
         ?string $databaseUsername = null,
+        #[\SensitiveParameter]
         ?string $databasePassword = null,
         ?string $databaseSocket = null,
         string $timezone = 'Asia/Karachi',
@@ -120,7 +129,9 @@ class Shop extends CentralModel
         string $databaseName,
         ?string $databaseHost = null,
         ?int $databasePort = null,
+        #[\SensitiveParameter]
         ?string $databaseUsername = null,
+        #[\SensitiveParameter]
         ?string $databasePassword = null,
         ?string $databaseSocket = null,
     ): void {
@@ -138,6 +149,12 @@ class Shop extends CentralModel
                 throw new LogicException('A provisioned shop database target is immutable.');
             }
 
+            if ($shop->status !== ShopStatus::Failed) {
+                throw new LogicException(
+                    'Shop database targets can only be changed after provisioning fails and before retry.',
+                );
+            }
+
             $shop->allowsProvisioningTargetChange = true;
 
             try {
@@ -145,6 +162,8 @@ class Shop extends CentralModel
                     'slug' => $slug,
                     'database_driver' => $databaseDriver,
                     'database_name' => $databaseName,
+                ]);
+                $shop->forceFillEncryptedAttributesIfChanged([
                     'database_host' => $databaseHost,
                     'database_port' => $databasePort,
                     'database_socket' => $databaseSocket,
@@ -208,6 +227,10 @@ class Shop extends CentralModel
     /** @return array<string, mixed> */
     public function databaseConfig(): array
     {
+        if ($this->exists) {
+            $this->revalidateDatabaseTarget();
+        }
+
         return array_filter([
             'driver' => $this->database_driver,
             'database' => $this->database_name,
@@ -217,6 +240,87 @@ class Shop extends CentralModel
             'username' => $this->database_username,
             'password' => $this->database_password,
         ], static fn (mixed $value): bool => $value !== null);
+    }
+
+    public function revalidateDatabaseTarget(): void
+    {
+        $attributes = $this->getConnection()->transaction(function (): array {
+            $shop = static::withTrashed()
+                ->whereKey($this->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+            $registeredFingerprint = (string) $shop->database_target_fingerprint;
+            $registeredLocatorFingerprint = $shop->database_target_locator_fingerprint;
+
+            $target = $shop->normalizeDatabaseTarget();
+
+            if (! hash_equals($registeredFingerprint, $target->fingerprint)
+                || ! self::fingerprintsMatch($registeredLocatorFingerprint, $target->locatorFingerprint)) {
+                throw TenantDatabaseTargetConflict::identityChanged();
+            }
+
+            $shop->assertDatabaseTargetIsAvailable($target);
+
+            return $shop->getRawOriginal();
+        });
+
+        $this->setRawAttributes($attributes, true);
+    }
+
+    public function materializeSqliteDatabaseIdentityAfterCreation(): void
+    {
+        $attributes = $this->getConnection()->transaction(function (): array {
+            $shops = static::withTrashed()
+                ->orderBy($this->getKeyName())
+                ->lockForUpdate()
+                ->get();
+            $shop = $shops->firstWhere($this->getKeyName(), $this->getKey());
+
+            if (! $shop instanceof self) {
+                $shop = static::withTrashed()->findOrFail($this->getKey());
+            }
+
+            if ($shop->status !== ShopStatus::Provisioning) {
+                throw new LogicException(
+                    'SQLite database identity can only be materialized while a shop is provisioning.',
+                );
+            }
+
+            $registeredDatabase = (string) $shop->database_name;
+            $registeredFingerprint = (string) $shop->database_target_fingerprint;
+            $registeredLocatorFingerprint = $shop->database_target_locator_fingerprint;
+            $target = $shop->normalizeDatabaseTarget();
+
+            if ($target->driver !== 'sqlite'
+                || $target->database !== $registeredDatabase
+                || ! $target->hasStableFilesystemIdentity
+                || $target->pendingSqliteFingerprint === null
+                || ! self::fingerprintsMatch(
+                    $registeredLocatorFingerprint,
+                    $target->pendingSqliteFingerprint,
+                )
+                || ! hash_equals($registeredFingerprint, $target->pendingSqliteFingerprint)) {
+                throw new LogicException(
+                    'The shop does not have a newly created SQLite database identity to materialize.',
+                );
+            }
+
+            $shop->assertDatabaseTargetIsAvailable($target);
+
+            try {
+                $shop->saveQuietly();
+            } catch (UniqueConstraintViolationException $exception) {
+                if ($shop->violatesDatabaseTargetIdentity($exception)) {
+                    throw TenantDatabaseTargetConflict::alreadyAssigned();
+                }
+
+                throw $exception;
+            }
+
+            return $shop->getAttributes();
+        });
+
+        $this->setRawAttributes($attributes, true);
     }
 
     /** @return HasOne<ShopOwner, $this> */
@@ -288,7 +392,7 @@ class Shop extends CentralModel
         $this->setRawAttributes($attributes, true);
     }
 
-    private function normalizeDatabaseTarget(): void
+    private function normalizeDatabaseTarget(): NormalizedDatabaseTarget
     {
         $tenantConfiguration = config('database.connections.tenant');
         $centralConfiguration = config('database.connections.central');
@@ -302,30 +406,72 @@ class Shop extends CentralModel
         }
 
         $target = NormalizedDatabaseTarget::forTenant(
-            driver: (string) $this->database_driver,
-            database: (string) $this->database_name,
-            host: $this->database_host,
-            port: $this->database_port === null ? null : (int) $this->database_port,
-            socket: $this->database_socket,
-            tenantConfiguration: $tenantConfiguration,
-            centralConfiguration: $centralConfiguration,
+            target: new DatabaseTargetConfiguration(
+                driver: (string) $this->database_driver,
+                database: (string) $this->database_name,
+                host: $this->database_host,
+                port: $this->database_port === null ? null : (int) $this->database_port,
+                socket: $this->database_socket,
+            ),
+            defaults: DatabaseTargetConfiguration::fromLaravelConfiguration($tenantConfiguration),
+            central: DatabaseTargetConfiguration::fromLaravelConfiguration($centralConfiguration),
             sqliteRoot: $sqliteRoot,
+            hostResolver: resolve(DatabaseHostResolver::class),
         );
 
-        $this->forceFill([
+        $attributes = [
             'database_driver' => $target->driver,
             'database_name' => $target->database,
             'database_target_fingerprint' => $target->fingerprint,
+            'database_target_locator_fingerprint' => $target->locatorFingerprint,
+        ];
+
+        foreach ([
             'database_host' => $target->host,
             'database_port' => $target->port,
             'database_socket' => $target->socket,
-        ]);
+        ] as $attribute => $value) {
+            if (! $this->encryptedAttributeMatches($attribute, $value)) {
+                $attributes[$attribute] = $value;
+            }
+        }
+
+        $this->forceFill($attributes);
+
+        return $target;
     }
 
-    private function assertDatabaseTargetIsAvailable(): void
+    private function encryptedAttributeMatches(
+        string $attribute,
+        #[\SensitiveParameter]
+        int|string|null $value,
+    ): bool {
+        $currentValue = $this->getAttribute($attribute);
+
+        if ($currentValue === null || $value === null) {
+            return $currentValue === $value;
+        }
+
+        return (string) $currentValue === (string) $value;
+    }
+
+    /** @param array<string, int|string|null> $attributes */
+    private function forceFillEncryptedAttributesIfChanged(
+        #[\SensitiveParameter]
+        array $attributes,
+    ): void {
+        foreach ($attributes as $attribute => $value) {
+            if (! $this->encryptedAttributeMatches($attribute, $value)) {
+                $this->forceFill([$attribute => $value]);
+            }
+        }
+    }
+
+    private function assertDatabaseTargetIsAvailable(NormalizedDatabaseTarget $target): void
     {
         if (self::databaseTargetIsAssignedToAnotherShop(
-            (string) $this->database_target_fingerprint,
+            $target->fingerprint,
+            $target->locatorFingerprint,
             $this->exists ? (string) $this->getKey() : null,
         )) {
             throw TenantDatabaseTargetConflict::alreadyAssigned();
@@ -337,14 +483,7 @@ class Shop extends CentralModel
         try {
             $this->save();
         } catch (UniqueConstraintViolationException $exception) {
-            $violatedTargetIndex = in_array('database_target_fingerprint', $exception->columns, true)
-                || $exception->index === self::DATABASE_TARGET_UNIQUE_INDEX;
-            $targetIsNowAssigned = self::databaseTargetIsAssignedToAnotherShop(
-                (string) $this->database_target_fingerprint,
-                $this->exists ? (string) $this->getKey() : null,
-            );
-
-            if ($violatedTargetIndex || $targetIsNowAssigned) {
+            if ($this->violatesDatabaseTargetIdentity($exception)) {
                 throw TenantDatabaseTargetConflict::alreadyAssigned();
             }
 
@@ -352,16 +491,47 @@ class Shop extends CentralModel
         }
     }
 
+    private function violatesDatabaseTargetIdentity(UniqueConstraintViolationException $exception): bool
+    {
+        return in_array('database_target_fingerprint', $exception->columns, true)
+            || $exception->index === self::DATABASE_TARGET_UNIQUE_INDEX
+            || in_array('database_target_locator_fingerprint', $exception->columns, true)
+            || $exception->index === self::DATABASE_TARGET_LOCATOR_UNIQUE_INDEX
+            || self::databaseTargetIsAssignedToAnotherShop(
+                (string) $this->database_target_fingerprint,
+                $this->database_target_locator_fingerprint,
+                $this->exists ? (string) $this->getKey() : null,
+            );
+    }
+
     private static function databaseTargetIsAssignedToAnotherShop(
         string $fingerprint,
+        ?string $locatorFingerprint,
         ?string $shopId,
     ): bool {
-        $query = static::withTrashed()->where('database_target_fingerprint', $fingerprint);
+        $query = static::withTrashed()->where(
+            static function (Builder $query) use ($fingerprint, $locatorFingerprint): void {
+                $query->where('database_target_fingerprint', $fingerprint);
+
+                if ($locatorFingerprint !== null) {
+                    $query->orWhere('database_target_locator_fingerprint', $locatorFingerprint);
+                }
+            },
+        );
 
         if ($shopId !== null) {
             $query->whereKeyNot($shopId);
         }
 
         return $query->exists();
+    }
+
+    private static function fingerprintsMatch(?string $first, ?string $second): bool
+    {
+        if ($first === null || $second === null) {
+            return $first === $second;
+        }
+
+        return hash_equals($first, $second);
     }
 }

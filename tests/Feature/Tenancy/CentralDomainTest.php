@@ -13,8 +13,12 @@ use App\Models\Central\ShopFeature;
 use App\Models\Central\ShopHealthSnapshot;
 use App\Models\Central\ShopLifecycleActivity;
 use App\Models\Central\ShopOwner;
+use App\Tenancy\DatabaseHostResolver;
+use App\Tenancy\DatabaseTargetConfiguration;
+use App\Tenancy\NormalizedDatabaseTarget;
 use Illuminate\Database\Eloquent\MassAssignmentException;
 use Illuminate\Database\QueryException;
+use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -25,6 +29,8 @@ use Illuminate\Support\Str;
 use InvalidArgumentException;
 use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
+use ReflectionMethod;
+use ReflectionParameter;
 use RuntimeException;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
@@ -168,6 +174,121 @@ class CentralDomainTest extends TestCase
         }
     }
 
+    public function test_plaintext_connection_credentials_are_sensitive_parameters(): void
+    {
+        foreach (['registerForProvisioning', 'updateProvisioningTarget'] as $methodName) {
+            $parameters = collect((new ReflectionMethod(Shop::class, $methodName))->getParameters())
+                ->keyBy(static fn (ReflectionParameter $parameter): string => $parameter->getName());
+
+            foreach (['databaseUsername', 'databasePassword'] as $parameterName) {
+                $this->assertCount(
+                    1,
+                    $parameters->get($parameterName)?->getAttributes(\SensitiveParameter::class) ?? [],
+                );
+            }
+        }
+
+        $encryptedAttributes = (new ReflectionMethod(
+            Shop::class,
+            'forceFillEncryptedAttributesIfChanged',
+        ))->getParameters()[0];
+        $encryptedValue = (new ReflectionMethod(
+            Shop::class,
+            'encryptedAttributeMatches',
+        ))->getParameters()[1];
+
+        $this->assertCount(1, $encryptedAttributes->getAttributes(\SensitiveParameter::class));
+        $this->assertCount(1, $encryptedValue->getAttributes(\SensitiveParameter::class));
+    }
+
+    public function test_database_target_normalizer_accepts_only_identity_configuration(): void
+    {
+        $parameters = (new ReflectionMethod(NormalizedDatabaseTarget::class, 'forTenant'))->getParameters();
+
+        $this->assertSame(
+            ['target', 'defaults', 'central', 'sqliteRoot', 'hostResolver'],
+            array_map(static fn (ReflectionParameter $parameter): string => $parameter->getName(), $parameters),
+        );
+        $this->assertSame('App\\Tenancy\\DatabaseTargetConfiguration', (string) $parameters[0]->getType());
+        $this->assertSame('App\\Tenancy\\DatabaseTargetConfiguration', (string) $parameters[1]->getType());
+        $this->assertSame('?App\\Tenancy\\DatabaseTargetConfiguration', (string) $parameters[2]->getType());
+    }
+
+    public function test_system_host_resolution_cache_is_scoped_to_one_identity_evaluation(): void
+    {
+        $this->assertNotSame(
+            resolve(DatabaseHostResolver::class),
+            resolve(DatabaseHostResolver::class),
+        );
+    }
+
+    public function test_laravel_connection_configuration_is_reduced_to_sensitive_identity_input(): void
+    {
+        $identity = DatabaseTargetConfiguration::fromLaravelConfiguration([
+            'driver' => 'mysql',
+            'url' => 'mysql://identity-user:identity-password@db.example.test:3307/Tenant_Identity',
+            'username' => 'fallback-user',
+            'password' => 'fallback-password',
+        ]);
+        $configurationParameter = (new ReflectionMethod(
+            DatabaseTargetConfiguration::class,
+            'fromLaravelConfiguration',
+        ))->getParameters()[0];
+
+        $this->assertSame([
+            'driver' => 'mysql',
+            'database' => 'Tenant_Identity',
+            'host' => 'db.example.test',
+            'port' => 3307,
+            'socket' => null,
+        ], get_object_vars($identity));
+        $this->assertStringNotContainsString(
+            'identity-password',
+            json_encode($identity, JSON_THROW_ON_ERROR),
+        );
+        $this->assertCount(1, $configurationParameter->getAttributes(\SensitiveParameter::class));
+    }
+
+    public function test_malformed_database_urls_do_not_expose_credentials_in_exception_traces(): void
+    {
+        $previousIgnoreArguments = ini_get('zend.exception_ignore_args');
+        $caughtException = null;
+        ini_set('zend.exception_ignore_args', '0');
+
+        try {
+            DatabaseTargetConfiguration::fromLaravelConfiguration([
+                'url' => 'mysql://trace-user:trace-only-password@',
+            ]);
+        } catch (Throwable $exception) {
+            $caughtException = $exception;
+        } finally {
+            if (is_string($previousIgnoreArguments)) {
+                ini_set('zend.exception_ignore_args', $previousIgnoreArguments);
+            }
+        }
+
+        $this->assertInstanceOf(InvalidArgumentException::class, $caughtException);
+        $traceContainsSecret = function (mixed $value) use (&$traceContainsSecret): bool {
+            if (is_string($value)) {
+                return str_contains($value, 'trace-only-password');
+            }
+
+            if (! is_array($value)) {
+                return false;
+            }
+
+            foreach ($value as $nestedValue) {
+                if ($traceContainsSecret($nestedValue)) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        $this->assertFalse($traceContainsSecret($caughtException->getTrace()));
+    }
+
     public function test_shop_database_config_omits_missing_connection_overrides(): void
     {
         $shop = Shop::factory()->create();
@@ -217,6 +338,10 @@ class CentralDomainTest extends TestCase
 
     public function test_shop_database_config_returns_decrypted_connection_overrides(): void
     {
+        $this->resolveDatabaseHosts([
+            'db.internal' => ['192.0.2.12'],
+        ]);
+
         $shop = Shop::factory()->create([
             'database_driver' => 'mysql',
             'database_name' => 'shop_alpha',
@@ -241,6 +366,105 @@ class CentralDomainTest extends TestCase
             'username' => 'shop-user',
             'password' => 'secret-password',
         ], $shop->databaseConfig());
+    }
+
+    public function test_ordinary_shop_saves_do_not_reencrypt_unchanged_connection_overrides(): void
+    {
+        $shop = $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'tenant_ciphertext',
+            databaseHost: '192.0.2.70',
+            databasePort: 3307,
+            databaseUsername: 'cipher-user',
+            databasePassword: 'cipher-password',
+        );
+        $encrypter = app('encrypter');
+        $cipher = config('app.cipher');
+
+        if (! $encrypter instanceof Encrypter || ! is_string($cipher)) {
+            throw new RuntimeException('The application encryption configuration is unavailable.');
+        }
+
+        $previousKey = Encrypter::generateKey($cipher);
+        $previousEncrypter = new Encrypter($previousKey, $cipher);
+        DB::connection('central')->table('shops')->where('id', $shop->getKey())->update([
+            'database_host' => $previousEncrypter->encrypt('192.0.2.70', false),
+            'database_port' => $previousEncrypter->encrypt('3307', false),
+            'database_username' => $previousEncrypter->encrypt('cipher-user', false),
+            'database_password' => $previousEncrypter->encrypt('cipher-password', false),
+        ]);
+        $storedBeforeSave = (array) DB::connection('central')
+            ->table('shops')
+            ->where('id', $shop->getKey())
+            ->first();
+        $previousKeys = $encrypter->getPreviousKeys();
+        $encrypter->previousKeys([$previousKey, ...$previousKeys]);
+
+        try {
+            $shop = $shop->fresh();
+            $shop->name = 'Renamed without credential rotation';
+            $shop->save();
+        } finally {
+            $encrypter->previousKeys($previousKeys);
+        }
+
+        $storedAfterSave = (array) DB::connection('central')
+            ->table('shops')
+            ->where('id', $shop->getKey())
+            ->first();
+
+        foreach (['database_host', 'database_port', 'database_socket', 'database_username', 'database_password'] as $field) {
+            $this->assertSame($storedBeforeSave[$field], $storedAfterSave[$field]);
+        }
+        $this->assertSame('Renamed without credential rotation', $storedAfterSave['name']);
+    }
+
+    public function test_reapplying_the_same_provisioning_target_preserves_encrypted_values(): void
+    {
+        $shop = $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'tenant_same_target',
+            databaseHost: '192.0.2.71',
+            databasePort: 3307,
+            databaseUsername: 'same-user',
+            databasePassword: 'same-password',
+        );
+        $shop->markProvisioningFailed('Retry with the same target.');
+        $storedBeforeUpdate = (array) DB::connection('central')
+            ->table('shops')
+            ->where('id', $shop->getKey())
+            ->first();
+        $encrypter = app('encrypter');
+
+        if (! $encrypter instanceof Encrypter) {
+            throw new RuntimeException('The application encrypter is unavailable.');
+        }
+
+        $previousKeys = $encrypter->getPreviousKeys();
+        $encrypter->previousKeys([str_repeat('p', 32)]);
+
+        try {
+            $shop->updateProvisioningTarget(
+                slug: 'alpha-workshop',
+                databaseDriver: 'mysql',
+                databaseName: 'tenant_same_target',
+                databaseHost: '192.0.2.71',
+                databasePort: 3307,
+                databaseUsername: 'same-user',
+                databasePassword: 'same-password',
+            );
+        } finally {
+            $encrypter->previousKeys($previousKeys);
+        }
+
+        $storedAfterUpdate = (array) DB::connection('central')
+            ->table('shops')
+            ->where('id', $shop->getKey())
+            ->first();
+
+        foreach (['database_host', 'database_port', 'database_socket', 'database_username', 'database_password'] as $field) {
+            $this->assertSame($storedBeforeUpdate[$field], $storedAfterUpdate[$field]);
+        }
     }
 
     public function test_platform_guard_uses_the_platform_user_provider(): void
@@ -337,6 +561,7 @@ class CentralDomainTest extends TestCase
         $databasePath = $this->newTenantDatabasePath('tenant-assignment-');
         $shop = $this->registerShop(databaseName: $databasePath);
         $databaseTargetFingerprint = $shop->database_target_fingerprint;
+        $databaseTargetLocatorFingerprint = $shop->database_target_locator_fingerprint;
 
         $shop->fill([
             'name' => 'Allowed Shop Name',
@@ -347,6 +572,7 @@ class CentralDomainTest extends TestCase
             'database_host' => 'attacker.internal',
             'database_socket' => $this->newTenantDatabasePath('attacker-socket-', create: false),
             'database_target_fingerprint' => str_repeat('0', 64),
+            'database_target_locator_fingerprint' => str_repeat('1', 64),
             'provisioned_at' => now(),
             'provisioning_failure_message' => 'Forged failure',
         ]);
@@ -359,6 +585,7 @@ class CentralDomainTest extends TestCase
         $this->assertNull($shop->database_host);
         $this->assertNull($shop->database_socket);
         $this->assertSame($databaseTargetFingerprint, $shop->database_target_fingerprint);
+        $this->assertSame($databaseTargetLocatorFingerprint, $shop->database_target_locator_fingerprint);
         $this->assertNull($shop->provisioned_at);
         $this->assertNull($shop->provisioning_failure_message);
     }
@@ -384,14 +611,18 @@ class CentralDomainTest extends TestCase
     {
         $shop = $this->registerShop(
             databaseDriver: 'mysql',
-            databaseName: ' tenant_alpha_01 ',
+            databaseName: ' Tenant_Alpha_01 ',
         );
 
-        $this->assertSame('tenant_alpha_01', $shop->database_name);
+        $this->assertSame('Tenant_Alpha_01', $shop->database_name);
     }
 
     public function test_shop_registration_rejects_duplicate_normalized_mysql_database_targets(): void
     {
+        $this->resolveDatabaseHosts([
+            'db.example.com' => ['192.0.2.10'],
+        ]);
+
         $firstShop = $this->registerShop(
             databaseDriver: 'mysql',
             databaseName: ' Tenant_Alpha ',
@@ -404,7 +635,7 @@ class CentralDomainTest extends TestCase
         $this->assertTenantTargetConflict(
             fn (): Shop => $this->registerShop(
                 databaseDriver: 'mysql',
-                databaseName: 'tenant_alpha',
+                databaseName: 'Tenant_Alpha',
                 slug: 'beta-workshop',
                 databaseHost: 'db.example.com',
                 databasePort: 3306,
@@ -415,7 +646,219 @@ class CentralDomainTest extends TestCase
         );
 
         $this->assertSame(1, Shop::query()->count());
-        $this->assertSame('tenant_alpha', $firstShop->database_name);
+        $this->assertSame('Tenant_Alpha', $firstShop->database_name);
+    }
+
+    public function test_mysql_database_identity_preserves_schema_case(): void
+    {
+        $firstShop = $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'Tenant_Case',
+            databaseHost: '192.0.2.11',
+            slug: 'alpha-workshop',
+        );
+        $secondShop = $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'tenant_case',
+            databaseHost: '192.0.2.11',
+            slug: 'beta-workshop',
+        );
+
+        $this->assertSame('Tenant_Case', $firstShop->database_name);
+        $this->assertSame('tenant_case', $secondShop->database_name);
+        $this->assertSame(2, Shop::query()->count());
+    }
+
+    public function test_shop_registration_rejects_mysql_loopback_host_aliases(): void
+    {
+        $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'tenant_loopback',
+            databaseHost: 'localhost',
+        );
+
+        $this->assertTenantTargetConflict(
+            fn (): Shop => $this->registerShop(
+                databaseDriver: 'mysql',
+                databaseName: 'tenant_loopback',
+                slug: 'beta-workshop',
+                databaseHost: '[0:0:0:0:0:0:0:1]',
+            ),
+            'The tenant database target is already assigned to another shop.',
+        );
+
+        $this->assertSame(1, Shop::query()->count());
+    }
+
+    public function test_shop_registration_rejects_ipv4_mapped_ipv6_host_aliases(): void
+    {
+        $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'tenant_mapped_ipv6',
+            databaseHost: '192.0.2.90',
+        );
+
+        $this->assertTenantTargetConflict(
+            fn (): Shop => $this->registerShop(
+                databaseDriver: 'mysql',
+                databaseName: 'tenant_mapped_ipv6',
+                slug: 'beta-workshop',
+                databaseHost: '[::ffff:192.0.2.90]',
+            ),
+            'The tenant database target is already assigned to another shop.',
+        );
+
+        $this->assertSame(1, Shop::query()->count());
+    }
+
+    public function test_shop_registration_rejects_equivalent_ipv6_text_forms(): void
+    {
+        $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'tenant_ipv6_text',
+            databaseHost: '2001:db8::44',
+        );
+
+        $this->assertTenantTargetConflict(
+            fn (): Shop => $this->registerShop(
+                databaseDriver: 'mysql',
+                databaseName: 'tenant_ipv6_text',
+                slug: 'beta-workshop',
+                databaseHost: '[2001:0db8:0:0:0:0:0:44]',
+            ),
+            'The tenant database target is already assigned to another shop.',
+        );
+
+        $this->assertSame(1, Shop::query()->count());
+    }
+
+    public function test_shop_registration_rejects_mysql_dns_aliases(): void
+    {
+        $this->resolveDatabaseHosts([
+            'db-primary.example.test' => ['192.0.2.40', '2001:db8::40'],
+            'db-alias.example.test' => ['2001:0db8:0:0:0:0:0:40', '192.0.2.40'],
+        ]);
+
+        $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'tenant_dns_alias',
+            databaseHost: 'db-primary.example.test',
+        );
+
+        $this->assertTenantTargetConflict(
+            fn (): Shop => $this->registerShop(
+                databaseDriver: 'mysql',
+                databaseName: 'tenant_dns_alias',
+                slug: 'beta-workshop',
+                databaseHost: 'db-alias.example.test',
+            ),
+            'The tenant database target is already assigned to another shop.',
+        );
+
+        $this->assertSame(1, Shop::query()->count());
+    }
+
+    public function test_shop_registration_rejects_a_dns_alias_of_a_literal_ip_target(): void
+    {
+        $this->resolveDatabaseHosts([
+            'db-alias.example.test' => ['192.0.2.42'],
+        ]);
+
+        $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'tenant_ip_alias',
+            databaseHost: '192.0.2.42',
+        );
+
+        $this->assertTenantTargetConflict(
+            fn (): Shop => $this->registerShop(
+                databaseDriver: 'mysql',
+                databaseName: 'tenant_ip_alias',
+                slug: 'beta-workshop',
+                databaseHost: 'db-alias.example.test',
+            ),
+            'The tenant database target is already assigned to another shop.',
+        );
+
+        $this->assertSame(1, Shop::query()->count());
+    }
+
+    public function test_unresolvable_mysql_hosts_fail_closed(): void
+    {
+        $this->resolveDatabaseHosts([]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('MySQL tenant database hosts must resolve to a stable IP address.');
+
+        $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'tenant_unresolvable',
+            databaseHost: 'unresolvable.example.test',
+        );
+    }
+
+    public function test_non_ip_mysql_hosts_cannot_use_ip_literal_brackets(): void
+    {
+        $this->resolveDatabaseHosts([
+            'db.example.test' => ['192.0.2.43'],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage(
+            'MySQL tenant database hosts must be canonical host names or IP addresses.',
+        );
+
+        $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'tenant_bracketed_hostname',
+            databaseHost: '[db.example.test]',
+        );
+    }
+
+    public function test_central_mysql_dns_aliases_use_the_same_physical_identity(): void
+    {
+        $this->resolveDatabaseHosts([
+            'central-primary.example.test' => ['192.0.2.41', '2001:db8::41'],
+            'central-alias.example.test' => ['2001:0db8:0:0:0:0:0:41', '192.0.2.41'],
+        ]);
+        config()->set('database.connections.central', [
+            'driver' => 'mysql',
+            'host' => 'central-primary.example.test',
+            'port' => 3306,
+            'database' => 'Central_Dns',
+            'unix_socket' => '',
+        ]);
+
+        $this->assertTenantTargetConflict(
+            fn (): Shop => $this->registerShop(
+                databaseDriver: 'mysql',
+                databaseName: 'Central_Dns',
+                databaseHost: 'central-alias.example.test',
+            ),
+            'The central platform database cannot be assigned to a shop.',
+        );
+    }
+
+    public function test_mysql_template_defaults_affect_identity_without_becoming_shop_overrides(): void
+    {
+        config()->set('database.connections.tenant.host', '192.0.2.60');
+        config()->set('database.connections.tenant.port', 3310);
+        config()->set('database.connections.tenant.unix_socket', '');
+
+        $shop = $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'tenant_defaults',
+        );
+        $storedShop = DB::connection('central')->table('shops')->where('id', $shop->getKey())->first();
+
+        $this->assertNotNull($storedShop);
+        $this->assertNull($storedShop->database_host);
+        $this->assertNull($storedShop->database_port);
+        $this->assertNull($storedShop->database_socket);
+        $this->assertSame([
+            'driver' => 'mysql',
+            'database' => 'tenant_defaults',
+        ], $shop->databaseConfig());
     }
 
     public function test_mysql_socket_replaces_irrelevant_host_and_port_in_the_normalized_target(): void
@@ -450,8 +893,35 @@ class CentralDomainTest extends TestCase
         $this->assertSame(1, Shop::query()->count());
     }
 
+    public function test_central_mysql_socket_aliases_use_the_same_canonical_realpath(): void
+    {
+        $socketPath = $this->newTenantDatabasePath('central-socket-');
+        $socketAlias = dirname($socketPath)
+            .DIRECTORY_SEPARATOR.'.'.DIRECTORY_SEPARATOR.basename($socketPath);
+        config()->set('database.connections.central', [
+            'driver' => 'mysql',
+            'host' => 'ignored.example.test',
+            'port' => 3306,
+            'database' => 'Central_Socket',
+            'unix_socket' => $socketPath,
+        ]);
+
+        $this->assertTenantTargetConflict(
+            fn (): Shop => $this->registerShop(
+                databaseDriver: 'mysql',
+                databaseName: 'Central_Socket',
+                databaseHost: 'also-ignored.example.test',
+                databaseSocket: $socketAlias,
+            ),
+            'The central platform database cannot be assigned to a shop.',
+        );
+    }
+
     public function test_shop_registration_rejects_the_central_mysql_database_target(): void
     {
+        $this->resolveDatabaseHosts([
+            'central-db.example.com' => ['192.0.2.20'],
+        ]);
         config()->set('database.connections.central', [
             'driver' => 'mysql',
             'host' => 'central-db.example.com',
@@ -477,6 +947,9 @@ class CentralDomainTest extends TestCase
 
     public function test_shop_registration_treats_the_central_mariadb_driver_as_a_mysql_target(): void
     {
+        $this->resolveDatabaseHosts([
+            'central-db.example.com' => ['192.0.2.20'],
+        ]);
         config()->set('database.connections.central', [
             'driver' => 'mariadb',
             'host' => 'central-db.example.com',
@@ -552,6 +1025,41 @@ class CentralDomainTest extends TestCase
         $this->assertSame(0, Shop::query()->count());
     }
 
+    public function test_relative_central_sqlite_paths_resolve_from_the_application_base_path(): void
+    {
+        $centralDatabasePath = base_path(
+            'storage'.DIRECTORY_SEPARATOR.'framework'.DIRECTORY_SEPARATOR.'testing'.DIRECTORY_SEPARATOR
+            .'central-relative-'.Str::uuid().'.sqlite',
+        );
+        File::ensureDirectoryExists(dirname($centralDatabasePath));
+
+        if (File::put($centralDatabasePath, '') === false) {
+            throw new RuntimeException('Unable to create a relative central SQLite database.');
+        }
+
+        $this->temporaryDatabasePaths[] = $centralDatabasePath;
+        $relativeCentralPath = Str::after($centralDatabasePath, base_path().DIRECTORY_SEPARATOR);
+        config()->set('database.connections.central', [
+            'driver' => 'sqlite',
+            'database' => $relativeCentralPath,
+        ]);
+
+        $distinctShop = $this->registerShop(
+            databaseName: $this->newTenantDatabasePath('distinct-relative-central-'),
+            slug: 'alpha-workshop',
+        );
+
+        $this->assertModelExists($distinctShop);
+        $this->assertTenantTargetConflict(
+            fn (): Shop => $this->registerShop(
+                databaseName: $centralDatabasePath,
+                slug: 'beta-workshop',
+            ),
+            'The central platform database cannot be assigned to a shop.',
+        );
+        $this->assertSame(1, Shop::query()->count());
+    }
+
     public function test_shop_registration_rejects_sqlite_targets_outside_the_configured_root(): void
     {
         $outsideDatabasePath = $this->newTemporaryDatabasePath('outside-tenant-root-');
@@ -592,9 +1100,261 @@ class CentralDomainTest extends TestCase
         $this->assertSame(1, Shop::query()->count());
     }
 
+    public function test_shop_registration_rejects_a_sqlite_hard_link_alias(): void
+    {
+        $databasePath = $this->newTenantDatabasePath('hard-link-target-');
+        $aliasPath = $this->tenantDatabaseRoot.DIRECTORY_SEPARATOR.'hard-link-alias.sqlite';
+
+        if (! function_exists('link') || ! @link($databasePath, $aliasPath)) {
+            $this->markTestSkipped('File hard links are not available on this filesystem.');
+        }
+
+        $this->temporaryDatabasePaths[] = $aliasPath;
+        $databaseIdentity = $this->filesystemIdentity($databasePath);
+        $aliasIdentity = $this->filesystemIdentity($aliasPath);
+
+        if ($databaseIdentity === null || $databaseIdentity !== $aliasIdentity) {
+            $this->markTestSkipped('Stable filesystem identity is not available on this platform.');
+        }
+
+        $this->registerShop(databaseName: $databasePath, slug: 'alpha-workshop');
+
+        $this->assertTenantTargetConflict(
+            fn (): Shop => $this->registerShop(
+                databaseName: $aliasPath,
+                slug: 'beta-workshop',
+            ),
+            'The tenant database target is already assigned to another shop.',
+        );
+
+        $this->assertSame(1, Shop::query()->count());
+    }
+
+    public function test_shop_registration_rejects_a_hard_link_to_the_central_sqlite_file(): void
+    {
+        $centralDatabasePath = DB::connection('central')->getDatabaseName();
+        $aliasPath = $this->tenantDatabaseRoot.DIRECTORY_SEPARATOR.'central-hard-link.sqlite';
+
+        if (! function_exists('link') || ! @link($centralDatabasePath, $aliasPath)) {
+            $this->markTestSkipped('File hard links are not available on this filesystem.');
+        }
+
+        $this->temporaryDatabasePaths[] = $aliasPath;
+
+        if ($this->filesystemIdentity($centralDatabasePath) !== $this->filesystemIdentity($aliasPath)) {
+            $this->markTestSkipped('Stable filesystem identity is not available on this platform.');
+        }
+
+        $this->assertTenantTargetConflict(
+            fn (): Shop => $this->registerShop(databaseName: $aliasPath),
+            'The central platform database cannot be assigned to a shop.',
+        );
+
+        $this->assertSame(0, Shop::query()->count());
+    }
+
+    public function test_provisioning_transition_materializes_a_newly_created_sqlite_identity(): void
+    {
+        $databasePath = $this->newTenantDatabasePath('pending-revalidation-', create: false);
+        $shop = $this->registerShop(databaseName: $databasePath);
+        $pathFingerprint = $shop->database_target_fingerprint;
+
+        if (File::put($databasePath, '') === false) {
+            throw new RuntimeException('Unable to create a temporary tenant SQLite database.');
+        }
+
+        $aliasPath = $this->tenantDatabaseRoot.DIRECTORY_SEPARATOR.'revalidated-hard-link.sqlite';
+
+        if (! function_exists('link') || ! @link($databasePath, $aliasPath)) {
+            $this->markTestSkipped('File hard links are not available on this filesystem.');
+        }
+
+        $this->temporaryDatabasePaths[] = $aliasPath;
+
+        if ($this->filesystemIdentity($databasePath) !== $this->filesystemIdentity($aliasPath)) {
+            $this->markTestSkipped('Stable filesystem identity is not available on this platform.');
+        }
+
+        $shop->materializeSqliteDatabaseIdentityAfterCreation();
+
+        $this->assertNotSame($pathFingerprint, $shop->database_target_fingerprint);
+        $this->assertSame([
+            'driver' => 'sqlite',
+            'database' => $databasePath,
+        ], $shop->databaseConfig());
+
+        $this->assertTenantTargetConflict(
+            fn (): Shop => $this->registerShop(
+                databaseName: $aliasPath,
+                slug: 'beta-workshop',
+            ),
+            'The tenant database target is already assigned to another shop.',
+        );
+
+        $this->assertSame(1, Shop::query()->count());
+    }
+
+    public function test_database_config_rejects_a_replaced_sqlite_file_without_trusting_it(): void
+    {
+        $databasePath = $this->newTenantDatabasePath('replace-target-');
+        $shop = $this->registerShop(databaseName: $databasePath);
+        $shop->markActive();
+        $registeredFingerprint = $shop->database_target_fingerprint;
+
+        File::delete($databasePath);
+
+        if (File::put($databasePath, 'replacement') === false) {
+            throw new RuntimeException('Unable to replace a temporary tenant SQLite database.');
+        }
+
+        $this->assertTenantTargetConflict(
+            fn (): array => $shop->databaseConfig(),
+            'The tenant database target identity changed after registration.',
+        );
+
+        $this->assertSame(
+            $registeredFingerprint,
+            DB::connection('central')->table('shops')->where('id', $shop->getKey())
+                ->value('database_target_fingerprint'),
+        );
+    }
+
+    public function test_database_config_requires_the_registered_sqlite_path_and_file_identity(): void
+    {
+        $databasePath = $this->newTenantDatabasePath('strict-path-target-');
+        $aliasPath = $this->tenantDatabaseRoot.DIRECTORY_SEPARATOR.'strict-path-hard-link.sqlite';
+
+        if (! function_exists('link') || ! @link($databasePath, $aliasPath)) {
+            $this->markTestSkipped('File hard links are not available on this filesystem.');
+        }
+
+        $this->temporaryDatabasePaths[] = $aliasPath;
+
+        if ($this->filesystemIdentity($databasePath) !== $this->filesystemIdentity($aliasPath)) {
+            $this->markTestSkipped('Stable filesystem identity is not available on this platform.');
+        }
+
+        $shop = $this->registerShop(databaseName: $databasePath);
+        $registeredLocatorFingerprint = $shop->database_target_locator_fingerprint;
+        DB::connection('central')->table('shops')->where('id', $shop->getKey())->update([
+            'database_name' => $aliasPath,
+        ]);
+
+        $this->assertTenantTargetConflict(
+            fn (): array => $shop->databaseConfig(),
+            'The tenant database target identity changed after registration.',
+        );
+
+        $storedShop = DB::connection('central')->table('shops')->where('id', $shop->getKey())->first();
+
+        $this->assertNotNull($storedShop);
+        $this->assertSame($aliasPath, $storedShop->database_name);
+        $this->assertSame($registeredLocatorFingerprint, $storedShop->database_target_locator_fingerprint);
+    }
+
+    public function test_replacing_a_sqlite_file_does_not_release_its_registered_path(): void
+    {
+        $databasePath = $this->newTenantDatabasePath('owned-path-');
+        $this->registerShop(databaseName: $databasePath, slug: 'alpha-workshop');
+
+        File::delete($databasePath);
+
+        if (File::put($databasePath, 'new-file-at-owned-path') === false) {
+            throw new RuntimeException('Unable to replace a temporary tenant SQLite database.');
+        }
+
+        $this->assertTenantTargetConflict(
+            fn (): Shop => $this->registerShop(
+                databaseName: $databasePath,
+                slug: 'beta-workshop',
+            ),
+            'The tenant database target is already assigned to another shop.',
+        );
+
+        $this->assertSame(1, Shop::query()->count());
+    }
+
+    public function test_database_config_rejects_dns_retargeting_without_trusting_it(): void
+    {
+        $resolver = new class implements DatabaseHostResolver
+        {
+            /** @var list<string> */
+            public array $addresses = ['192.0.2.80'];
+
+            public function resolve(string $host): array
+            {
+                return $host === 'mutable-db.example.test' ? $this->addresses : [];
+            }
+        };
+        app()->instance(DatabaseHostResolver::class, $resolver);
+        $shop = $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'tenant_dns_retarget',
+            databaseHost: 'mutable-db.example.test',
+        );
+        $shop->markActive();
+        $shop->suspend();
+        $registeredFingerprint = $shop->database_target_fingerprint;
+
+        $resolver->addresses = ['192.0.2.81'];
+
+        $this->assertTenantTargetConflict(
+            fn (): array => $shop->databaseConfig(),
+            'The tenant database target identity changed after registration.',
+        );
+        $this->assertSame(
+            $registeredFingerprint,
+            DB::connection('central')->table('shops')->where('id', $shop->getKey())
+                ->value('database_target_fingerprint'),
+        );
+    }
+
+    public function test_sqlite_identity_materialization_is_provisioning_only(): void
+    {
+        $databasePath = $this->newTenantDatabasePath('materialization-state-', create: false);
+        $shop = $this->registerShop(databaseName: $databasePath);
+
+        if (File::put($databasePath, '') === false) {
+            throw new RuntimeException('Unable to create a temporary tenant SQLite database.');
+        }
+
+        $shop->materializeSqliteDatabaseIdentityAfterCreation();
+        $shop->markActive();
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage(
+            'SQLite database identity can only be materialized while a shop is provisioning.',
+        );
+
+        $shop->materializeSqliteDatabaseIdentityAfterCreation();
+    }
+
+    public function test_sqlite_identity_materialization_happens_only_once_per_reserved_path(): void
+    {
+        $databasePath = $this->newTenantDatabasePath('one-time-materialization-', create: false);
+        $shop = $this->registerShop(databaseName: $databasePath);
+
+        if (File::put($databasePath, '') === false) {
+            throw new RuntimeException('Unable to create a temporary tenant SQLite database.');
+        }
+
+        $shop->materializeSqliteDatabaseIdentityAfterCreation();
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage(
+            'The shop does not have a newly created SQLite database identity to materialize.',
+        );
+
+        $shop->materializeSqliteDatabaseIdentityAfterCreation();
+    }
+
     public function test_shop_database_target_fingerprint_is_persisted_and_hidden(): void
     {
         $this->assertTrue(Schema::connection('central')->hasColumn('shops', 'database_target_fingerprint'));
+        $this->assertTrue(Schema::connection('central')->hasColumn('shops', 'database_target_locator_fingerprint'));
+        $this->resolveDatabaseHosts([
+            'db.example.com' => ['192.0.2.30'],
+        ]);
 
         $shop = $this->registerShop(
             databaseDriver: 'mysql',
@@ -607,14 +1367,23 @@ class CentralDomainTest extends TestCase
             ->table('shops')
             ->where('id', $shop->getKey())
             ->value('database_target_fingerprint');
+        $locatorFingerprint = DB::connection('central')
+            ->table('shops')
+            ->where('id', $shop->getKey())
+            ->value('database_target_locator_fingerprint');
 
         $this->assertIsString($fingerprint);
         $this->assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/', $fingerprint);
+        $this->assertNull($locatorFingerprint);
         $this->assertArrayNotHasKey('database_target_fingerprint', $shop->toArray());
+        $this->assertArrayNotHasKey('database_target_locator_fingerprint', $shop->toArray());
     }
 
     public function test_database_unique_race_is_translated_to_a_tenant_target_conflict(): void
     {
+        $this->resolveDatabaseHosts([
+            'race-db.example.com' => ['192.0.2.50'],
+        ]);
         $eventName = 'eloquent.creating: '.Shop::class;
         Event::listen($eventName, static function (Shop $shop): void {
             DB::connection('central')->table('shops')->insert([
@@ -639,6 +1408,41 @@ class CentralDomainTest extends TestCase
                     databaseName: 'tenant_race',
                     databaseHost: 'race-db.example.com',
                 ),
+                'The tenant database target is already assigned to another shop.',
+            );
+        } finally {
+            Event::forget($eventName);
+        }
+
+        $this->assertNull($caughtException->getPrevious());
+        $this->assertSame(1, Shop::query()->count());
+        $this->assertSame('competing-shop', Shop::query()->value('slug'));
+    }
+
+    public function test_sqlite_path_unique_race_is_translated_to_a_tenant_target_conflict(): void
+    {
+        $databasePath = $this->newTenantDatabasePath('locator-race-');
+        $eventName = 'eloquent.creating: '.Shop::class;
+        Event::listen($eventName, static function (Shop $shop): void {
+            DB::connection('central')->table('shops')->insert([
+                'id' => (string) Str::uuid(),
+                'name' => 'Competing Shop',
+                'slug' => 'competing-shop',
+                'status' => ShopStatus::Provisioning->value,
+                'database_driver' => $shop->database_driver,
+                'database_name' => $shop->database_name,
+                'database_target_fingerprint' => hash('sha256', 'different physical file identity'),
+                'database_target_locator_fingerprint' => $shop->database_target_locator_fingerprint,
+                'timezone' => 'Asia/Karachi',
+                'currency' => 'PKR',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        });
+
+        try {
+            $caughtException = $this->assertTenantTargetConflict(
+                fn (): Shop => $this->registerShop(databaseName: $databasePath),
                 'The tenant database target is already assigned to another shop.',
             );
         } finally {
@@ -684,16 +1488,45 @@ class CentralDomainTest extends TestCase
         }
     }
 
+    public function test_database_target_is_frozen_during_an_active_provisioning_attempt(): void
+    {
+        $initialDatabasePath = $this->newTenantDatabasePath('frozen-provisioning-');
+        $updatedDatabasePath = $this->newTenantDatabasePath('forbidden-provisioning-update-');
+        $shop = $this->registerShop(databaseName: $initialDatabasePath);
+
+        try {
+            $shop->updateProvisioningTarget(
+                slug: 'changed-during-provisioning',
+                databaseDriver: 'sqlite',
+                databaseName: $updatedDatabasePath,
+            );
+            $this->fail('A shop changed its database target during an active provisioning attempt.');
+        } catch (LogicException $exception) {
+            $this->assertSame(
+                'Shop database targets can only be changed after provisioning fails and before retry.',
+                $exception->getMessage(),
+            );
+        }
+
+        $persistedShop = $shop->fresh();
+
+        $this->assertSame($initialDatabasePath, $persistedShop->database_name);
+        $this->assertSame('alpha-workshop', $persistedShop->slug);
+        $this->assertSame(ShopStatus::Provisioning, $persistedShop->status);
+    }
+
     public function test_active_shop_slug_database_target_and_status_cannot_be_changed_directly(): void
     {
         $initialDatabasePath = $this->newTenantDatabasePath('tenant-initial-');
         $updatedDatabasePath = $this->newTenantDatabasePath('tenant-updated-');
         $shop = $this->registerShop(databaseName: $initialDatabasePath);
+        $shop->markProvisioningFailed('Change the target before retry.');
         $shop->updateProvisioningTarget(
             slug: 'beta-workshop',
             databaseDriver: 'sqlite',
             databaseName: $updatedDatabasePath,
         );
+        $shop->retryProvisioning();
         $shop->markActive();
 
         try {
@@ -1146,6 +1979,24 @@ class CentralDomainTest extends TestCase
         return $caughtException;
     }
 
+    /** @param array<string, list<string>> $addressesByHost */
+    private function resolveDatabaseHosts(array $addressesByHost): void
+    {
+        app()->instance(
+            DatabaseHostResolver::class,
+            new class($addressesByHost) implements DatabaseHostResolver
+            {
+                /** @param array<string, list<string>> $addressesByHost */
+                public function __construct(private readonly array $addressesByHost) {}
+
+                public function resolve(string $host): array
+                {
+                    return $this->addressesByHost[$host] ?? [];
+                }
+            },
+        );
+    }
+
     private function newTemporaryDirectory(string $prefix): string
     {
         $path = sys_get_temp_dir().DIRECTORY_SEPARATOR.$prefix.Str::uuid();
@@ -1157,6 +2008,20 @@ class CentralDomainTest extends TestCase
         $this->temporaryDirectories[] = $path;
 
         return $path;
+    }
+
+    private function filesystemIdentity(string $path): ?string
+    {
+        $metadata = @stat($path);
+
+        if (! is_array($metadata)
+            || ! is_int($metadata['dev'] ?? null)
+            || ! is_int($metadata['ino'] ?? null)
+            || ($metadata['dev'] === 0 && $metadata['ino'] === 0)) {
+            return null;
+        }
+
+        return $metadata['dev'].':'.$metadata['ino'];
     }
 
     private function newTenantDatabasePath(string $prefix, bool $create = true): string
