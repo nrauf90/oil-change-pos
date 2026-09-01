@@ -8,6 +8,7 @@ use App\Models\Item;
 use App\Models\ItemVehicleCompatibility;
 use App\Models\VehicleMake;
 use App\Models\VehicleModel;
+use Database\Seeders\DatabaseSeeder;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
@@ -16,6 +17,46 @@ use Tests\TestCase;
 class VehicleProductCompatibilityTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_staff_and_catalogue_seed_reference_vehicles_without_overwriting_existing_compatibility(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+        $legacyProduct = Item::factory()->create([
+            'name' => 'Oil Filter — Toyota Corolla',
+            'is_universal' => false,
+        ]);
+        ItemVehicleCompatibility::factory()->for($legacyProduct)->for($corolla)->create([
+            'year_from' => 2009,
+            'year_to' => 2013,
+        ]);
+
+        $this->seed(DatabaseSeeder::class);
+        $this->seed(DatabaseSeeder::class);
+
+        $this->assertSame([
+            'Daihatsu' => ['Cuore', 'Hijet', 'Mira'],
+            'FAW' => ['V2', 'XPV'],
+            'Honda' => ['BR-V', 'City', 'Civic', 'HR-V'],
+            'Hyundai' => ['Elantra', 'Tucson'],
+            'Kia' => ['Picanto', 'Sportage'],
+            'Mitsubishi' => ['Lancer', 'Pajero'],
+            'Nissan' => ['Dayz', 'Sunny'],
+            'Suzuki' => ['Alto', 'Bolan', 'Cultus', 'Mehran', 'Ravi', 'Swift', 'Wagon R'],
+            'Toyota' => ['Aqua', 'Corolla', 'Hilux', 'Prado', 'Vitz', 'Yaris'],
+        ], VehicleMake::query()
+            ->with('vehicleModels')
+            ->orderBy('name')
+            ->get()
+            ->mapWithKeys(fn (VehicleMake $make): array => [
+                $make->name => [$make->vehicleModels->pluck('name')->sort()->values()->all()],
+            ])
+            ->map(fn (array $modelNames): array => $modelNames[0])
+            ->all());
+        $this->assertSame([[2009, 2013]], $legacyProduct->fresh()->vehicleCompatibilities
+            ->map(fn (ItemVehicleCompatibility $compatibility): array => [$compatibility->year_from, $compatibility->year_to])
+            ->all());
+    }
 
     public function test_a_product_can_have_several_model_and_year_compatibilities(): void
     {
