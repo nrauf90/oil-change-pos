@@ -2,9 +2,17 @@
 
 namespace Tests\Feature;
 
+use App\Enums\ItemType;
+use App\Filament\Resources\Items\Pages\CreateItem;
+use App\Filament\Resources\Items\Pages\EditItem;
+use App\Filament\Resources\Items\Pages\ListItems;
 use App\Models\Item;
 use App\Models\User;
+use App\Models\VehicleMake;
+use App\Models\VehicleModel;
+use Filament\Forms\Components\Repeater;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 class ItemManagementTest extends TestCase
@@ -229,5 +237,197 @@ class ItemManagementTest extends TestCase
             ->assertOk()
             ->assertSee('Fresh Oil')
             ->assertDontSee('Discontinued Oil');
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Vehicle compatibility in the admin inventory
+    |--------------------------------------------------------------------------
+    */
+
+    public function test_the_owner_can_create_a_universal_product_from_the_admin_panel(): void
+    {
+        Livewire::actingAs(User::factory()->admin()->create())
+            ->test(CreateItem::class)
+            ->assertFormFieldVisible('is_universal')
+            ->fillForm([
+                'name' => 'Universal Air Filter',
+                'type' => ItemType::Product->value,
+                'is_universal' => true,
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        $item = Item::query()->where('name', 'Universal Air Filter')->sole();
+
+        $this->assertTrue($item->is_universal);
+        $this->assertSame(0, $item->vehicleCompatibilities()->count());
+    }
+
+    public function test_the_owner_can_create_a_vehicle_specific_product_with_multiple_compatibility_rows(): void
+    {
+        $restoreRepeaterUuids = Repeater::fake();
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+        $yaris = VehicleModel::factory()->for($toyota)->create(['name' => 'Yaris']);
+
+        try {
+            Livewire::actingAs(User::factory()->admin()->create())
+                ->test(CreateItem::class)
+                ->fillForm([
+                    'name' => 'Toyota Cabin Filter',
+                    'type' => ItemType::Product->value,
+                    'is_universal' => false,
+                    'vehicleCompatibilities' => [
+                        [
+                            'vehicle_make_id' => $toyota->getKey(),
+                            'vehicle_model_id' => $corolla->getKey(),
+                            'year_from' => 2009,
+                            'year_to' => 2013,
+                        ],
+                        [
+                            'vehicle_make_id' => $toyota->getKey(),
+                            'vehicle_model_id' => $yaris->getKey(),
+                            'year_from' => 2011,
+                            'year_to' => null,
+                        ],
+                    ],
+                ])
+                ->call('create')
+                ->assertHasNoFormErrors();
+        } finally {
+            $restoreRepeaterUuids();
+        }
+
+        $item = Item::query()->where('name', 'Toyota Cabin Filter')->sole();
+
+        $this->assertFalse($item->is_universal);
+        $this->assertSame(
+            [
+                'Corolla:2009-2013',
+                'Yaris:2011-open',
+            ],
+            $item->vehicleCompatibilities()
+                ->with('vehicleModel')
+                ->get()
+                ->map(fn ($compatibility): string => $compatibility->vehicleModel->name.':'.($compatibility->year_from ?? 'open').'-'.($compatibility->year_to ?? 'open'))
+                ->sort()
+                ->values()
+                ->all()
+        );
+    }
+
+    public function test_editing_a_vehicle_specific_product_replaces_compatibility_rows_without_leaving_stale_links(): void
+    {
+        $restoreRepeaterUuids = Repeater::fake();
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $honda = VehicleMake::factory()->create(['name' => 'Honda']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+        $civic = VehicleModel::factory()->for($honda)->create(['name' => 'Civic']);
+        $item = Item::factory()->create(['name' => 'Air Filter', 'is_universal' => false]);
+        $item->vehicleCompatibilities()->create([
+            'vehicle_model_id' => $corolla->getKey(),
+            'year_from' => 2008,
+            'year_to' => 2012,
+        ]);
+
+        try {
+            Livewire::actingAs(User::factory()->admin()->create())
+                ->test(EditItem::class, ['record' => $item->getKey()])
+                ->fillForm([
+                    'is_universal' => false,
+                    'vehicleCompatibilities' => [
+                        [
+                            'vehicle_make_id' => $honda->getKey(),
+                            'vehicle_model_id' => $civic->getKey(),
+                            'year_from' => 2014,
+                            'year_to' => 2018,
+                        ],
+                    ],
+                ])
+                ->call('save')
+                ->assertHasNoFormErrors();
+        } finally {
+            $restoreRepeaterUuids();
+        }
+
+        $item->refresh();
+
+        $this->assertFalse($item->is_universal);
+        $this->assertSame(1, $item->vehicleCompatibilities()->count());
+        $this->assertDatabaseHas('item_vehicle_compatibilities', [
+            'item_id' => $item->getKey(),
+            'vehicle_model_id' => $civic->getKey(),
+            'year_from' => 2014,
+            'year_to' => 2018,
+        ]);
+        $this->assertDatabaseMissing('item_vehicle_compatibilities', [
+            'item_id' => $item->getKey(),
+            'vehicle_model_id' => $corolla->getKey(),
+        ]);
+    }
+
+    public function test_the_owner_cannot_submit_an_inverted_compatibility_year_range(): void
+    {
+        $restoreRepeaterUuids = Repeater::fake();
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+
+        try {
+            Livewire::actingAs(User::factory()->admin()->create())
+                ->test(CreateItem::class)
+                ->fillForm([
+                    'name' => 'Rejected Cabin Filter',
+                    'type' => ItemType::Product->value,
+                    'is_universal' => false,
+                    'vehicleCompatibilities' => [
+                        [
+                            'vehicle_make_id' => $toyota->getKey(),
+                            'vehicle_model_id' => $corolla->getKey(),
+                            'year_from' => 2018,
+                            'year_to' => 2014,
+                        ],
+                    ],
+                ])
+                ->call('create')
+                ->assertHasFormErrors(['vehicleCompatibilities.0.year_to']);
+        } finally {
+            $restoreRepeaterUuids();
+        }
+
+        $this->assertDatabaseMissing('items', ['name' => 'Rejected Cabin Filter']);
+    }
+
+    public function test_the_inventory_table_can_be_filtered_by_make_model_and_year_while_universal_products_remain_listed(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $honda = VehicleMake::factory()->create(['name' => 'Honda']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+        $civic = VehicleModel::factory()->for($honda)->create(['name' => 'Civic']);
+        $universal = Item::factory()->create(['name' => 'Universal Filter', 'is_universal' => true]);
+        $matching = Item::factory()->create(['name' => 'Toyota Filter', 'is_universal' => false]);
+        $nonMatching = Item::factory()->create(['name' => 'Honda Filter', 'is_universal' => false]);
+        $matching->vehicleCompatibilities()->create([
+            'vehicle_model_id' => $corolla->getKey(),
+            'year_from' => 2009,
+            'year_to' => 2013,
+        ]);
+        $nonMatching->vehicleCompatibilities()->create([
+            'vehicle_model_id' => $civic->getKey(),
+            'year_from' => 2014,
+            'year_to' => 2018,
+        ]);
+
+        Livewire::actingAs(User::factory()->admin()->create())
+            ->test(ListItems::class)
+            ->filterTable('vehicle_compatibility', [
+                'make_id' => $toyota->getKey(),
+                'model_id' => $corolla->getKey(),
+                'year' => 2011,
+            ])
+            ->assertCanSeeTableRecords([$universal, $matching])
+            ->assertCanNotSeeTableRecords([$nonMatching])
+            ->assertTableColumnStateSet('compatibility_summary', 'Universal', $universal)
+            ->assertTableColumnStateSet('compatibility_summary', 'Toyota Corolla 2009-2013', $matching);
     }
 }
