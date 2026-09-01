@@ -495,6 +495,7 @@ class QuickAddItemTest extends TestCase
     {
         $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
         $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+        $currentYear = now()->year;
 
         $response = $this->postJson(route('quick-items.store'), [
             'name' => 'Out Of Range Filter',
@@ -505,7 +506,7 @@ class QuickAddItemTest extends TestCase
                     'vehicle_make_id' => $toyota->id,
                     'vehicle_model_id' => $corolla->id,
                     'year_from' => 1999,
-                    'year_to' => 2027,
+                    'year_to' => $currentYear + 1,
                 ],
             ],
         ]);
@@ -513,15 +514,64 @@ class QuickAddItemTest extends TestCase
         $response->assertUnprocessable()
             ->assertJsonValidationErrors(['compatibilities.0.year_from', 'compatibilities.0.year_to']);
         $this->assertSame(
-            ['The year must be between 2000 and 2026.'],
+            ["The year must be between 2000 and {$currentYear}."],
             $response->json('errors')['compatibilities.0.year_from']
         );
         $this->assertSame(
-            ['The year must be between 2000 and 2026.'],
+            ["The year must be between 2000 and {$currentYear}."],
             $response->json('errors')['compatibilities.0.year_to']
         );
 
         $this->assertDatabaseMissing('items', ['name' => 'Out Of Range Filter']);
+    }
+
+    public function test_store_returns_422_when_a_compatibility_model_id_is_malformed(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+
+        $response = $this->postJson(route('quick-items.store'), [
+            'name' => 'Malformed Model Id Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [
+                [
+                    'vehicle_make_id' => $toyota->id,
+                    'vehicle_model_id' => $corolla->id.'foo',
+                ],
+            ],
+        ]);
+
+        $response->assertUnprocessable()
+            ->assertJsonValidationErrors('compatibilities.0.vehicle_model_id');
+
+        $this->assertDatabaseMissing('items', ['name' => 'Malformed Model Id Filter']);
+        $this->assertDatabaseCount('item_vehicle_compatibilities', 0);
+    }
+
+    public function test_store_returns_422_when_a_compatibility_year_is_malformed(): void
+    {
+        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
+
+        $response = $this->postJson(route('quick-items.store'), [
+            'name' => 'Malformed Year Filter',
+            'type' => 'product',
+            'is_universal' => false,
+            'compatibilities' => [
+                [
+                    'vehicle_make_id' => $toyota->id,
+                    'vehicle_model_id' => $corolla->id,
+                    'year_from' => '2000.5',
+                ],
+            ],
+        ]);
+
+        $response->assertUnprocessable()
+            ->assertJsonValidationErrors('compatibilities.0.year_from');
+
+        $this->assertDatabaseMissing('items', ['name' => 'Malformed Year Filter']);
+        $this->assertDatabaseCount('item_vehicle_compatibilities', 0);
     }
 
     public function test_store_returns_422_when_a_specific_product_has_no_compatibility_rows(): void
@@ -573,23 +623,20 @@ class QuickAddItemTest extends TestCase
 
     public function test_store_rolls_back_the_item_and_compatibilities_when_any_row_fails(): void
     {
-        $toyota = VehicleMake::factory()->create(['name' => 'Toyota']);
-        $corolla = VehicleModel::factory()->for($toyota)->create(['name' => 'Corolla']);
-
         $response = $this->postJson(route('quick-items.store'), [
             'name' => 'Duplicate Compatibility Filter',
             'type' => 'product',
             'is_universal' => false,
             'compatibilities' => [
                 [
-                    'vehicle_make_id' => $toyota->id,
-                    'vehicle_model_id' => $corolla->id,
+                    'vehicle_make_name' => 'Suzuki',
+                    'vehicle_model_name' => 'Alto',
                     'year_from' => 2010,
                     'year_to' => 2014,
                 ],
                 [
-                    'vehicle_make_id' => $toyota->id,
-                    'vehicle_model_id' => $corolla->id,
+                    'vehicle_make_name' => 'Suzuki',
+                    'vehicle_model_name' => 'Alto',
                     'year_from' => 2010,
                     'year_to' => 2014,
                 ],
@@ -604,6 +651,8 @@ class QuickAddItemTest extends TestCase
         );
 
         $this->assertDatabaseMissing('items', ['name' => 'Duplicate Compatibility Filter']);
+        $this->assertDatabaseCount('vehicle_makes', 0);
+        $this->assertDatabaseCount('vehicle_models', 0);
         $this->assertDatabaseCount('item_vehicle_compatibilities', 0);
     }
 

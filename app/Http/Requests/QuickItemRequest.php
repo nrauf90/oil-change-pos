@@ -100,7 +100,7 @@ class QuickItemRequest extends FormRequest
 
             $normalised['compatibilities'] = $normalised['is_universal']
                 ? []
-                : $this->normalisedCompatibilities();
+                : $this->preparedCompatibilities();
         } else {
             $this->request->remove('is_universal');
             $this->json?->remove('is_universal');
@@ -118,12 +118,31 @@ class QuickItemRequest extends FormRequest
         $this->merge($normalised);
     }
 
-    /** @return list<array{vehicle_make_id: int|null, vehicle_make_name: ?string, vehicle_model_id: int|null, vehicle_model_name: ?string, year_from: int|null, year_to: int|null}> */
+    /** @return list<array{vehicle_make_id: mixed, vehicle_make_name: mixed, vehicle_model_id: mixed, vehicle_model_name: mixed, year_from: mixed, year_to: mixed}> */
     public function compatibilities(): array
     {
         $value = $this->input('compatibilities');
 
         return is_array($value) ? array_values($value) : [];
+    }
+
+    /** @return list<array{vehicle_make_id: int|null, vehicle_make_name: ?string, vehicle_model_id: int|null, vehicle_model_name: ?string, year_from: int|null, year_to: int|null}> */
+    public function validatedCompatibilities(): array
+    {
+        return collect($this->validated('compatibilities', []))
+            ->filter(fn (mixed $compatibility): bool => is_array($compatibility))
+            ->map(function (array $compatibility): array {
+                return [
+                    'vehicle_make_id' => $this->nullableInteger(Arr::get($compatibility, 'vehicle_make_id')),
+                    'vehicle_make_name' => $this->nullableString(Arr::get($compatibility, 'vehicle_make_name')),
+                    'vehicle_model_id' => $this->nullableInteger(Arr::get($compatibility, 'vehicle_model_id')),
+                    'vehicle_model_name' => $this->nullableString(Arr::get($compatibility, 'vehicle_model_name')),
+                    'year_from' => $this->nullableInteger(Arr::get($compatibility, 'year_from')),
+                    'year_to' => $this->nullableInteger(Arr::get($compatibility, 'year_to')),
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     /**
@@ -170,8 +189,8 @@ class QuickItemRequest extends FormRequest
         }
     }
 
-    /** @return list<array{vehicle_make_id: int|null, vehicle_make_name: ?string, vehicle_model_id: int|null, vehicle_model_name: ?string, year_from: int|null, year_to: int|null}> */
-    private function normalisedCompatibilities(): array
+    /** @return list<array{vehicle_make_id: mixed, vehicle_make_name: ?string, vehicle_model_id: mixed, vehicle_model_name: ?string, year_from: mixed, year_to: mixed}> */
+    private function preparedCompatibilities(): array
     {
         $value = $this->input('compatibilities');
 
@@ -183,12 +202,12 @@ class QuickItemRequest extends FormRequest
             ->filter(fn (mixed $compatibility): bool => is_array($compatibility))
             ->map(function (array $compatibility): array {
                 return [
-                    'vehicle_make_id' => $this->nullableInteger(Arr::get($compatibility, 'vehicle_make_id')),
+                    'vehicle_make_id' => $this->blankToNull(Arr::get($compatibility, 'vehicle_make_id')),
                     'vehicle_make_name' => $this->nullableString(Arr::get($compatibility, 'vehicle_make_name')),
-                    'vehicle_model_id' => $this->nullableInteger(Arr::get($compatibility, 'vehicle_model_id')),
+                    'vehicle_model_id' => $this->blankToNull(Arr::get($compatibility, 'vehicle_model_id')),
                     'vehicle_model_name' => $this->nullableString(Arr::get($compatibility, 'vehicle_model_name')),
-                    'year_from' => $this->nullableInteger(Arr::get($compatibility, 'year_from')),
-                    'year_to' => $this->nullableInteger(Arr::get($compatibility, 'year_to')),
+                    'year_from' => $this->blankToNull(Arr::get($compatibility, 'year_from')),
+                    'year_to' => $this->blankToNull(Arr::get($compatibility, 'year_to')),
                 ];
             })
             ->values()

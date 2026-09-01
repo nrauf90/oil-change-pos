@@ -59,7 +59,7 @@ class QuickItemController extends Controller
             ]) + ['is_active' => true, 'is_universal' => false]);
 
             if ($item->type === ItemType::Product && ! $item->is_universal) {
-                foreach ($request->compatibilities() as $index => $compatibility) {
+                foreach ($request->validatedCompatibilities() as $index => $compatibility) {
                     $this->persistCompatibility($item, $compatibility, $index);
                 }
             }
