@@ -1,0 +1,17 @@
+<?php
+
+namespace App\Enums;
+
+enum ShopLifecycleEvent: string
+{
+    case ProvisioningStarted = 'shop.provisioning_started';
+    case ProvisioningSucceeded = 'shop.provisioning_succeeded';
+    case ProvisioningFailed = 'shop.provisioning_failed';
+    case Suspended = 'shop.suspended';
+    case Reactivated = 'shop.reactivated';
+    case FeatureEnabled = 'shop.feature_enabled';
+    case FeatureDisabled = 'shop.feature_disabled';
+    case MigrationSucceeded = 'tenant.migration_succeeded';
+    case MigrationFailed = 'tenant.migration_failed';
+    case ExistingDatabaseAdopted = 'tenant.existing_database_adopted';
+}

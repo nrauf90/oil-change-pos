@@ -1,7 +1,6 @@
 <?php
 
 use Illuminate\Support\Str;
-use Pdo\Mysql;
 
 return [
 
@@ -61,13 +60,12 @@ return [
             'engine' => null,
             'foreign_key_constraints' => env('CENTRAL_DB_FOREIGN_KEYS', env('DB_FOREIGN_KEYS', true)),
             'options' => extension_loaded('pdo_mysql') ? array_filter([
-                Mysql::ATTR_SSL_CA => env('CENTRAL_MYSQL_ATTR_SSL_CA', env('MYSQL_ATTR_SSL_CA')),
+                PDO::MYSQL_ATTR_SSL_CA => env('CENTRAL_MYSQL_ATTR_SSL_CA', env('MYSQL_ATTR_SSL_CA')),
             ]) : [],
         ],
 
         'tenant' => [
             'driver' => env('TENANT_DB_CONNECTION', env('DB_CONNECTION', 'sqlite')),
-            'url' => env('TENANT_DB_URL', env('DB_URL')),
             'host' => env('TENANT_DB_HOST', env('DB_HOST', '127.0.0.1')),
             'port' => env('TENANT_DB_PORT', env('DB_PORT', '3306')),
             'database' => env('TENANT_DB_DATABASE', env('DB_DATABASE', database_path('database.sqlite'))),
@@ -82,7 +80,7 @@ return [
             'engine' => null,
             'foreign_key_constraints' => env('TENANT_DB_FOREIGN_KEYS', env('DB_FOREIGN_KEYS', true)),
             'options' => extension_loaded('pdo_mysql') ? array_filter([
-                Mysql::ATTR_SSL_CA => env('TENANT_MYSQL_ATTR_SSL_CA', env('MYSQL_ATTR_SSL_CA')),
+                PDO::MYSQL_ATTR_SSL_CA => env('TENANT_MYSQL_ATTR_SSL_CA', env('MYSQL_ATTR_SSL_CA')),
             ]) : [],
         ],
 
@@ -102,7 +100,7 @@ return [
             'strict' => true,
             'engine' => null,
             'options' => extension_loaded('pdo_mysql') ? array_filter([
-                Mysql::ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+                PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
             ]) : [],
         ],
 
@@ -122,7 +120,7 @@ return [
             'strict' => true,
             'engine' => null,
             'options' => extension_loaded('pdo_mysql') ? array_filter([
-                Mysql::ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+                PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
             ]) : [],
         ],
 

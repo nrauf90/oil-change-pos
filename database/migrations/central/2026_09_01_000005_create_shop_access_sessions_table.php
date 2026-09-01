@@ -12,17 +12,15 @@ return new class extends Migration
     public function up(): void
     {
         Schema::connection('central')->create('shop_access_sessions', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('platform_user_id')->constrained('platform_users')->cascadeOnDelete();
-            $table->uuid('shop_id');
+            $table->uuid('id')->primary();
+            $table->foreignId('platform_user_id')->constrained('platform_users')->restrictOnDelete();
+            $table->foreignUuid('shop_id')->constrained('shops')->restrictOnDelete();
             $table->timestamp('started_at')->index();
             $table->timestamp('ended_at')->nullable()->index();
             $table->string('ip_address', 45)->nullable();
             $table->text('user_agent')->nullable();
             $table->text('reason')->nullable();
             $table->timestamps();
-
-            $table->foreign('shop_id')->references('id')->on('shops')->cascadeOnDelete();
         });
     }
 

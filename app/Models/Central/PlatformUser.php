@@ -15,7 +15,7 @@ class PlatformUser extends Authenticatable
 
     protected $connection = 'central';
 
-    protected $fillable = ['name', 'email', 'password', 'role', 'is_active', 'last_login_at'];
+    protected $fillable = ['name', 'email', 'password'];
 
     protected $hidden = ['password', 'remember_token'];
 
@@ -28,9 +28,30 @@ class PlatformUser extends Authenticatable
         ];
     }
 
+    public function activate(): void
+    {
+        $this->forceFill(['is_active' => true])->save();
+    }
+
+    public function deactivate(): void
+    {
+        $this->forceFill(['is_active' => false])->save();
+    }
+
+    public function recordSuccessfulLogin(): void
+    {
+        $this->forceFill(['last_login_at' => now()])->save();
+    }
+
     /** @return HasMany<ShopAccessSession, $this> */
     public function shopAccessSessions(): HasMany
     {
         return $this->hasMany(ShopAccessSession::class);
+    }
+
+    /** @return HasMany<ShopLifecycleActivity, $this> */
+    public function shopLifecycleActivities(): HasMany
+    {
+        return $this->hasMany(ShopLifecycleActivity::class);
     }
 }
