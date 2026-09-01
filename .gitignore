@@ -19,6 +19,7 @@
 /storage/*.key
 /storage/pail
 /vendor
+/.worktrees
 /database/*.sqlite*
 /storage/app/private
 /storage/app/public
