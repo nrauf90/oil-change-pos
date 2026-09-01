@@ -74,7 +74,7 @@ return [
         ],
 
         'platform_users' => [
-            'driver' => 'eloquent',
+            'driver' => 'active_platform_eloquent',
             'model' => PlatformUser::class,
         ],
 

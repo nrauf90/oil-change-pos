@@ -12,7 +12,7 @@ class ShopAccessSession extends CentralModel
 
     protected $guarded = ['*'];
 
-    private bool $allowsEndTransition = false;
+    private bool $allowsStartTransition = false;
 
     protected function casts(): array
     {
@@ -21,12 +21,14 @@ class ShopAccessSession extends CentralModel
 
     protected static function booted(): void
     {
-        static::updating(function (self $session): void {
-            $unexpectedChanges = array_diff(array_keys($session->getDirty()), ['ended_at']);
-
-            if (! $session->allowsEndTransition || $unexpectedChanges !== []) {
-                throw new LogicException('Support access sessions are immutable except for the end transition.');
+        static::creating(function (self $session): void {
+            if (! $session->allowsStartTransition) {
+                throw new LogicException('Support access sessions must be started through start().');
             }
+        });
+
+        static::updating(function (): void {
+            throw new LogicException('Support access sessions are immutable except for the end transition.');
         });
 
         static::deleting(function (): void {
@@ -49,24 +51,26 @@ class ShopAccessSession extends CentralModel
             'ip_address' => $ipAddress,
             'user_agent' => $userAgent,
             'reason' => $reason,
-        ])->save();
+        ]);
+        $session->allowsStartTransition = true;
+
+        try {
+            $session->save();
+        } finally {
+            $session->allowsStartTransition = false;
+        }
 
         return $session;
     }
 
     public function end(): void
     {
-        if ($this->ended_at !== null) {
-            return;
-        }
+        static::query()
+            ->whereKey($this->getKey())
+            ->whereNull('ended_at')
+            ->update(['ended_at' => now()]);
 
-        $this->allowsEndTransition = true;
-
-        try {
-            $this->forceFill(['ended_at' => now()])->save();
-        } finally {
-            $this->allowsEndTransition = false;
-        }
+        $this->refresh();
     }
 
     /** @return BelongsTo<PlatformUser, $this> */

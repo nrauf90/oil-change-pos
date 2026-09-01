@@ -18,6 +18,10 @@ use App\Observers\SupplierObserver;
 use App\Observers\SupplierPaymentObserver;
 use App\Observers\SupplyObserver;
 use App\Observers\UserObserver;
+use Illuminate\Auth\EloquentUserProvider;
+use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -35,6 +39,16 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        Auth::provider(
+            'active_platform_eloquent',
+            static fn (Application $application, array $config): EloquentUserProvider => (new EloquentUserProvider(
+                $application->make('hash'),
+                $config['model'],
+            ))->withQuery(
+                static fn (Builder $query): Builder => $query->where('is_active', true),
+            ),
+        );
+
         /*
         | Audit trail. Attached to the model events rather than to the actions
         | in the controllers, so a Filament resource, an artisan command or a

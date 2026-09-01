@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use LogicException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
@@ -184,6 +185,21 @@ class CentralDomainTest extends TestCase
         $this->assertSame('shop-b', $this->readDatabaseMarker($tenantTemplate, $shopB));
     }
 
+    public function test_generic_database_url_cannot_override_central_database_target(): void
+    {
+        $centralDatabasePath = $this->newTemporaryDatabasePath('central-config-');
+        $this->writeDatabaseMarker($centralDatabasePath, 'central');
+
+        $result = $this->centralConnectionWithGenericDatabaseUrl(
+            centralDatabasePath: $centralDatabasePath,
+            genericDatabaseUrl: 'sqlite:///:memory:',
+        );
+
+        $this->assertNull($result['configured_url']);
+        $this->assertSame($centralDatabasePath, $result['database']);
+        $this->assertSame('central', $result['marker']);
+    }
+
     public function test_shop_database_config_returns_decrypted_connection_overrides(): void
     {
         $shop = Shop::factory()->create([
@@ -219,6 +235,24 @@ class CentralDomainTest extends TestCase
         $this->assertSame(PlatformUser::class, $provider->getModel());
     }
 
+    public function test_platform_provider_rejects_inactive_users(): void
+    {
+        $activeUser = PlatformUser::factory()->create(['email' => 'active-platform@example.com']);
+        $inactiveUser = PlatformUser::factory()->create(['email' => 'inactive-platform@example.com']);
+        $inactiveUser->deactivate();
+        $guard = Auth::guard('platform');
+
+        $this->assertTrue($guard->validate([
+            'email' => $activeUser->email,
+            'password' => 'password',
+        ]));
+        $this->assertFalse($guard->validate([
+            'email' => $inactiveUser->email,
+            'password' => 'password',
+        ]));
+        $this->assertNull($guard->getProvider()->retrieveById($inactiveUser->getKey()));
+    }
+
     public function test_platform_privilege_and_login_audit_fields_are_not_mass_assignable(): void
     {
         $platformUser = PlatformUser::factory()->create([
@@ -242,6 +276,7 @@ class CentralDomainTest extends TestCase
 
     public function test_platform_account_state_and_login_audit_use_controlled_methods(): void
     {
+        PlatformUser::factory()->create();
         $platformUser = PlatformUser::factory()->create();
 
         $platformUser->deactivate();
@@ -256,9 +291,36 @@ class CentralDomainTest extends TestCase
         $this->assertSame('2026-09-02 10:30:00', $platformUser->fresh()->last_login_at?->format('Y-m-d H:i:s'));
     }
 
+    public function test_stale_platform_users_cannot_deactivate_the_final_active_super_admin(): void
+    {
+        $firstPlatformUser = PlatformUser::factory()->create();
+        $secondPlatformUser = PlatformUser::factory()->create();
+        $staleSecondPlatformUser = $secondPlatformUser->fresh();
+
+        $firstPlatformUser->deactivate();
+
+        try {
+            $staleSecondPlatformUser->deactivate();
+            $this->fail('A stale platform user deactivated the final active super administrator.');
+        } catch (LogicException $exception) {
+            $this->assertSame(
+                'The final active super administrator cannot be deactivated.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertFalse($firstPlatformUser->fresh()->is_active);
+        $this->assertTrue($secondPlatformUser->fresh()->is_active);
+        $this->assertSame(1, PlatformUser::query()
+            ->where('role', 'super_admin')
+            ->where('is_active', true)
+            ->count());
+    }
+
     public function test_shop_lifecycle_and_database_fields_are_not_mass_assignable(): void
     {
-        $shop = $this->registerShop();
+        $databasePath = $this->newTemporaryDatabasePath('tenant-assignment-');
+        $shop = $this->registerShop(databaseName: $databasePath);
 
         $shop->fill([
             'name' => 'Allowed Shop Name',
@@ -275,7 +337,7 @@ class CentralDomainTest extends TestCase
         $this->assertSame('alpha-workshop', $shop->slug);
         $this->assertSame(ShopStatus::Provisioning, $shop->status);
         $this->assertSame('sqlite', $shop->database_driver);
-        $this->assertSame('tenant-alpha.sqlite', $shop->database_name);
+        $this->assertSame($databasePath, $shop->database_name);
         $this->assertNull($shop->database_host);
         $this->assertNull($shop->provisioned_at);
         $this->assertNull($shop->provisioning_failure_message);
@@ -287,6 +349,45 @@ class CentralDomainTest extends TestCase
         $this->expectExceptionMessage('Unsupported shop database driver [pgsql].');
 
         $this->registerShop(databaseDriver: 'pgsql');
+    }
+
+    #[DataProvider('unsafeMySqlDatabaseNames')]
+    public function test_shop_registration_rejects_unsafe_mysql_database_names(string $databaseName): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('MySQL database names may contain only 1-64 ASCII letters, numbers, or underscores.');
+
+        $this->registerShop(databaseDriver: 'mysql', databaseName: $databaseName);
+    }
+
+    public function test_shop_registration_canonicalizes_mysql_database_names(): void
+    {
+        $shop = $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: ' tenant_alpha_01 ',
+        );
+
+        $this->assertSame('tenant_alpha_01', $shop->database_name);
+    }
+
+    #[DataProvider('unsafeSqliteDatabasePaths')]
+    public function test_shop_registration_rejects_unsafe_sqlite_database_paths(string $databaseName): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('SQLite tenant databases require a canonical absolute file path.');
+
+        $this->registerShop(databaseName: $databaseName);
+    }
+
+    public function test_shop_registration_canonicalizes_sqlite_database_paths(): void
+    {
+        $databasePath = $this->newTemporaryDatabasePath('tenant-canonical-');
+        $pathWithCurrentDirectorySegment = dirname($databasePath)
+            .DIRECTORY_SEPARATOR.'.'.DIRECTORY_SEPARATOR.basename($databasePath);
+
+        $shop = $this->registerShop(databaseName: $pathWithCurrentDirectorySegment);
+
+        $this->assertSame($databasePath, $shop->database_name);
     }
 
     public function test_shop_lifecycle_transitions_are_explicit(): void
@@ -325,11 +426,13 @@ class CentralDomainTest extends TestCase
 
     public function test_active_shop_slug_database_target_and_status_cannot_be_changed_directly(): void
     {
-        $shop = $this->registerShop();
+        $initialDatabasePath = $this->newTemporaryDatabasePath('tenant-initial-');
+        $updatedDatabasePath = $this->newTemporaryDatabasePath('tenant-updated-');
+        $shop = $this->registerShop(databaseName: $initialDatabasePath);
         $shop->updateProvisioningTarget(
             slug: 'beta-workshop',
             databaseDriver: 'sqlite',
-            databaseName: 'tenant-beta.sqlite',
+            databaseName: $updatedDatabasePath,
         );
         $shop->markActive();
 
@@ -365,8 +468,55 @@ class CentralDomainTest extends TestCase
         }
 
         $this->assertSame('beta-workshop', $shop->fresh()->slug);
-        $this->assertSame('tenant-beta.sqlite', $shop->fresh()->database_name);
+        $this->assertSame($updatedDatabasePath, $shop->fresh()->database_name);
         $this->assertSame(ShopStatus::Active, $shop->fresh()->status);
+    }
+
+    public function test_stale_shop_cannot_change_database_target_after_competing_activation(): void
+    {
+        $databasePath = $this->newTemporaryDatabasePath('tenant-stale-');
+        $shop = $this->registerShop(databaseName: $databasePath);
+        $staleShop = $shop->fresh();
+
+        $shop->markActive();
+
+        try {
+            $staleShop->updateProvisioningTarget(
+                slug: 'stale-workshop',
+                databaseDriver: 'mysql',
+                databaseName: 'stale_database',
+            );
+            $this->fail('A stale shop changed the database target after activation.');
+        } catch (LogicException $exception) {
+            $this->assertSame('A provisioned shop database target is immutable.', $exception->getMessage());
+        }
+
+        $persistedShop = $shop->fresh();
+
+        $this->assertSame('alpha-workshop', $persistedShop->slug);
+        $this->assertSame($databasePath, $persistedShop->database_name);
+        $this->assertSame(ShopStatus::Active, $persistedShop->status);
+    }
+
+    public function test_stale_shop_cannot_overwrite_a_competing_lifecycle_transition(): void
+    {
+        $shop = $this->registerShop();
+        $staleShop = $shop->fresh();
+
+        $shop->markActive();
+
+        try {
+            $staleShop->markProvisioningFailed('Stale provisioning worker failed.');
+            $this->fail('A stale shop overwrote a completed activation.');
+        } catch (LogicException $exception) {
+            $this->assertSame('Cannot transition shop from [active] to [failed].', $exception->getMessage());
+        }
+
+        $persistedShop = $shop->fresh();
+
+        $this->assertSame(ShopStatus::Active, $persistedShop->status);
+        $this->assertNull($persistedShop->provisioning_failed_at);
+        $this->assertNull($persistedShop->provisioning_failure_message);
     }
 
     public function test_support_access_session_is_uuid_guarded_and_ended_explicitly(): void
@@ -428,6 +578,48 @@ class CentralDomainTest extends TestCase
         }
     }
 
+    public function test_support_access_sessions_must_start_through_the_controlled_factory(): void
+    {
+        $platformUser = PlatformUser::factory()->create();
+        $shop = Shop::factory()->create();
+        $session = new ShopAccessSession;
+        $session->platformUser()->associate($platformUser);
+        $session->shop()->associate($shop);
+        $session->forceFill(['started_at' => now()]);
+
+        try {
+            $session->save();
+            $this->fail('A support access session bypassed the controlled start boundary.');
+        } catch (LogicException $exception) {
+            $this->assertSame(
+                'Support access sessions must be started through start().',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertFalse($session->exists);
+    }
+
+    public function test_stale_support_access_session_preserves_the_first_end_timestamp(): void
+    {
+        $session = ShopAccessSession::start(
+            PlatformUser::factory()->create(),
+            Shop::factory()->create(),
+        );
+        $firstWorker = $session->fresh();
+        $staleWorker = $session->fresh();
+
+        $this->travelTo('2026-09-02 14:00:00');
+        $firstWorker->end();
+
+        $this->travelTo('2026-09-02 14:30:00');
+        $staleWorker->end();
+
+        $this->assertSame('2026-09-02 14:00:00', $firstWorker->ended_at?->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-09-02 14:00:00', $staleWorker->ended_at?->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-09-02 14:00:00', $session->fresh()->ended_at?->format('Y-m-d H:i:s'));
+    }
+
     public function test_support_audit_history_prevents_platform_user_deletion(): void
     {
         $platformUser = PlatformUser::factory()->create();
@@ -473,6 +665,7 @@ class CentralDomainTest extends TestCase
             event: ShopLifecycleEvent::Suspended,
             actor: $platformUser,
             metadata: [
+                'reason_code' => 'maintenance',
                 'reason' => 'Maintenance window',
                 'database_password' => 'must-not-be-recorded',
                 'connection' => ['password' => 'also-secret', 'driver' => 'sqlite'],
@@ -484,14 +677,60 @@ class CentralDomainTest extends TestCase
         $this->assertSame(ShopLifecycleEvent::Suspended, $activity->event);
         $this->assertSame('Platform Operator', $activity->actor_name);
         $this->assertSame('2026-09-02 13:00:00', $activity->occurred_at?->format('Y-m-d H:i:s'));
-        $this->assertSame([
-            'reason' => 'Maintenance window',
-            'connection' => ['driver' => 'sqlite'],
-        ], $activity->metadata);
+        $this->assertSame(['reason_code' => 'maintenance'], $activity->metadata);
         $this->assertTrue($activity->shop()->firstOrFail()->is($shop));
         $this->assertTrue($activity->platformUser()->firstOrFail()->is($platformUser));
         $this->assertTrue($shop->lifecycleActivities()->firstOrFail()->is($activity));
         $this->assertTrue($platformUser->shopLifecycleActivities()->firstOrFail()->is($activity));
+    }
+
+    public function test_lifecycle_recorder_persists_only_safe_event_specific_metadata(): void
+    {
+        $activity = (new RecordShopLifecycleActivity)->handle(
+            shop: Shop::factory()->create(),
+            event: ShopLifecycleEvent::ProvisioningFailed,
+            metadata: [
+                'attempt' => 2,
+                'failure_stage' => 'mysql://operator:database-password@db.internal/tenant',
+                'error_code' => 'eyJhbGciOiJIUzI1NiJ9.payload.signature',
+                'database_url' => 'mysql://operator:password@db.internal/tenant',
+                'tokens' => ['secret-token-value'],
+                'notes' => 'This unknown field must not persist.',
+                'connection' => [
+                    'secret' => 'nested-secret',
+                    'token' => 'nested-token',
+                    'password' => 'nested-password',
+                    'url' => 'https://user:password@example.com',
+                ],
+            ],
+        );
+
+        $storedMetadata = DB::connection('central')
+            ->table('shop_lifecycle_activities')
+            ->where('id', $activity->getKey())
+            ->value('metadata');
+
+        $this->assertSame(['attempt' => 2], $activity->metadata);
+        $this->assertSame(['attempt' => 2], json_decode((string) $storedMetadata, true, flags: JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * @param  array<string, mixed>  $metadata
+     * @param  array<string, mixed>  $expectedMetadata
+     */
+    #[DataProvider('safeLifecycleMetadata')]
+    public function test_lifecycle_recorder_accepts_only_the_documented_schema_for_each_event(
+        ShopLifecycleEvent $event,
+        array $metadata,
+        array $expectedMetadata,
+    ): void {
+        $activity = (new RecordShopLifecycleActivity)->handle(
+            shop: Shop::factory()->create(),
+            event: $event,
+            metadata: [...$metadata, 'unknown' => 'discard-me'],
+        );
+
+        $this->assertSame($expectedMetadata, $activity->metadata);
     }
 
     public function test_lifecycle_activity_cannot_be_modified_or_deleted(): void
@@ -522,10 +761,93 @@ class CentralDomainTest extends TestCase
         $this->assertModelExists($activity);
     }
 
+    /** @return array<string, array{string}> */
+    public static function unsafeMySqlDatabaseNames(): array
+    {
+        return [
+            'empty' => [''],
+            'hyphen' => ['tenant-alpha'],
+            'path separator' => ['tenant/alpha'],
+            'too long' => [str_repeat('a', 65)],
+        ];
+    }
+
+    /** @return array<string, array{string}> */
+    public static function unsafeSqliteDatabasePaths(): array
+    {
+        return [
+            'relative path' => ['tenant-alpha.sqlite'],
+            'parent traversal' => ['../tenant-alpha.sqlite'],
+            'memory database' => [':memory:'],
+            'URI filename' => ['file:///tmp/tenant-alpha.sqlite'],
+        ];
+    }
+
+    /** @return array<string, array{ShopLifecycleEvent, array<string, mixed>, array<string, mixed>}> */
+    public static function safeLifecycleMetadata(): array
+    {
+        return [
+            'provisioning started' => [
+                ShopLifecycleEvent::ProvisioningStarted,
+                ['attempt' => 1, 'database_driver' => 'mysql'],
+                ['attempt' => 1, 'database_driver' => 'mysql'],
+            ],
+            'provisioning succeeded' => [
+                ShopLifecycleEvent::ProvisioningSucceeded,
+                ['attempt' => 1, 'database_driver' => 'sqlite', 'migration_batch' => 2, 'duration_ms' => 125],
+                ['attempt' => 1, 'database_driver' => 'sqlite', 'migration_batch' => 2, 'duration_ms' => 125],
+            ],
+            'provisioning failed' => [
+                ShopLifecycleEvent::ProvisioningFailed,
+                ['attempt' => 2, 'failure_stage' => 'migration', 'error_code' => 'TENANT_MIGRATION_FAILED'],
+                ['attempt' => 2, 'failure_stage' => 'migration', 'error_code' => 'TENANT_MIGRATION_FAILED'],
+            ],
+            'suspended' => [
+                ShopLifecycleEvent::Suspended,
+                ['reason_code' => 'maintenance'],
+                ['reason_code' => 'maintenance'],
+            ],
+            'reactivated' => [
+                ShopLifecycleEvent::Reactivated,
+                ['reason_code' => 'operator_request'],
+                ['reason_code' => 'operator_request'],
+            ],
+            'feature enabled' => [
+                ShopLifecycleEvent::FeatureEnabled,
+                ['module_key' => 'inventory', 'reason_code' => 'plan_change'],
+                ['module_key' => 'inventory', 'reason_code' => 'plan_change'],
+            ],
+            'feature disabled' => [
+                ShopLifecycleEvent::FeatureDisabled,
+                ['module_key' => 'inventory', 'reason_code' => 'plan_change'],
+                ['module_key' => 'inventory', 'reason_code' => 'plan_change'],
+            ],
+            'migration succeeded' => [
+                ShopLifecycleEvent::MigrationSucceeded,
+                ['migration' => '2026_09_01_123456_create_items.php', 'batch' => 3, 'duration_ms' => 250],
+                ['migration' => '2026_09_01_123456_create_items.php', 'batch' => 3, 'duration_ms' => 250],
+            ],
+            'migration failed' => [
+                ShopLifecycleEvent::MigrationFailed,
+                ['migration' => '2026_09_01_123456_create_items.php', 'batch' => 3, 'error_code' => 'SQL_FAILED'],
+                ['migration' => '2026_09_01_123456_create_items.php', 'batch' => 3, 'error_code' => 'SQL_FAILED'],
+            ],
+            'existing database adopted' => [
+                ShopLifecycleEvent::ExistingDatabaseAdopted,
+                ['database_driver' => 'mysql', 'table_count' => 17, 'owner_linked' => true],
+                ['database_driver' => 'mysql', 'table_count' => 17, 'owner_linked' => true],
+            ],
+        ];
+    }
+
     private function registerShop(
         string $databaseDriver = 'sqlite',
-        string $databaseName = 'tenant-alpha.sqlite',
+        ?string $databaseName = null,
     ): Shop {
+        $databaseName ??= $databaseDriver === 'sqlite'
+            ? $this->newTemporaryDatabasePath('tenant-alpha-')
+            : 'tenant_alpha';
+
         return Shop::registerForProvisioning(
             name: 'Alpha Workshop',
             slug: 'alpha-workshop',
@@ -603,5 +925,48 @@ PHP;
         }
 
         return $tenantTemplate;
+    }
+
+    /** @return array{configured_url: ?string, database: string, marker: ?string} */
+    private function centralConnectionWithGenericDatabaseUrl(
+        string $centralDatabasePath,
+        string $genericDatabaseUrl,
+    ): array {
+        $script = <<<'PHP'
+require $argv[1].'/vendor/autoload.php';
+$application = require $argv[1].'/bootstrap/app.php';
+$application->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+$connection = $application->make('db')->connection('central');
+$marker = $connection->getSchemaBuilder()->hasTable('connection_marker')
+    ? $connection->table('connection_marker')->value('name')
+    : null;
+echo json_encode([
+    'configured_url' => $application->make('config')->get('database.connections.central.url'),
+    'database' => $connection->getDatabaseName(),
+    'marker' => $marker,
+], JSON_THROW_ON_ERROR);
+PHP;
+        $process = new Process(
+            [PHP_BINARY, '-r', $script, base_path()],
+            base_path(),
+            [
+                'APP_CONFIG_CACHE' => false,
+                'APP_ENV' => 'testing',
+                'CENTRAL_DB_CONNECTION' => 'sqlite',
+                'CENTRAL_DB_DATABASE' => $centralDatabasePath,
+                'CENTRAL_DB_URL' => false,
+                'DB_CONNECTION' => 'sqlite',
+                'DB_DATABASE' => ':memory:',
+                'DB_URL' => $genericDatabaseUrl,
+            ],
+        );
+        $process->mustRun();
+        $result = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+
+        if (! is_array($result)) {
+            throw new RuntimeException('The central connection result was not an array.');
+        }
+
+        return $result;
     }
 }

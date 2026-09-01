@@ -9,16 +9,22 @@ use App\Models\Central\ShopLifecycleActivity;
 
 class RecordShopLifecycleActivity
 {
-    private const REDACTED_KEYS = [
-        'api_token',
-        'database_password',
-        'password',
-        'password_confirmation',
-        'password_hash',
-        'remember_token',
-    ];
-
-    /** @param array<string, mixed> $metadata */
+    /**
+     * @param  array{
+     *     attempt?: int,
+     *     database_driver?: 'mysql'|'sqlite',
+     *     migration_batch?: int,
+     *     duration_ms?: int,
+     *     failure_stage?: string,
+     *     error_code?: string,
+     *     reason_code?: string,
+     *     module_key?: string,
+     *     migration?: string,
+     *     batch?: int,
+     *     table_count?: int,
+     *     owner_linked?: bool
+     * } $metadata Unknown keys and values outside the event-specific schema are discarded.
+     */
     public function handle(
         Shop $shop,
         ShopLifecycleEvent $event,
@@ -32,11 +38,11 @@ class RecordShopLifecycleActivity
             $activity->platformUser()->associate($actor);
         }
 
-        $redactedMetadata = $this->redact($metadata);
+        $safeMetadata = $this->safeMetadata($event, $metadata);
         $activity->forceFill([
             'actor_name' => $actor?->name ?? 'System',
             'event' => $event,
-            'metadata' => $redactedMetadata === [] ? null : $redactedMetadata,
+            'metadata' => $safeMetadata === [] ? null : $safeMetadata,
             'occurred_at' => now(),
         ])->save();
 
@@ -47,18 +53,85 @@ class RecordShopLifecycleActivity
      * @param  array<string, mixed>  $metadata
      * @return array<string, mixed>
      */
-    private function redact(array $metadata): array
+    private function safeMetadata(ShopLifecycleEvent $event, array $metadata): array
     {
-        $redacted = [];
+        $safeMetadata = [];
 
-        foreach ($metadata as $key => $value) {
-            if (in_array(strtolower((string) $key), self::REDACTED_KEYS, true)) {
+        foreach ($this->allowedMetadataKeys($event) as $key) {
+            if (! array_key_exists($key, $metadata)) {
                 continue;
             }
 
-            $redacted[$key] = is_array($value) ? $this->redact($value) : $value;
+            $value = $metadata[$key];
+
+            if ($this->isSafeMetadataValue($key, $value)) {
+                $safeMetadata[$key] = $value;
+            }
         }
 
-        return $redacted;
+        return $safeMetadata;
+    }
+
+    /** @return list<string> */
+    private function allowedMetadataKeys(ShopLifecycleEvent $event): array
+    {
+        return match ($event) {
+            ShopLifecycleEvent::ProvisioningStarted => ['attempt', 'database_driver'],
+            ShopLifecycleEvent::ProvisioningSucceeded => [
+                'attempt', 'database_driver', 'migration_batch', 'duration_ms',
+            ],
+            ShopLifecycleEvent::ProvisioningFailed => ['attempt', 'failure_stage', 'error_code'],
+            ShopLifecycleEvent::Suspended,
+            ShopLifecycleEvent::Reactivated => ['reason_code'],
+            ShopLifecycleEvent::FeatureEnabled,
+            ShopLifecycleEvent::FeatureDisabled => ['module_key', 'reason_code'],
+            ShopLifecycleEvent::MigrationSucceeded => ['migration', 'batch', 'duration_ms'],
+            ShopLifecycleEvent::MigrationFailed => ['migration', 'batch', 'error_code'],
+            ShopLifecycleEvent::ExistingDatabaseAdopted => [
+                'database_driver', 'table_count', 'owner_linked',
+            ],
+        };
+    }
+
+    private function isSafeMetadataValue(string $key, mixed $value): bool
+    {
+        if (in_array($key, ['attempt', 'migration_batch', 'batch', 'duration_ms', 'table_count'], true)) {
+            return is_int($value) && $value >= 0;
+        }
+
+        if ($key === 'owner_linked') {
+            return is_bool($value);
+        }
+
+        if ($key === 'database_driver') {
+            return is_string($value) && in_array($value, ['mysql', 'sqlite'], true);
+        }
+
+        if (! is_string($value) || $this->looksLikeCredential($value)) {
+            return false;
+        }
+
+        return match ($key) {
+            'error_code' => preg_match('/\A[A-Z][A-Z0-9_]{0,63}\z/', $value) === 1,
+            'failure_stage', 'reason_code', 'module_key' => preg_match(
+                '/\A[a-z][a-z0-9_-]{0,63}\z/',
+                $value,
+            ) === 1,
+            'migration' => preg_match(
+                '/\A(?:all|[0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}_[a-z0-9_]+(?:\.php)?)\z/',
+                $value,
+            ) === 1,
+            default => false,
+        };
+    }
+
+    private function looksLikeCredential(string $value): bool
+    {
+        return preg_match(
+            '/password|passwd|secret|token|credential|authorization|bearer|api[_-]?key'
+                .'|\Ask_(?:live|test)_|\AAKIA[0-9A-Z]{12,}|\Agh[pousr]_|\Axox[baprs]-'
+                .'|\A[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}\z/i',
+            $value,
+        ) === 1;
     }
 }
