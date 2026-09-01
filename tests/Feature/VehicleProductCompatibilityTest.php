@@ -50,6 +50,24 @@ class VehicleProductCompatibilityTest extends TestCase
         ItemVehicleCompatibility::factory()->create(['year_from' => 2020, 'year_to' => 2015]);
     }
 
+    public function test_duplicate_open_ended_compatibility_is_rejected(): void
+    {
+        $product = Item::factory()->create(['is_universal' => false]);
+        $model = VehicleModel::factory()->create();
+        ItemVehicleCompatibility::factory()->for($product)->for($model)->create();
+
+        $this->expectException(ValidationException::class);
+
+        ItemVehicleCompatibility::factory()->for($product)->for($model)->create();
+    }
+
+    public function test_compatibility_rejects_years_outside_the_supported_range(): void
+    {
+        $this->expectException(ValidationException::class);
+
+        ItemVehicleCompatibility::factory()->create(['year_from' => 99]);
+    }
+
     public function test_vehicle_filter_includes_universal_and_matching_specific_products(): void
     {
         $toyota = VehicleMake::factory()->create();

@@ -3,10 +3,10 @@
 namespace App\Models;
 
 use Database\Factories\ItemVehicleCompatibilityFactory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 
 class ItemVehicleCompatibility extends Model
@@ -28,15 +28,45 @@ class ItemVehicleCompatibility extends Model
     protected static function booted(): void
     {
         static::saving(function (self $compatibility): void {
-            if ($compatibility->year_from === null || $compatibility->year_to === null) {
-                return;
+            foreach (['year_from', 'year_to'] as $field) {
+                $year = $compatibility->{$field};
+
+                if ($year !== null && ($year < 1886 || $year > 2100)) {
+                    throw ValidationException::withMessages([
+                        $field => 'The year must be between 1886 and 2100.',
+                    ]);
+                }
             }
 
-            if ($compatibility->year_from <= $compatibility->year_to) {
-                return;
+            if ($compatibility->year_from !== null
+                && $compatibility->year_to !== null
+                && $compatibility->year_from > $compatibility->year_to) {
+                throw ValidationException::withMessages([
+                    'year_to' => 'The ending year must be after or equal to the starting year.',
+                ]);
             }
 
-            throw new ValidationException(Validator::make([], []), response: null, errorBag: 'default');
+            $duplicate = self::query()
+                ->where('item_id', $compatibility->item_id)
+                ->where('vehicle_model_id', $compatibility->vehicle_model_id)
+                ->when(
+                    $compatibility->year_from === null,
+                    fn (Builder $query): Builder => $query->whereNull('year_from'),
+                    fn (Builder $query): Builder => $query->where('year_from', $compatibility->year_from),
+                )
+                ->when(
+                    $compatibility->year_to === null,
+                    fn (Builder $query): Builder => $query->whereNull('year_to'),
+                    fn (Builder $query): Builder => $query->where('year_to', $compatibility->year_to),
+                )
+                ->when($compatibility->exists, fn (Builder $query): Builder => $query->whereKeyNot($compatibility->getKey()))
+                ->exists();
+
+            if ($duplicate) {
+                throw ValidationException::withMessages([
+                    'vehicle_model_id' => 'This vehicle compatibility range already exists.',
+                ]);
+            }
         });
     }
 
