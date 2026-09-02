@@ -4,9 +4,8 @@ namespace App\Filament\Platform\Resources\Shops\Pages;
 
 use App\Actions\Tenancy\CollectShopHealth;
 use App\Actions\Tenancy\CollectTenantStatistics;
-use App\Actions\Tenancy\RecordShopLifecycleActivity;
+use App\Actions\Tenancy\UpdateShopFeatureEntitlements;
 use App\Enums\DashboardPeriod;
-use App\Enums\ShopLifecycleEvent;
 use App\Enums\ShopStatus;
 use App\Filament\Platform\Resources\Shops\ShopResource;
 use App\Filament\Platform\Resources\Shops\Tables\ShopsTable;
@@ -25,7 +24,6 @@ use Filament\Support\Icons\Heroicon;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
 use Throwable;
 
 class ViewShop extends ViewRecord
@@ -237,72 +235,10 @@ class ViewShop extends ViewRecord
             return;
         }
 
-        $changes = DB::connection('central')->transaction(
-            static function () use ($actor, $enabledKeys, $modules, $shop): int {
-                $lockedActor = PlatformUser::on('central')
-                    ->whereKey($actor->getKey())
-                    ->lockForUpdate()
-                    ->first();
-
-                if (! $lockedActor instanceof PlatformUser
-                    || ! $lockedActor->is_active
-                    || $lockedActor->role !== PlatformUser::ROLE_SUPER_ADMIN) {
-                    throw new AuthorizationException(
-                        'Your platform administrator access is no longer active.',
-                    );
-                }
-
-                $lockedShop = Shop::on('central')
-                    ->whereKey($shop->getKey())
-                    ->lockForUpdate()
-                    ->first();
-
-                if (! $lockedShop instanceof Shop) {
-                    throw new AuthorizationException('The shop is no longer available.');
-                }
-
-                $storedFeatures = ShopFeature::on('central')
-                    ->where('shop_id', $lockedShop->getKey())
-                    ->orderBy('module_key')
-                    ->lockForUpdate()
-                    ->get()
-                    ->keyBy('module_key');
-                $changes = 0;
-
-                foreach ($modules as $module) {
-                    $storedFeature = $storedFeatures->get($module->key());
-                    $currentlyEnabled = $storedFeature instanceof ShopFeature
-                        ? $storedFeature->enabled
-                        : $module->enabledByDefault();
-                    $shouldEnable = $enabledKeys->contains($module->key());
-
-                    if ($currentlyEnabled === $shouldEnable) {
-                        continue;
-                    }
-
-                    ShopFeature::on('central')->updateOrCreate(
-                        [
-                            'shop_id' => $lockedShop->getKey(),
-                            'module_key' => $module->key(),
-                        ],
-                        ['enabled' => $shouldEnable],
-                    );
-                    resolve(RecordShopLifecycleActivity::class)->handle(
-                        $lockedShop,
-                        $shouldEnable
-                            ? ShopLifecycleEvent::FeatureEnabled
-                            : ShopLifecycleEvent::FeatureDisabled,
-                        $lockedActor,
-                        [
-                            'module_key' => $module->key(),
-                            'reason_code' => 'platform_action',
-                        ],
-                    );
-                    $changes++;
-                }
-
-                return $changes;
-            },
+        $changes = resolve(UpdateShopFeatureEntitlements::class)->handle(
+            $actor,
+            $shop,
+            $enabledKeys->all(),
         );
 
         resolve(ModuleRegistry::class)->flush();
