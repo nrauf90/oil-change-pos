@@ -113,7 +113,9 @@ class PlatformMakeSuperAdminCommand extends Command
 
     private function isDuplicateEmailConstraintViolation(QueryException $exception): bool
     {
-        return in_array((string) $exception->getCode(), ['23000', '23505'], true)
-            || str_contains(strtolower($exception->getMessage()), 'platform_users.email');
+        $message = strtolower($exception->getMessage());
+
+        return str_contains($message, 'platform_users.email')
+            || str_contains($message, 'platform_users_email_unique');
     }
 }

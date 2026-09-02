@@ -3,6 +3,7 @@
 namespace Tests\Feature\Console;
 
 use App\Models\Central\PlatformUser;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Tests\Feature\Platform\PlatformTestCase;
 
@@ -61,6 +62,24 @@ class PlatformMakeSuperAdminCommandTest extends PlatformTestCase
         $this->assertTrue(Hash::check($password, $platformUser->password));
     }
 
+    public function test_mismatched_interactive_password_confirmation_creates_no_platform_user_or_secret_output(): void
+    {
+        $password = 'a-long-password-for-interactive-input';
+        $confirmation = 'a-different-password-confirmation';
+
+        $this->artisan('platform:make-super-admin')
+            ->expectsQuestion('Name', 'Platform Administrator')
+            ->expectsQuestion('Email', 'admin@example.test')
+            ->expectsQuestion('Password', $password)
+            ->expectsQuestion('Confirm password', $confirmation)
+            ->expectsOutputToContain('The password confirmation does not match.')
+            ->doesntExpectOutputToContain($password)
+            ->doesntExpectOutputToContain($confirmation)
+            ->assertExitCode(2);
+
+        $this->assertDatabaseCount('platform_users', 0, 'central');
+    }
+
     public function test_duplicate_email_leaves_the_existing_platform_user_unchanged(): void
     {
         $existingUser = PlatformUser::factory()->create([
@@ -68,6 +87,7 @@ class PlatformMakeSuperAdminCommandTest extends PlatformTestCase
             'email' => 'admin@example.test',
             'password' => 'existing-password',
         ]);
+        $existingAttributes = $existingUser->fresh()->getAttributes();
 
         $this->artisan('platform:make-super-admin', [
             '--name' => 'Replacement Administrator',
@@ -78,8 +98,28 @@ class PlatformMakeSuperAdminCommandTest extends PlatformTestCase
             ->expectsOutputToContain('A platform user with this email already exists.')
             ->assertExitCode(2);
 
-        $this->assertDatabaseCount('platform_users', 1, 'central');
-        $this->assertSame('Existing Administrator', $existingUser->fresh()->name);
-        $this->assertTrue(Hash::check('existing-password', $existingUser->fresh()->password));
+        $this->assertSame($existingAttributes, $existingUser->fresh()->getAttributes());
+    }
+
+    public function test_a_non_email_unique_constraint_failure_is_not_reported_as_a_duplicate_email(): void
+    {
+        DB::connection('central')->unprepared(<<<'SQL'
+            CREATE TRIGGER prevent_platform_user_creation
+            BEFORE INSERT ON platform_users
+            BEGIN
+                SELECT RAISE(ABORT, 'platform user creation is unavailable');
+            END;
+        SQL);
+
+        $this->artisan('platform:make-super-admin', [
+            '--name' => 'Platform Administrator',
+            '--email' => 'admin@example.test',
+            '--password' => 'a-long-password-for-automation',
+            '--no-interaction' => true,
+        ])
+            ->expectsOutputToContain('Unable to create the platform super administrator.')
+            ->assertExitCode(1);
+
+        $this->assertDatabaseCount('platform_users', 0, 'central');
     }
 }
