@@ -41,6 +41,7 @@ use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
 use App\Tenancy\TenantDatabaseAttestor;
 use App\Tenancy\TenantLivewireUploadUrlGenerator;
+use App\Tenancy\TenantPermissionCache;
 use App\Tenancy\TenantResolver;
 use App\Tenancy\TenantRuntimeState;
 use App\Tenancy\TenantSqliteAttestationLock;
@@ -104,12 +105,19 @@ class AppServiceProvider extends ServiceProvider
             static fn (): TenantContext => new TenantContext($runtimeState),
         );
         $this->app->singleton(
+            TenantPermissionCache::class,
+            static fn (Application $application): TenantPermissionCache => new TenantPermissionCache(
+                $application->make('config'),
+                $application->make(PermissionRegistrar::class),
+            ),
+        );
+        $this->app->singleton(
             TenantConnectionManager::class,
             static fn (Application $application): TenantConnectionManager => new TenantConnectionManager(
                 database: $application->make('db'),
                 config: $application->make('config'),
                 runtimeState: $runtimeState,
-                permissionRegistrar: $application->make(PermissionRegistrar::class),
+                permissionCache: $application->make(TenantPermissionCache::class),
                 auth: $application->make('auth'),
                 attestor: new TenantDatabaseAttestor(
                     $application->make('config'),

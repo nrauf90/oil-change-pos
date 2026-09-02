@@ -3,6 +3,9 @@
 namespace App\Filament\Resources\Users\Tables;
 
 use App\Enums\Role;
+use App\Filament\Resources\Roles\RoleResource;
+use App\Filament\Resources\Users\UserResource;
+use App\Models\Role as RoleModel;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
 use Filament\Tables\Columns\IconColumn;
@@ -12,6 +15,7 @@ use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
 
 class UsersTable
 {
@@ -29,7 +33,7 @@ class UsersTable
                 TextColumn::make('roles.name')
                     ->label('Role')
                     ->badge()
-                    ->formatStateUsing(fn (string $state): string => Role::tryFrom($state)?->label() ?? $state)
+                    ->formatStateUsing(fn (string $state): string => Role::tryFrom($state)?->label() ?? Str::headline($state))
                     ->color(fn (string $state): string => match ($state) {
                         Role::Admin->value => 'danger',
                         Role::Manager->value => 'warning',
@@ -45,12 +49,14 @@ class UsersTable
                     ->label('Last signed in')
                     ->dateTime('d M Y, g:i A')
                     ->placeholder('Never')
+                    ->visibleFrom('md')
                     ->sortable(),
 
                 TextColumn::make('sales_count')
                     ->label('Sales rung up')
                     ->counts('sales')
                     ->alignCenter()
+                    ->visibleFrom('lg')
                     ->sortable(),
 
                 TextColumn::make('created_at')
@@ -62,9 +68,14 @@ class UsersTable
             ->filters([
                 SelectFilter::make('role')
                     ->label('Role')
-                    ->options(collect(Role::cases())->mapWithKeys(
-                        fn (Role $role) => [$role->value => $role->label()]
-                    ))
+                    ->options(fn (): array => RoleModel::query()
+                        ->where('guard_name', 'web')
+                        ->orderBy('name')
+                        ->get()
+                        ->mapWithKeys(fn (RoleModel $role): array => [
+                            $role->name => RoleResource::displayName($role),
+                        ])
+                        ->all())
                     ->query(fn (Builder $query, array $data): Builder => $query->when(
                         filled($data['value'] ?? null),
                         fn (Builder $q) => $q->whereHas('roles', fn (Builder $r) => $r->where('name', $data['value']))
@@ -79,9 +90,9 @@ class UsersTable
             ->recordActions([
                 EditAction::make(),
                 DeleteAction::make()
-                    // Deleting yourself would lock you out mid-session.
-                    ->hidden(fn (Model $record): bool => $record->is(auth()->user())),
+                    ->hidden(fn (Model $record): bool => $record->is(auth()->user()) || UserResource::isLastAdmin($record)),
             ])
-            ->defaultSort('name');
+            ->defaultSort('name')
+            ->stackedOnMobile();
     }
 }

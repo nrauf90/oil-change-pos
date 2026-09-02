@@ -66,8 +66,8 @@ class UserResource extends Resource
 
     public static function canDelete(Model $record): bool
     {
-        // Never let the signed-in owner delete themselves out of the system.
         return ! $record->is(auth()->user())
+            && ! static::isLastAdmin($record)
             && (auth()->user()?->can(Permission::DeleteUser->value) ?? false);
     }
 

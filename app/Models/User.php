@@ -52,9 +52,14 @@ class User extends Authenticatable implements FilamentUser, TenantScoped
 
     public function role(): ?RoleEnum
     {
-        $name = $this->roles->first()?->name;
+        $name = $this->roleName();
 
         return $name === null ? null : RoleEnum::tryFrom($name);
+    }
+
+    public function roleName(): ?string
+    {
+        return $this->roles->first()?->name;
     }
 
     public function isAdmin(): bool
@@ -75,7 +80,13 @@ class User extends Authenticatable implements FilamentUser, TenantScoped
     /** A user holds exactly one role in this app. */
     public function assignRoleEnum(RoleEnum $role): void
     {
-        $this->syncRoles([$role->value]);
+        $this->assignSingleRole($role->value);
+    }
+
+    /** A user holds exactly one tenant role, including owner-created roles. */
+    public function assignSingleRole(Role|string $role): void
+    {
+        $this->syncRoles([$role]);
     }
 
     /** @param Builder<User> $query */
