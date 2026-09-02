@@ -108,8 +108,7 @@ final readonly class CentralTenantResolver implements TenantResolver
 
     private function isValidSlug(string $slug): bool
     {
-        return strlen($slug) <= 63
-            && preg_match('/\A[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\z/D', $slug) === 1;
+        return TenantSlug::isValid($slug);
     }
 
     private function isValidDnsName(string $host): bool

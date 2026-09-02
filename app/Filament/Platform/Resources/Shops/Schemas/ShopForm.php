@@ -5,6 +5,7 @@ namespace App\Filament\Platform\Resources\Shops\Schemas;
 use App\Models\Central\Shop;
 use App\Modules\Module;
 use App\Modules\ModuleRegistry;
+use App\Tenancy\TenantSlug;
 use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
@@ -28,8 +29,8 @@ class ShopForm
                         TextInput::make('slug')
                             ->label('URL slug')
                             ->required()
-                            ->maxLength(48)
-                            ->regex('/\A[a-z0-9]+(?:-[a-z0-9]+)*\z/')
+                            ->maxLength(TenantSlug::MAX_LENGTH)
+                            ->regex(TenantSlug::PATTERN)
                             ->unique(table: Shop::class, column: 'slug')
                             ->helperText('Lowercase letters, numbers, and single hyphens only.'),
 

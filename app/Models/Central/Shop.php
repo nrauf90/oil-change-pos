@@ -8,6 +8,7 @@ use App\Tenancy\DatabaseHostResolver;
 use App\Tenancy\DatabaseTargetConfiguration;
 use App\Tenancy\NormalizedDatabaseTarget;
 use App\Tenancy\SqliteDatabaseIdentitySnapshot;
+use App\Tenancy\TenantSlug;
 use App\Tenancy\ValidatedTenantConnection;
 use Database\Factories\Central\ShopFactory;
 use Illuminate\Database\Eloquent\Builder;
@@ -155,6 +156,7 @@ class Shop extends CentralModel
         string $timezone = 'Asia/Karachi',
         string $currency = 'PKR',
     ): self {
+        $slug = (new TenantSlug($slug))->value;
         $target = self::normalizeDatabaseTarget(
             databaseDriver: $databaseDriver,
             databaseName: $databaseName,
@@ -218,6 +220,7 @@ class Shop extends CentralModel
         #[\SensitiveParameter]
         ?string $databaseSocket = null,
     ): void {
+        $slug = (new TenantSlug($slug))->value;
         $target = self::normalizeDatabaseTarget(
             databaseDriver: $databaseDriver,
             databaseName: $databaseName,

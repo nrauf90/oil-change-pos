@@ -2,6 +2,7 @@
 
 namespace App\Data;
 
+use App\Tenancy\TenantSlug;
 use InvalidArgumentException;
 use LogicException;
 
@@ -40,8 +41,7 @@ final readonly class ProvisionShopData
             throw new InvalidArgumentException('A shop name between 1 and 255 characters is required.');
         }
 
-        if (preg_match('/\A[a-z0-9]+(?:-[a-z0-9]+)*\z/', $this->slug) !== 1
-            || mb_strlen($this->slug) > 255) {
+        if (! TenantSlug::isValid($this->slug)) {
             throw new InvalidArgumentException('The shop slug format is invalid.');
         }
 

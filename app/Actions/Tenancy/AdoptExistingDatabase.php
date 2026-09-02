@@ -19,6 +19,7 @@ use App\Tenancy\Provisioning\TenantInstallationBootstrapper;
 use App\Tenancy\Provisioning\TenantInstallationReason;
 use App\Tenancy\Provisioning\TenantProvisioningLease;
 use App\Tenancy\TenantConnectionManager;
+use App\Tenancy\TenantSlug;
 use Closure;
 use Illuminate\Cache\CacheManager;
 use Illuminate\Cache\DatabaseLock;
@@ -900,8 +901,7 @@ final readonly class AdoptExistingDatabase
         $ownerEmail = $ownerEmail === null ? null : trim($ownerEmail);
 
         if (! $this->isSafeLabel($name)
-            || strlen($slug) > 255
-            || preg_match('/\A[a-z0-9]+(?:-[a-z0-9]+)*\z/', $slug) !== 1
+            || ! TenantSlug::isValid($slug)
             || ! $this->isSafeLabel($ownerUsername)
             || ($ownerName !== null && ! $this->isSafeLabel($ownerName))
             || ($ownerEmail !== null

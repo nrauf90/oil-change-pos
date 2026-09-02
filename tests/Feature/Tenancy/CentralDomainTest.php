@@ -172,6 +172,33 @@ class CentralDomainTest extends TestCase
         $this->assertFalse(Schema::connection('central')->hasTable('sales'));
     }
 
+    public function test_shop_registration_uses_the_resolver_slug_boundary(): void
+    {
+        $validSlug = str_repeat('a', 63);
+        $shop = Shop::registerForProvisioning(
+            name: 'Valid Boundary Shop',
+            slug: $validSlug,
+            databaseDriver: 'sqlite',
+            databaseName: $this->tenantDatabaseRoot.DIRECTORY_SEPARATOR.'valid-boundary.sqlite',
+        );
+
+        $this->assertSame($validSlug, $shop->slug);
+
+        try {
+            Shop::registerForProvisioning(
+                name: 'Invalid Boundary Shop',
+                slug: str_repeat('b', 64),
+                databaseDriver: 'sqlite',
+                databaseName: $this->tenantDatabaseRoot.DIRECTORY_SEPARATOR.'invalid-boundary.sqlite',
+            );
+            $this->fail('A resolver-invalid shop slug was registered.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertSame('The shop slug format is invalid.', $exception->getMessage());
+        }
+
+        $this->assertSame(1, Shop::query()->count());
+    }
+
     public function test_shop_connection_overrides_are_not_serialized(): void
     {
         $shop = Shop::factory()->create([

@@ -217,6 +217,25 @@ class AdoptExistingTenantTest extends TestCase
         $this->assertFalse(app(TenantContext::class)->initialized());
     }
 
+    public function test_adoption_slug_matches_the_resolver_sixty_three_character_boundary(): void
+    {
+        $validOptions = $this->adoptionOptions();
+        $validOptions['--slug'] = str_repeat('a', 63);
+
+        $this->artisan('tenants:adopt-existing', $validOptions)
+            ->expectsOutputToContain('Dry run passed')
+            ->assertSuccessful();
+
+        $invalidOptions = $this->adoptionOptions();
+        $invalidOptions['--slug'] = str_repeat('a', 64);
+
+        $this->artisan('tenants:adopt-existing', $invalidOptions)
+            ->expectsOutputToContain('ADOPTION_INPUT_INVALID')
+            ->assertExitCode(1);
+
+        $this->assertSame(0, Shop::query()->count());
+    }
+
     /** @return array<string, string> */
     private function adoptionOptions(): array
     {
