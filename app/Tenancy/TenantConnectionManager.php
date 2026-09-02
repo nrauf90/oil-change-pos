@@ -22,9 +22,6 @@ final class TenantConnectionManager
 
     private const NO_TENANT_PERMISSION_CACHE_KEY = 'spatie.permission.cache.no-tenant';
 
-    /** @var array<string, mixed> */
-    private readonly array $tenantConnectionTemplate;
-
     private ?TenantConnectionLease $activeLease = null;
 
     private ?Connection $activeConnection = null;
@@ -47,16 +44,8 @@ final class TenantConnectionManager
         private readonly AuthManager $auth,
         private readonly TenantDatabaseAttestor $attestor,
         private readonly ModuleRegistry $moduleRegistry,
-    ) {
-        $tenantConnectionTemplate = $this->config->get('database.tenant_connection_template');
-
-        if (! is_array($tenantConnectionTemplate)) {
-            throw new LogicException('The tenant database connection template is not configured.');
-        }
-
-        unset($tenantConnectionTemplate['url'], $tenantConnectionTemplate['name']);
-        $this->tenantConnectionTemplate = $tenantConnectionTemplate;
-    }
+        private readonly TenantConnectionConfigurationFactory $configurationFactory,
+    ) {}
 
     public function connect(#[\SensitiveParameter] Shop $shop): void
     {
@@ -89,7 +78,7 @@ final class TenantConnectionManager
             $this->pendingSnapshot = $snapshot;
             $this->config->set(
                 'database.connections.'.self::CONNECTION,
-                $this->connectionConfiguration($snapshot),
+                $this->configurationFactory->make($snapshot),
             );
             $this->database->purge(self::CONNECTION);
             $this->database->connection(self::CONNECTION);
@@ -160,7 +149,7 @@ final class TenantConnectionManager
                 $connection,
                 $shop,
                 $snapshot,
-                $this->connectionConfiguration($snapshot),
+                $this->configurationFactory->make($snapshot),
             );
 
             $this->activate($shop, $connection, $pdo);
@@ -246,34 +235,6 @@ final class TenantConnectionManager
             && $this->activeConnection->getRawPdo() === $this->activePdo
             && $this->activePdo instanceof PDO
             && $this->config->has('database.connections.'.self::CONNECTION);
-    }
-
-    /** @return array<string, mixed> */
-    private function connectionConfiguration(
-        #[\SensitiveParameter]
-        ValidatedTenantConnection $snapshot,
-    ): array {
-        $target = $snapshot->target();
-        $configuration = array_replace(
-            $this->tenantConnectionTemplate,
-            $snapshot->connectionOverrides(),
-        );
-        unset($configuration['url'], $configuration['name']);
-        $configuration['driver'] = $target->driver;
-        $configuration['database'] = $target->database;
-
-        if ($target->effectiveSocket !== null) {
-            unset($configuration['host'], $configuration['port']);
-            $configuration['unix_socket'] = $target->effectiveSocket;
-        } elseif ($target->driver === 'mysql') {
-            unset($configuration['unix_socket']);
-            $configuration['host'] = $target->effectiveHost;
-            $configuration['port'] = $target->effectivePort;
-        } else {
-            unset($configuration['host'], $configuration['port'], $configuration['unix_socket']);
-        }
-
-        return $configuration;
     }
 
     private function failClosed(): void

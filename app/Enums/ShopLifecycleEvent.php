@@ -7,6 +7,7 @@ enum ShopLifecycleEvent: string
     case ProvisioningStarted = 'shop.provisioning_started';
     case ProvisioningSucceeded = 'shop.provisioning_succeeded';
     case ProvisioningFailed = 'shop.provisioning_failed';
+    case TenantInstallationAuthorized = 'tenant.installation_authorized';
     case Suspended = 'shop.suspended';
     case Reactivated = 'shop.reactivated';
     case FeatureEnabled = 'shop.feature_enabled';

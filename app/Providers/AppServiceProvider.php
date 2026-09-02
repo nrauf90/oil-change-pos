@@ -21,9 +21,17 @@ use App\Observers\SupplyObserver;
 use App\Observers\UserObserver;
 use App\Tenancy\DatabaseHostResolver;
 use App\Tenancy\NullTenantConnectionAttestationHook;
+use App\Tenancy\OpenedTenantDatabaseIdentityVerifier;
 use App\Tenancy\PdoTenantSqliteWitnessConnection;
+use App\Tenancy\Provisioning\DatabaseProvisioner;
+use App\Tenancy\Provisioning\DatabaseProvisionerManager;
+use App\Tenancy\Provisioning\LaravelMySqlServerConnectionFactory;
+use App\Tenancy\Provisioning\MySqlServerConnectionFactory;
+use App\Tenancy\Provisioning\NullTenantProvisioningHook;
+use App\Tenancy\Provisioning\TenantProvisioningHook;
 use App\Tenancy\SystemDatabaseHostResolver;
 use App\Tenancy\TenantConnectionAttestationHook;
+use App\Tenancy\TenantConnectionConfigurationFactory;
 use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
 use App\Tenancy\TenantDatabaseAttestor;
@@ -49,6 +57,18 @@ class AppServiceProvider extends ServiceProvider
         $runtimeState = new TenantRuntimeState;
 
         $this->app->bind(DatabaseHostResolver::class, SystemDatabaseHostResolver::class);
+        $this->app->bind(DatabaseProvisioner::class, DatabaseProvisionerManager::class);
+        $this->app->bind(
+            MySqlServerConnectionFactory::class,
+            LaravelMySqlServerConnectionFactory::class,
+        );
+        $this->app->singleton(TenantProvisioningHook::class, NullTenantProvisioningHook::class);
+        $this->app->singleton(
+            TenantConnectionConfigurationFactory::class,
+            static fn (Application $application): TenantConnectionConfigurationFactory => new TenantConnectionConfigurationFactory(
+                $application->make('config'),
+            ),
+        );
         $this->app->singleton(
             TenantConnectionAttestationHook::class,
             NullTenantConnectionAttestationHook::class,
@@ -75,8 +95,10 @@ class AppServiceProvider extends ServiceProvider
                         (string) $application->make('config')->get('database.tenant_attestation_lock_path'),
                     ),
                     $application->make(TenantSqliteWitnessConnection::class),
+                    $application->make(OpenedTenantDatabaseIdentityVerifier::class),
                 ),
                 moduleRegistry: $application->make(ModuleRegistry::class),
+                configurationFactory: $application->make(TenantConnectionConfigurationFactory::class),
             ),
         );
     }

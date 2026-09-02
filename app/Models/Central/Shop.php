@@ -438,7 +438,7 @@ class Shop extends CentralModel
         SqliteDatabaseIdentitySnapshot $expectedIdentity,
     ): void {
         $attributes = $this->getConnection()->transaction(function () use ($expectedIdentity): array {
-            $shop = static::query()->whereKey($this->getKey())->first();
+            $shop = static::query()->whereKey($this->getKey())->lockForUpdate()->first();
 
             if (! $shop instanceof self) {
                 throw new LogicException('Deleted shops do not have usable database targets.');
