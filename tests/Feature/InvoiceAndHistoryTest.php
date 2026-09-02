@@ -213,8 +213,8 @@ class InvoiceAndHistoryTest extends TestCase
         $this->delete(route('sales.destroy', $sale))
             ->assertRedirect(route('sales.index'));
 
-        $this->assertDatabaseMissing('sales', ['id' => $sale->id]);
-        $this->assertDatabaseCount('sale_items', 0);
+        $this->assertDatabaseMissing('sales', ['id' => $sale->id], 'tenant');
+        $this->assertDatabaseCount('sale_items', 0, 'tenant');
     }
     /* ---------------------------------------------------------------- */
     /* Quantity and cashier attribution */

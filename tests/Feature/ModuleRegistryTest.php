@@ -50,7 +50,7 @@ class ModuleRegistryTest extends TestCase
     {
         $this->registry()->setEnabled('workshop', false);
 
-        $this->assertDatabaseHas('modules', ['key' => 'workshop', 'enabled' => false]);
+        $this->assertDatabaseHas('modules', ['key' => 'workshop', 'enabled' => false], 'tenant');
     }
 
     public function test_a_core_module_cannot_be_switched_off(): void
@@ -58,7 +58,7 @@ class ModuleRegistryTest extends TestCase
         $this->registry()->setEnabled('sales', false);
 
         $this->assertTrue($this->registry()->enabled('sales'), 'the POS is load-bearing and must stay on');
-        $this->assertDatabaseMissing('modules', ['key' => 'sales']);
+        $this->assertDatabaseMissing('modules', ['key' => 'sales'], 'tenant');
     }
 
     public function test_an_unknown_module_key_is_treated_as_disabled(): void

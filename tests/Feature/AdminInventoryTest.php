@@ -48,7 +48,7 @@ class AdminInventoryTest extends TestCase
             'type' => 'product',
             'stock_level' => 12,
             'low_stock_alert' => 3,
-        ]);
+        ], 'tenant');
     }
 
     public function test_a_duplicate_item_name_is_rejected(): void

@@ -148,7 +148,7 @@ class QuickAddItemTest extends TestCase
             'name' => 'AC Gas Refill',
             'type' => 'repair',
             'unit_cost' => null,
-        ]);
+        ], 'tenant');
     }
 
     public function test_store_persists_the_row_to_the_items_table(): void
@@ -159,13 +159,13 @@ class QuickAddItemTest extends TestCase
             'unit_cost' => 850,
         ])->assertCreated();
 
-        $this->assertDatabaseCount('items', 1);
+        $this->assertDatabaseCount('items', 1, 'tenant');
         $this->assertDatabaseHas('items', [
             'name' => 'Wiper Blade',
             'type' => 'product',
             'unit_cost' => '850.00',
             'is_active' => true,
-        ]);
+        ], 'tenant');
     }
 
     public function test_store_response_carries_everything_the_front_end_needs_to_select_the_item(): void
@@ -195,7 +195,7 @@ class QuickAddItemTest extends TestCase
             ->assertStatus(422)
             ->assertJsonStructure(['message', 'errors' => ['name']]);
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     public function test_store_returns_422_when_the_type_is_not_product_or_repair(): void
@@ -204,7 +204,7 @@ class QuickAddItemTest extends TestCase
             ->assertStatus(422)
             ->assertJsonValidationErrors('type');
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     public function test_store_returns_422_when_the_name_is_too_long(): void
@@ -216,7 +216,7 @@ class QuickAddItemTest extends TestCase
             ->assertStatus(422)
             ->assertJsonValidationErrors('name');
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     public function test_store_returns_422_when_the_unit_cost_is_negative(): void
@@ -229,7 +229,7 @@ class QuickAddItemTest extends TestCase
             ->assertStatus(422)
             ->assertJsonValidationErrors('unit_cost');
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     public function test_store_rejects_a_duplicate_name_without_creating_a_second_row(): void
@@ -240,7 +240,7 @@ class QuickAddItemTest extends TestCase
             ->assertStatus(422)
             ->assertJsonValidationErrors('name');
 
-        $this->assertDatabaseCount('items', 1);
+        $this->assertDatabaseCount('items', 1, 'tenant');
     }
 
     public function test_store_does_not_redirect_on_validation_failure(): void
@@ -263,7 +263,7 @@ class QuickAddItemTest extends TestCase
             ->assertCreated()
             ->assertJsonPath('data.name', 'Brake Cleaner');
 
-        $this->assertDatabaseHas('items', ['name' => 'Brake Cleaner']);
+        $this->assertDatabaseHas('items', ['name' => 'Brake Cleaner'], 'tenant');
     }
 
     public function test_store_treats_a_whitespace_only_name_as_missing(): void
@@ -272,7 +272,7 @@ class QuickAddItemTest extends TestCase
             ->assertStatus(422)
             ->assertJsonValidationErrors('name');
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     public function test_store_coerces_an_empty_string_unit_cost_to_null(): void
@@ -288,7 +288,7 @@ class QuickAddItemTest extends TestCase
         $this->assertDatabaseHas('items', [
             'name' => 'Radiator Flush',
             'unit_cost' => null,
-        ]);
+        ], 'tenant');
     }
 
     public function test_store_creates_the_item_as_active_so_it_shows_up_in_the_picker(): void
@@ -355,13 +355,13 @@ class QuickAddItemTest extends TestCase
             'vehicle_model_id' => $corolla->id,
             'year_from' => 2009,
             'year_to' => 2013,
-        ]);
+        ], 'tenant');
         $this->assertDatabaseHas('item_vehicle_compatibilities', [
             'item_id' => $item->id,
             'vehicle_model_id' => $yaris->id,
             'year_from' => 2014,
             'year_to' => null,
-        ]);
+        ], 'tenant');
 
         $response->assertJsonFragment([
             'vehicle_make_id' => $toyota->id,
@@ -402,7 +402,7 @@ class QuickAddItemTest extends TestCase
             'vehicle_model_id' => $model->id,
             'year_from' => 2018,
             'year_to' => null,
-        ]);
+        ], 'tenant');
     }
 
     public function test_store_reuses_existing_make_and_model_names_without_case_only_duplication(): void
@@ -424,14 +424,14 @@ class QuickAddItemTest extends TestCase
 
         $item = Item::where('name', 'Toyota Brake Pad')->sole();
 
-        $this->assertDatabaseCount('vehicle_makes', 1);
-        $this->assertDatabaseCount('vehicle_models', 1);
+        $this->assertDatabaseCount('vehicle_makes', 1, 'tenant');
+        $this->assertDatabaseCount('vehicle_models', 1, 'tenant');
         $this->assertDatabaseHas('item_vehicle_compatibilities', [
             'item_id' => $item->id,
             'vehicle_model_id' => $corolla->id,
             'year_from' => null,
             'year_to' => null,
-        ]);
+        ], 'tenant');
     }
 
     public function test_store_returns_422_when_a_selected_model_does_not_belong_to_the_selected_make(): void
@@ -459,7 +459,7 @@ class QuickAddItemTest extends TestCase
             $response->json('errors')['compatibilities.0.vehicle_model_id']
         );
 
-        $this->assertDatabaseMissing('items', ['name' => 'Wrong Pairing Filter']);
+        $this->assertDatabaseMissing('items', ['name' => 'Wrong Pairing Filter'], 'tenant');
     }
 
     public function test_store_returns_422_when_a_compatibility_year_range_is_inverted(): void
@@ -488,7 +488,7 @@ class QuickAddItemTest extends TestCase
             $response->json('errors')['compatibilities.0.year_to']
         );
 
-        $this->assertDatabaseMissing('items', ['name' => 'Inverted Range Filter']);
+        $this->assertDatabaseMissing('items', ['name' => 'Inverted Range Filter'], 'tenant');
     }
 
     public function test_store_returns_422_when_a_compatibility_year_is_outside_2000_through_2026(): void
@@ -522,7 +522,7 @@ class QuickAddItemTest extends TestCase
             $response->json('errors')['compatibilities.0.year_to']
         );
 
-        $this->assertDatabaseMissing('items', ['name' => 'Out Of Range Filter']);
+        $this->assertDatabaseMissing('items', ['name' => 'Out Of Range Filter'], 'tenant');
     }
 
     public function test_store_returns_422_when_a_compatibility_model_id_is_malformed(): void
@@ -545,8 +545,8 @@ class QuickAddItemTest extends TestCase
         $response->assertUnprocessable()
             ->assertJsonValidationErrors('compatibilities.0.vehicle_model_id');
 
-        $this->assertDatabaseMissing('items', ['name' => 'Malformed Model Id Filter']);
-        $this->assertDatabaseCount('item_vehicle_compatibilities', 0);
+        $this->assertDatabaseMissing('items', ['name' => 'Malformed Model Id Filter'], 'tenant');
+        $this->assertDatabaseCount('item_vehicle_compatibilities', 0, 'tenant');
     }
 
     public function test_store_returns_422_when_a_compatibility_year_is_malformed(): void
@@ -570,8 +570,8 @@ class QuickAddItemTest extends TestCase
         $response->assertUnprocessable()
             ->assertJsonValidationErrors('compatibilities.0.year_from');
 
-        $this->assertDatabaseMissing('items', ['name' => 'Malformed Year Filter']);
-        $this->assertDatabaseCount('item_vehicle_compatibilities', 0);
+        $this->assertDatabaseMissing('items', ['name' => 'Malformed Year Filter'], 'tenant');
+        $this->assertDatabaseCount('item_vehicle_compatibilities', 0, 'tenant');
     }
 
     public function test_store_returns_422_when_a_specific_product_has_no_compatibility_rows(): void
@@ -589,7 +589,7 @@ class QuickAddItemTest extends TestCase
                 'Add at least one compatible vehicle for a vehicle-specific product.'
             );
 
-        $this->assertDatabaseMissing('items', ['name' => 'Vehicle Specific Oil Filter']);
+        $this->assertDatabaseMissing('items', ['name' => 'Vehicle Specific Oil Filter'], 'tenant');
     }
 
     public function test_store_requires_a_make_when_an_existing_model_is_selected(): void
@@ -607,7 +607,7 @@ class QuickAddItemTest extends TestCase
             ->assertUnprocessable()
             ->assertJsonValidationErrors('compatibilities.0.vehicle_make_id');
 
-        $this->assertDatabaseMissing('items', ['name' => 'Incomplete Compatibility Filter']);
+        $this->assertDatabaseMissing('items', ['name' => 'Incomplete Compatibility Filter'], 'tenant');
     }
 
     public function test_store_rejects_vehicle_names_longer_than_the_database_columns(): void
@@ -686,10 +686,10 @@ class QuickAddItemTest extends TestCase
             $response->json('errors')['compatibilities.1.vehicle_model_id']
         );
 
-        $this->assertDatabaseMissing('items', ['name' => 'Duplicate Compatibility Filter']);
-        $this->assertDatabaseCount('vehicle_makes', 0);
-        $this->assertDatabaseCount('vehicle_models', 0);
-        $this->assertDatabaseCount('item_vehicle_compatibilities', 0);
+        $this->assertDatabaseMissing('items', ['name' => 'Duplicate Compatibility Filter'], 'tenant');
+        $this->assertDatabaseCount('vehicle_makes', 0, 'tenant');
+        $this->assertDatabaseCount('vehicle_models', 0, 'tenant');
+        $this->assertDatabaseCount('item_vehicle_compatibilities', 0, 'tenant');
     }
 
     public function test_the_sale_screen_seeds_vehicle_makes_and_item_compatibilities(): void

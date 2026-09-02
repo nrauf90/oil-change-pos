@@ -53,7 +53,7 @@ class ExpenseTest extends TestCase
             'category' => 'tea_lunch',
             'amount' => '450.75',
             'description' => 'Lunch for the two mechanics',
-        ]);
+        ], 'tenant');
     }
 
     public function test_logged_by_is_the_signed_in_user_and_a_forged_user_id_is_ignored(): void
@@ -67,8 +67,8 @@ class ExpenseTest extends TestCase
             'user_id' => $imposter->id,
         ])->assertRedirect(route('expenses.index'));
 
-        $this->assertDatabaseHas('expenses', ['category' => 'fuel', 'user_id' => $me->id]);
-        $this->assertDatabaseMissing('expenses', ['user_id' => $imposter->id]);
+        $this->assertDatabaseHas('expenses', ['category' => 'fuel', 'user_id' => $me->id], 'tenant');
+        $this->assertDatabaseMissing('expenses', ['user_id' => $imposter->id], 'tenant');
     }
 
     public function test_amount_is_required(): void
@@ -76,7 +76,7 @@ class ExpenseTest extends TestCase
         $this->post(route('expenses.store'), ['category' => 'utility'])
             ->assertSessionHasErrors('amount');
 
-        $this->assertDatabaseCount('expenses', 0);
+        $this->assertDatabaseCount('expenses', 0, 'tenant');
     }
 
     public function test_amount_must_be_numeric(): void
@@ -84,7 +84,7 @@ class ExpenseTest extends TestCase
         $this->post(route('expenses.store'), ['category' => 'utility', 'amount' => 'five hundred'])
             ->assertSessionHasErrors('amount');
 
-        $this->assertDatabaseCount('expenses', 0);
+        $this->assertDatabaseCount('expenses', 0, 'tenant');
     }
 
     public function test_a_negative_amount_is_rejected(): void
@@ -92,7 +92,7 @@ class ExpenseTest extends TestCase
         $this->post(route('expenses.store'), ['category' => 'utility', 'amount' => '-100'])
             ->assertSessionHasErrors('amount');
 
-        $this->assertDatabaseCount('expenses', 0);
+        $this->assertDatabaseCount('expenses', 0, 'tenant');
     }
 
     public function test_the_category_must_be_a_real_enum_case(): void
@@ -100,7 +100,7 @@ class ExpenseTest extends TestCase
         $this->post(route('expenses.store'), ['category' => 'bribes', 'amount' => '100'])
             ->assertSessionHasErrors('category');
 
-        $this->assertDatabaseCount('expenses', 0);
+        $this->assertDatabaseCount('expenses', 0, 'tenant');
     }
 
     public function test_the_category_is_required(): void
@@ -108,7 +108,7 @@ class ExpenseTest extends TestCase
         $this->post(route('expenses.store'), ['amount' => '100'])
             ->assertSessionHasErrors('category');
 
-        $this->assertDatabaseCount('expenses', 0);
+        $this->assertDatabaseCount('expenses', 0, 'tenant');
     }
 
     public function test_an_expense_defaults_to_now_when_no_date_is_given(): void
@@ -149,7 +149,7 @@ class ExpenseTest extends TestCase
             'category' => 'shop_supplies',
             'amount' => '275.25',
             'description' => 'Rags and hand cleaner',
-        ]);
+        ], 'tenant');
     }
 
     public function test_updating_an_expense_never_reassigns_who_logged_it(): void
@@ -174,7 +174,7 @@ class ExpenseTest extends TestCase
         $this->delete(route('expenses.destroy', $expense))
             ->assertRedirect(route('expenses.index'));
 
-        $this->assertDatabaseMissing('expenses', ['id' => $expense->id]);
+        $this->assertDatabaseMissing('expenses', ['id' => $expense->id], 'tenant');
     }
 
     public function test_the_list_shows_logged_expenses_with_their_category_and_who_logged_them(): void
@@ -262,7 +262,7 @@ class ExpenseTest extends TestCase
             'category' => 'fuel', 'amount' => '100',
         ])->assertForbidden();
 
-        $this->assertDatabaseCount('expenses', 0);
+        $this->assertDatabaseCount('expenses', 0, 'tenant');
     }
 
     public function test_a_manager_can_log_an_expense(): void
@@ -273,7 +273,7 @@ class ExpenseTest extends TestCase
             'category' => 'shop_supplies', 'amount' => '640.00',
         ])->assertRedirect(route('expenses.index'));
 
-        $this->assertDatabaseHas('expenses', ['user_id' => $manager->id, 'amount' => '640.00']);
+        $this->assertDatabaseHas('expenses', ['user_id' => $manager->id, 'amount' => '640.00'], 'tenant');
     }
 
     public function test_a_manager_can_update_an_expense_but_not_delete_one(): void
@@ -287,7 +287,7 @@ class ExpenseTest extends TestCase
 
         $this->actingAs($manager)->delete(route('expenses.destroy', $expense))->assertForbidden();
 
-        $this->assertDatabaseHas('expenses', ['id' => $expense->id]);
+        $this->assertDatabaseHas('expenses', ['id' => $expense->id], 'tenant');
     }
 
     public function test_an_admin_can_delete_an_expense(): void
@@ -298,7 +298,7 @@ class ExpenseTest extends TestCase
             ->delete(route('expenses.destroy', $expense))
             ->assertRedirect(route('expenses.index'));
 
-        $this->assertDatabaseMissing('expenses', ['id' => $expense->id]);
+        $this->assertDatabaseMissing('expenses', ['id' => $expense->id], 'tenant');
     }
 
     public function test_a_guest_is_redirected_to_login_from_every_expense_route(): void

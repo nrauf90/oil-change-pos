@@ -81,7 +81,7 @@ class TenantConnectionIsolationTest extends TestCase
             throw new RuntimeException('Unable to create the central test database.');
         }
 
-        config()->set('database.default', 'sqlite');
+        config()->set('database.default', 'central');
         config()->set('database.tenant_sqlite_root', $this->tenantRoot);
         config()->set(
             'database.tenant_attestation_lock_path',
@@ -285,7 +285,7 @@ class TenantConnectionIsolationTest extends TestCase
 
         $this->manager->connect($this->shopA);
         $this->assertTrue(Item::query()->where('name', 'Only in shop A')->exists());
-        $this->assertSame('sqlite', config('database.default'));
+        $this->assertSame('central', config('database.default'));
     }
 
     public function test_wrong_tenant_installation_marker_is_rejected_before_context_initializes(): void

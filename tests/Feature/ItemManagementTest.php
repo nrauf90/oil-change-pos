@@ -48,7 +48,7 @@ class ItemManagementTest extends TestCase
             'name' => 'Cabin Filter',
             'type' => 'product',
             'unit_cost' => '1200.50',
-        ]);
+        ], 'tenant');
     }
 
     public function test_a_repair_item_can_be_created_without_a_unit_cost(): void
@@ -62,7 +62,7 @@ class ItemManagementTest extends TestCase
             'name' => 'AC Gas Refill',
             'type' => 'repair',
             'unit_cost' => null,
-        ]);
+        ], 'tenant');
     }
 
     public function test_item_name_is_required(): void
@@ -70,7 +70,7 @@ class ItemManagementTest extends TestCase
         $this->post(route('items.store'), ['name' => '', 'type' => 'product'])
             ->assertSessionHasErrors('name');
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     public function test_item_type_must_be_product_or_repair(): void
@@ -78,7 +78,7 @@ class ItemManagementTest extends TestCase
         $this->post(route('items.store'), ['name' => 'Mystery', 'type' => 'labour'])
             ->assertSessionHasErrors('type');
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     public function test_duplicate_item_names_are_rejected(): void
@@ -88,7 +88,7 @@ class ItemManagementTest extends TestCase
         $this->post(route('items.store'), ['name' => 'Air Filter', 'type' => 'product'])
             ->assertSessionHasErrors('name');
 
-        $this->assertDatabaseCount('items', 1);
+        $this->assertDatabaseCount('items', 1, 'tenant');
     }
 
     public function test_an_item_can_be_updated(): void
@@ -106,7 +106,7 @@ class ItemManagementTest extends TestCase
             'name' => 'New Name',
             'type' => 'repair',
             'unit_cost' => '250.00',
-        ]);
+        ], 'tenant');
     }
 
     public function test_an_item_can_be_deleted(): void
@@ -116,7 +116,7 @@ class ItemManagementTest extends TestCase
         $this->delete(route('items.destroy', $item))
             ->assertRedirect(route('items.index'));
 
-        $this->assertDatabaseMissing('items', ['id' => $item->id]);
+        $this->assertDatabaseMissing('items', ['id' => $item->id], 'tenant');
     }
 
     public function test_inventory_can_be_filtered_by_type(): void
@@ -330,7 +330,7 @@ class ItemManagementTest extends TestCase
             ->call('create')
             ->assertHasFormErrors(['vehicleCompatibilities']);
 
-        $this->assertDatabaseMissing('items', ['name' => 'Incomplete Specific Filter']);
+        $this->assertDatabaseMissing('items', ['name' => 'Incomplete Specific Filter'], 'tenant');
     }
 
     public function test_editing_a_vehicle_specific_product_replaces_compatibility_rows_without_leaving_stale_links(): void
@@ -376,11 +376,11 @@ class ItemManagementTest extends TestCase
             'vehicle_model_id' => $civic->getKey(),
             'year_from' => 2014,
             'year_to' => 2018,
-        ]);
+        ], 'tenant');
         $this->assertDatabaseMissing('item_vehicle_compatibilities', [
             'item_id' => $item->getKey(),
             'vehicle_model_id' => $corolla->getKey(),
-        ]);
+        ], 'tenant');
     }
 
     public function test_the_owner_cannot_submit_an_inverted_compatibility_year_range(): void
@@ -411,7 +411,7 @@ class ItemManagementTest extends TestCase
             $restoreRepeaterUuids();
         }
 
-        $this->assertDatabaseMissing('items', ['name' => 'Rejected Cabin Filter']);
+        $this->assertDatabaseMissing('items', ['name' => 'Rejected Cabin Filter'], 'tenant');
     }
 
     public function test_the_inventory_table_can_be_filtered_by_make_model_and_year_while_universal_products_remain_listed(): void

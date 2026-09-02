@@ -23,6 +23,10 @@ class TenantMigrationTest extends TestCase
         $this->assertFalse($schema->hasTable('items'));
         $this->assertFalse($schema->hasTable('sales'));
 
+        foreach ($this->sharedInfrastructureTables() as $table) {
+            $this->assertTrue($schema->hasTable($table), "Central schema is missing {$table}.");
+        }
+
         $shop = Shop::query()->find(app(TenantContext::class)->id());
 
         $this->assertNotNull($shop);
@@ -41,6 +45,11 @@ class TenantMigrationTest extends TestCase
             $this->assertTrue($schema->hasTable('sales'));
             $this->assertFalse($schema->hasTable('platform_users'));
             $this->assertFalse($schema->hasTable('shops'));
+
+            foreach ($this->sharedInfrastructureTables() as $table) {
+                $this->assertFalse($schema->hasTable($table), "Tenant schema contains shared {$table}.");
+            }
+
             $this->assertTrue($schema->hasColumns('tenant_installations', [
                 'shop_id',
                 'target_fingerprint',
@@ -61,6 +70,27 @@ class TenantMigrationTest extends TestCase
         });
     }
 
+    public function test_database_backed_infrastructure_uses_explicit_central_connections(): void
+    {
+        $this->assertSame('central', config('database.default'));
+        $this->assertSame('central', config('session.connection'));
+        $this->assertSame('central', config('cache.stores.database.connection'));
+        $this->assertSame('central', config('cache.stores.database.lock_connection'));
+        $this->assertSame('central', config('queue.connections.database.connection'));
+        $this->assertSame('central', config('queue.batching.database'));
+        $this->assertSame('central', config('queue.failed.database'));
+    }
+
+    public function test_base_harness_never_rebinds_the_default_pdo_to_tenant(): void
+    {
+        $source = file_get_contents(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'TestCase.php');
+
+        $this->assertIsString($source);
+        $this->assertStringNotContainsString('aliasDefaultConnectionToTenant', $source);
+        $this->assertStringNotContainsString('->setPdo(', $source);
+        $this->assertStringNotContainsString('->setReadPdo(', $source);
+    }
+
     public function test_default_harness_uses_manager_owned_isolated_database_files(): void
     {
         $manager = app(TenantConnectionManager::class);
@@ -75,6 +105,21 @@ class TenantMigrationTest extends TestCase
         $this->assertNotSame($centralDatabase, $tenantDatabase);
         $this->assertFileExists($centralDatabase);
         $this->assertFileExists($tenantDatabase);
-        $this->assertSame($defaultConnection->getPdo(), DB::connection('tenant')->getPdo());
+        $this->assertSame('central', config('database.default'));
+        $this->assertSame(DB::connection('central')->getPdo(), $defaultConnection->getPdo());
+        $this->assertNotSame($defaultConnection->getPdo(), DB::connection('tenant')->getPdo());
+    }
+
+    /** @return list<string> */
+    private function sharedInfrastructureTables(): array
+    {
+        return [
+            'sessions',
+            'cache',
+            'cache_locks',
+            'jobs',
+            'job_batches',
+            'failed_jobs',
+        ];
     }
 }

@@ -16,7 +16,7 @@ return [
     |
     */
 
-    'default' => env('DB_CONNECTION', 'sqlite'),
+    'default' => env('DB_CONNECTION', 'central'),
 
     'tenant_sqlite_root' => env('TENANT_SQLITE_ROOT', database_path('tenants')),
 
@@ -26,7 +26,7 @@ return [
     ),
 
     'tenant_connection_template' => [
-        'driver' => env('TENANT_DB_CONNECTION', env('DB_CONNECTION', 'sqlite')),
+        'driver' => env('TENANT_DB_CONNECTION', 'sqlite'),
         'host' => env('TENANT_DB_HOST', env('DB_HOST', '127.0.0.1')),
         'port' => env('TENANT_DB_PORT', env('DB_PORT', '3306')),
         'database' => env('TENANT_DB_DATABASE', env('DB_DATABASE', database_path('database.sqlite'))),
@@ -71,7 +71,7 @@ return [
         ],
 
         'central' => [
-            'driver' => env('CENTRAL_DB_CONNECTION', env('DB_CONNECTION', 'sqlite')),
+            'driver' => env('CENTRAL_DB_CONNECTION', 'sqlite'),
             'url' => env('CENTRAL_DB_URL'),
             'host' => env('CENTRAL_DB_HOST', env('DB_HOST', '127.0.0.1')),
             'port' => env('CENTRAL_DB_PORT', env('DB_PORT', '3306')),

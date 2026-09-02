@@ -204,7 +204,7 @@ class MoneyParityTest extends TestCase
             ->post(route('sales.store'), $this->payload('1,200.50'));
 
         $response->assertSessionHasNoErrors();
-        $this->assertDatabaseHas('sales', ['total_amount' => '1200.50']);
+        $this->assertDatabaseHas('sales', ['total_amount' => '1200.50'], 'tenant');
     }
 
     public function test_an_exponent_price_is_refused_rather_than_billed_as_zero(): void
@@ -213,7 +213,7 @@ class MoneyParityTest extends TestCase
             ->post(route('sales.store'), $this->payload('1e3'));
 
         $response->assertSessionHasErrors('lines.0.manually_charged_price');
-        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
     }
 
     /* ---------------------------- helpers ---------------------------- */

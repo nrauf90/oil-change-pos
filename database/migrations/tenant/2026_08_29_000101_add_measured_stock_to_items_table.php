@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -16,7 +17,10 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('items', function (Blueprint $table) {
+        $schema = Schema::connection('tenant');
+        $database = DB::connection('tenant');
+
+        $schema->table('items', function (Blueprint $table) {
             $table->string('unit_of_measure')->default('piece')->after('type')->index();
             // How the shop buys it: a "Carton" of 4 bottles, 4 litres each.
             $table->string('pack_label')->nullable()->after('unit_of_measure');
@@ -25,21 +29,21 @@ return new class extends Migration
         });
 
         // SQLite cannot ALTER a column type in place, so rebuild both columns.
-        Schema::table('items', function (Blueprint $table) {
+        $schema->table('items', function (Blueprint $table) {
             $table->decimal('stock_level_new', 12, 3)->nullable();
             $table->decimal('low_stock_alert_new', 12, 3)->nullable();
         });
 
-        DB::table('items')->update([
-            'stock_level_new' => DB::raw('stock_level'),
-            'low_stock_alert_new' => DB::raw('low_stock_alert'),
+        $database->table('items')->update([
+            'stock_level_new' => $database->raw('stock_level'),
+            'low_stock_alert_new' => $database->raw('low_stock_alert'),
         ]);
 
-        Schema::table('items', function (Blueprint $table) {
+        $schema->table('items', function (Blueprint $table) {
             $table->dropColumn(['stock_level', 'low_stock_alert']);
         });
 
-        Schema::table('items', function (Blueprint $table) {
+        $schema->table('items', function (Blueprint $table) {
             $table->renameColumn('stock_level_new', 'stock_level');
             $table->renameColumn('low_stock_alert_new', 'low_stock_alert');
         });
@@ -47,7 +51,7 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::table('items', function (Blueprint $table) {
+        Schema::connection('tenant')->table('items', function (Blueprint $table) {
             $table->dropColumn(['unit_of_measure', 'pack_label', 'units_per_pack', 'measure_per_unit']);
         });
     }

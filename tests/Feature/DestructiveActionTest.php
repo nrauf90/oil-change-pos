@@ -87,7 +87,7 @@ class DestructiveActionTest extends TestCase
             ->delete(route('sales.destroy', $sale))
             ->assertForbidden();
 
-        $this->assertDatabaseHas('sales', ['id' => $sale->id]);
+        $this->assertDatabaseHas('sales', ['id' => $sale->id], 'tenant');
     }
 
     public function test_a_confirmed_delete_still_removes_the_record(): void
@@ -96,6 +96,6 @@ class DestructiveActionTest extends TestCase
 
         $this->delete(route('sales.destroy', $sale))->assertRedirect(route('sales.index'));
 
-        $this->assertDatabaseMissing('sales', ['id' => $sale->id]);
+        $this->assertDatabaseMissing('sales', ['id' => $sale->id], 'tenant');
     }
 }

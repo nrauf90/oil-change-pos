@@ -6,6 +6,7 @@ use App\Models\Central\Shop;
 use App\Tenancy\TenantConnectionManager;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
+use Illuminate\Foundation\Testing\RefreshDatabaseState;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -19,6 +20,9 @@ abstract class TestCase extends BaseTestCase
     private static ?string $testDatabaseRoot = null;
 
     private static bool $centralDatabaseMigrated = false;
+
+    /** @var list<string> */
+    protected array $connectionsToTransact = ['central', 'tenant'];
 
     private ?string $defaultTestTenantDatabase = null;
 
@@ -35,7 +39,6 @@ abstract class TestCase extends BaseTestCase
                 DB::connection((string) config('database.default'))->select('select 1');
             }
 
-            $this->aliasDefaultConnectionToTenant();
             $this->beforeApplicationDestroyed(function (): void {
                 $this->cleanUpDefaultTenantDatabases();
             });
@@ -64,6 +67,7 @@ abstract class TestCase extends BaseTestCase
         (new Filesystem)->ensureDirectoryExists($tenantRoot, 0700);
 
         config()->set('database.tenant_sqlite_root', $tenantRoot);
+        config()->set('database.default', 'central');
         config()->set(
             'database.tenant_attestation_lock_path',
             $databaseRoot.DIRECTORY_SEPARATOR.'attestation-locks',
@@ -92,33 +96,7 @@ abstract class TestCase extends BaseTestCase
         );
         $this->createMigratedTenantDatabase($shop);
         app(TenantConnectionManager::class)->connect($shop);
-    }
-
-    private function aliasDefaultConnectionToTenant(): void
-    {
-        $defaultConnection = DB::connection((string) config('database.default'));
-        $tenantConnection = DB::connection('tenant');
-        $transactionLevel = $defaultConnection->transactionLevel();
-
-        while ($defaultConnection->transactionLevel() > 0) {
-            $defaultConnection->rollBack();
-        }
-
-        $defaultConnection->setPdo($tenantConnection->getPdo());
-        $defaultConnection->setReadPdo($tenantConnection->getReadPdo());
-
-        for ($level = 0; $level < $transactionLevel; $level++) {
-            $defaultConnection->beginTransaction();
-        }
-
-        if ($this->app->bound('db.transactions')) {
-            $tenantConnection->setTransactionManager($this->app->make('db.transactions'));
-        }
-
-        $synchronizeTransactionLevel = function (int $transactionLevel): void {
-            $this->transactions = $transactionLevel;
-        };
-        $synchronizeTransactionLevel->call($tenantConnection, $defaultConnection->transactionLevel());
+        RefreshDatabaseState::$migrated = true;
     }
 
     private function cleanUpDefaultTenantDatabases(): void

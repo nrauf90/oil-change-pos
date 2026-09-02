@@ -37,7 +37,7 @@ class CustomerVehicleTest extends TestCase
             'vehicle_model' => 'Toyota Corolla 2018',
             'vehicle_plate' => 'ABC-123',
             'mileage' => 84500,
-        ]);
+        ], 'tenant');
     }
 
     public function test_a_returning_vehicle_refreshes_its_saved_details_without_creating_a_duplicate(): void
@@ -51,13 +51,13 @@ class CustomerVehicleTest extends TestCase
             'mileage' => 91000,
         ]))->assertRedirect();
 
-        $this->assertDatabaseCount('customer_vehicles', 1);
+        $this->assertDatabaseCount('customer_vehicles', 1, 'tenant');
         $this->assertDatabaseHas('customer_vehicles', [
             'customer_name' => 'Ali Ahmed',
             'vehicle_model' => 'Toyota Corolla 2018',
             'vehicle_plate' => 'ABC-123',
             'mileage' => 91000,
-        ]);
+        ], 'tenant');
     }
 
     public function test_a_walk_in_sale_does_not_create_an_empty_saved_profile(): void
@@ -72,7 +72,7 @@ class CustomerVehicleTest extends TestCase
             ]))
             ->assertRedirect();
 
-        $this->assertDatabaseCount('customer_vehicles', 0);
+        $this->assertDatabaseCount('customer_vehicles', 0, 'tenant');
     }
 
     public function test_the_sale_screen_offers_saved_profiles_for_selection(): void

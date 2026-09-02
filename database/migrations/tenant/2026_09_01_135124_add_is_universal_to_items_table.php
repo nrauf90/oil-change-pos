@@ -12,11 +12,14 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('items', function (Blueprint $table) {
+        Schema::connection('tenant')->table('items', function (Blueprint $table) {
             $table->boolean('is_universal')->default(false)->after('type')->index();
         });
 
-        DB::table('items')->where('type', 'product')->update(['is_universal' => true]);
+        DB::connection('tenant')
+            ->table('items')
+            ->where('type', 'product')
+            ->update(['is_universal' => true]);
     }
 
     /**
@@ -24,7 +27,7 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('items', function (Blueprint $table) {
+        Schema::connection('tenant')->table('items', function (Blueprint $table) {
             $table->dropColumn('is_universal');
         });
     }

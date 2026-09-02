@@ -57,7 +57,7 @@ class CheckoutTest extends TestCase
             'vehicle_model' => 'Toyota Corolla 2018',
             'vehicle_plate' => 'ABC-123',
             'mileage' => 84500,
-        ]);
+        ], 'tenant');
     }
 
     public function test_checkout_redirects_to_the_printable_invoice(): void
@@ -199,7 +199,7 @@ class CheckoutTest extends TestCase
             'lines' => [], 'labor_charge' => '', 'misc_charge' => '',
         ]))->assertSessionHasErrors('lines');
 
-        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
     }
 
     public function test_a_line_without_a_description_is_rejected(): void
@@ -208,7 +208,7 @@ class CheckoutTest extends TestCase
             'lines' => [['item_id' => null, 'item_name' => '', 'type' => 'custom', 'manually_charged_price' => '100']],
         ]))->assertSessionHasErrors('lines.0.item_name');
 
-        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
     }
 
     public function test_a_line_with_an_unknown_type_is_rejected(): void
@@ -224,7 +224,7 @@ class CheckoutTest extends TestCase
             'lines' => [['item_id' => 99999, 'item_name' => 'Ghost', 'type' => 'product', 'manually_charged_price' => '100']],
         ]))->assertSessionHasErrors('lines.0.item_id');
 
-        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
     }
 
     public function test_a_non_numeric_price_is_rejected(): void
@@ -256,8 +256,8 @@ class CheckoutTest extends TestCase
             ],
         ]))->assertSessionHasErrors();
 
-        $this->assertDatabaseCount('sales', 0);
-        $this->assertDatabaseCount('sale_items', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
+        $this->assertDatabaseCount('sale_items', 0, 'tenant');
     }
 
     public function test_customer_details_are_optional_for_a_walk_in(): void
@@ -267,7 +267,7 @@ class CheckoutTest extends TestCase
             'vehicle_plate' => '', 'mileage' => '',
         ]))->assertRedirect();
 
-        $this->assertDatabaseCount('sales', 1);
+        $this->assertDatabaseCount('sales', 1, 'tenant');
         $this->assertNull(Sale::sole()->mileage);
     }
 
@@ -337,7 +337,7 @@ class CheckoutTest extends TestCase
             ],
         ]))->assertSessionHasErrors('lines.0.quantity');
 
-        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
     }
 
     public function test_a_fractional_quantity_is_rejected(): void
@@ -389,7 +389,7 @@ class CheckoutTest extends TestCase
         $sale = Sale::sole();
         $cashier->delete();
 
-        $this->assertDatabaseCount('sales', 1);
+        $this->assertDatabaseCount('sales', 1, 'tenant');
         $this->assertNull($sale->refresh()->cashier_id, 'the FK should null out, not cascade');
         $this->assertNull($sale->cashier);
     }
@@ -411,7 +411,7 @@ class CheckoutTest extends TestCase
             ],
         ]))->assertSessionHasErrors('lines.0.type');
 
-        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
     }
 
     public function test_a_repair_line_may_not_point_at_a_product_item(): void
@@ -424,7 +424,7 @@ class CheckoutTest extends TestCase
             ],
         ]))->assertSessionHasErrors('lines.0.type');
 
-        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
     }
 
     public function test_a_line_whose_type_matches_its_item_is_accepted(): void
@@ -439,7 +439,7 @@ class CheckoutTest extends TestCase
             ],
         ]))->assertSessionHasNoErrors();
 
-        $this->assertDatabaseCount('sales', 1);
+        $this->assertDatabaseCount('sales', 1, 'tenant');
     }
 
     public function test_a_deactivated_item_cannot_be_sold(): void
@@ -453,7 +453,7 @@ class CheckoutTest extends TestCase
             ],
         ]))->assertSessionHasErrors('lines.0.item_id');
 
-        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
     }
 
     public function test_a_custom_line_is_unaffected_by_the_item_type_cross_check(): void

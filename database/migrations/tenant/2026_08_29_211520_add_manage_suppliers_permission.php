@@ -1,27 +1,51 @@
 <?php
 
-use App\Enums\Permission as PermissionEnum;
-use App\Models\Permission;
-use App\Models\Role;
 use Illuminate\Database\Migrations\Migration;
-use Spatie\Permission\PermissionRegistrar;
+use Illuminate\Support\Facades\DB;
 
 return new class extends Migration
 {
+    private const PERMISSION = 'suppliers.manage';
+
     public function up(): void
     {
-        app(PermissionRegistrar::class)->forgetCachedPermissions();
+        $database = DB::connection('tenant');
+        $now = now();
 
-        $permission = Permission::findOrCreate(PermissionEnum::ManageSuppliers->value, 'web');
-        Role::findOrCreate('admin', 'web')->givePermissionTo($permission);
+        $database->table('permissions')->insertOrIgnore([
+            'name' => self::PERMISSION,
+            'guard_name' => 'web',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $database->table('roles')->insertOrIgnore([
+            'name' => 'admin',
+            'guard_name' => 'web',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
 
-        app(PermissionRegistrar::class)->forgetCachedPermissions();
+        $permissionId = $database->table('permissions')
+            ->where('name', self::PERMISSION)
+            ->where('guard_name', 'web')
+            ->value('id');
+        $roleId = $database->table('roles')
+            ->where('name', 'admin')
+            ->where('guard_name', 'web')
+            ->value('id');
+
+        $database->table('role_has_permissions')->insertOrIgnore([
+            'permission_id' => $permissionId,
+            'role_id' => $roleId,
+        ]);
     }
 
     public function down(): void
     {
-        app(PermissionRegistrar::class)->forgetCachedPermissions();
-        Permission::query()->where('name', PermissionEnum::ManageSuppliers->value)->delete();
-        app(PermissionRegistrar::class)->forgetCachedPermissions();
+        DB::connection('tenant')
+            ->table('permissions')
+            ->where('name', self::PERMISSION)
+            ->where('guard_name', 'web')
+            ->delete();
     }
 };

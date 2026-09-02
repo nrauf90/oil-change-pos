@@ -1,48 +1,131 @@
 <?php
 
-use App\Enums\Permission as PermissionEnum;
-use App\Enums\Role as RoleEnum;
-use App\Models\Permission;
-use App\Models\Role;
 use Illuminate\Database\Migrations\Migration;
-use Spatie\Permission\PermissionRegistrar;
+use Illuminate\Support\Facades\DB;
 
-/**
- * Re-syncs the roles/permissions tables from the enums.
- *
- * A fresh database gets its matrix from the original seeding migration, but a
- * shop that is already running has long since passed that point — so every time
- * a permission is added to the enum, an already-migrated database needs to be
- * brought back in step. This run adds `modules.manage`, which splits the module
- * switchboard away from `logs.view`.
- *
- * Idempotent: it creates what is missing and syncs each role to the enum, so
- * re-running it is a no-op. Permissions the enum no longer declares are dropped,
- * which keeps the enum the single source of truth.
- */
 return new class extends Migration
 {
+    private const PERMISSIONS = [
+        'pos.use',
+        'sales.view_any',
+        'sales.view',
+        'sales.create',
+        'sales.delete',
+        'sales.export_pdf',
+        'pricing.view',
+        'items.view_any',
+        'items.create',
+        'items.quick_create',
+        'items.update',
+        'items.delete',
+        'items.view_unit_cost',
+        'items.set_unit_cost',
+        'items.view_stock',
+        'items.manage_stock',
+        'reports.view_dashboard',
+        'reports.view_financials',
+        'reports.view_margins',
+        'expenses.view_any',
+        'expenses.create',
+        'expenses.update',
+        'expenses.delete',
+        'expenses.view_cash_drawer',
+        'users.view_any',
+        'users.create',
+        'users.update',
+        'users.delete',
+        'scripts.view',
+        'service_history.lookup',
+        'inspections.view_any',
+        'inspections.create',
+        'inspections.update',
+        'modules.manage',
+        'logs.view',
+    ];
+
+    private const ROLE_PERMISSIONS = [
+        'admin' => self::PERMISSIONS,
+        'manager' => [
+            'pos.use',
+            'sales.view_any',
+            'sales.view',
+            'sales.create',
+            'sales.export_pdf',
+            'pricing.view',
+            'items.view_any',
+            'items.create',
+            'items.quick_create',
+            'items.update',
+            'items.view_stock',
+            'items.manage_stock',
+            'reports.view_dashboard',
+            'reports.view_financials',
+            'expenses.view_any',
+            'expenses.create',
+            'expenses.update',
+            'expenses.view_cash_drawer',
+            'scripts.view',
+            'service_history.lookup',
+            'inspections.view_any',
+            'inspections.create',
+            'inspections.update',
+        ],
+        'technician' => [
+            'scripts.view',
+            'service_history.lookup',
+            'inspections.view_any',
+            'inspections.create',
+            'inspections.update',
+        ],
+    ];
+
     public function up(): void
     {
-        app(PermissionRegistrar::class)->forgetCachedPermissions();
+        $database = DB::connection('tenant');
+        $now = now();
 
-        foreach (PermissionEnum::cases() as $permission) {
-            Permission::findOrCreate($permission->value, 'web');
+        $database->table('permissions')->insertOrIgnore(array_map(
+            static fn (string $permission): array => [
+                'name' => $permission,
+                'guard_name' => 'web',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            self::PERMISSIONS,
+        ));
+        $database->table('permissions')->whereNotIn('name', self::PERMISSIONS)->delete();
+
+        $database->table('roles')->insertOrIgnore(array_map(
+            static fn (string $role): array => [
+                'name' => $role,
+                'guard_name' => 'web',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            array_keys(self::ROLE_PERMISSIONS),
+        ));
+
+        $permissionIds = $database->table('permissions')
+            ->where('guard_name', 'web')
+            ->whereIn('name', self::PERMISSIONS)
+            ->pluck('id', 'name');
+        $roleIds = $database->table('roles')
+            ->where('guard_name', 'web')
+            ->whereIn('name', array_keys(self::ROLE_PERMISSIONS))
+            ->pluck('id', 'name');
+
+        foreach (self::ROLE_PERMISSIONS as $role => $permissions) {
+            $roleId = $roleIds->get($role);
+            $database->table('role_has_permissions')->where('role_id', $roleId)->delete();
+            $database->table('role_has_permissions')->insert(array_map(
+                static fn (string $permission): array => [
+                    'permission_id' => $permissionIds->get($permission),
+                    'role_id' => $roleId,
+                ],
+                $permissions,
+            ));
         }
-
-        Permission::query()->whereNotIn('name', PermissionEnum::values())->delete();
-
-        foreach (RoleEnum::cases() as $roleEnum) {
-            Role::findOrCreate($roleEnum->value, 'web')
-                ->syncPermissions($roleEnum->permissionNames());
-        }
-
-        app(PermissionRegistrar::class)->forgetCachedPermissions();
     }
 
-    public function down(): void
-    {
-        // Nothing to undo: this migration only restores the matrix the enums
-        // describe. Rolling it back would leave the database out of step.
-    }
+    public function down(): void {}
 };

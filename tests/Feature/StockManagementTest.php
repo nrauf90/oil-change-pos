@@ -48,7 +48,7 @@ class StockManagementTest extends TestCase
             'name' => 'ZIC X7 10W-40',
             'stock_level' => 24,
             'low_stock_alert' => 5,
-        ]);
+        ], 'tenant');
     }
 
     public function test_a_product_may_be_left_untracked(): void
@@ -64,7 +64,7 @@ class StockManagementTest extends TestCase
             'name' => 'Assorted Washers',
             'stock_level' => null,
             'low_stock_alert' => null,
-        ]);
+        ], 'tenant');
     }
 
     public function test_a_repair_may_not_carry_a_stock_level(): void
@@ -75,7 +75,7 @@ class StockManagementTest extends TestCase
             'stock_level' => 10,
         ])->assertSessionHasErrors('stock_level');
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     public function test_a_repair_may_not_carry_a_low_stock_alert(): void
@@ -86,7 +86,7 @@ class StockManagementTest extends TestCase
             'low_stock_alert' => 3,
         ])->assertSessionHasErrors('low_stock_alert');
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     public function test_a_repair_saves_normally_when_no_stock_is_sent(): void
@@ -96,7 +96,7 @@ class StockManagementTest extends TestCase
             'type' => 'repair',
         ])->assertSessionHasNoErrors();
 
-        $this->assertDatabaseHas('items', ['name' => 'Radiator Flush', 'stock_level' => null]);
+        $this->assertDatabaseHas('items', ['name' => 'Radiator Flush', 'stock_level' => null], 'tenant');
     }
 
     public function test_a_negative_stock_level_is_rejected_on_the_item_form(): void
@@ -118,7 +118,7 @@ class StockManagementTest extends TestCase
             ->assertStatus(422)
             ->assertJsonValidationErrors('stock_level');
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     public function test_the_quick_add_endpoint_accepts_an_opening_stock_for_a_product(): void
@@ -294,7 +294,7 @@ class StockManagementTest extends TestCase
             ['item_id' => null, 'item_name' => '', 'type' => 'custom', 'manually_charged_price' => '200'],
         ]))->assertSessionHasErrors();
 
-        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
         $this->assertSame('10.000', $item->refresh()->stock_level);
     }
 
@@ -312,7 +312,7 @@ class StockManagementTest extends TestCase
             ['item_id' => $item->id, 'item_name' => $item->name, 'type' => 'product', 'quantity' => 5, 'manually_charged_price' => '4200'],
         ]))->assertRedirect();
 
-        $this->assertDatabaseCount('sales', 1);
+        $this->assertDatabaseCount('sales', 1, 'tenant');
         $this->assertSame('-4.000', $item->refresh()->stock_level);
     }
 

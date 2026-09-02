@@ -157,7 +157,7 @@ class MeasuredInventoryUiTest extends TestCase
             'unit_of_measure' => 'gallon',
         ])->assertSessionHasErrors('unit_of_measure');
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     public function test_a_pack_cannot_hold_fewer_than_one_unit(): void
@@ -204,7 +204,7 @@ class MeasuredInventoryUiTest extends TestCase
             'stock_level' => 10,
         ])->assertSessionHasErrors('stock_level');
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     public function test_packaging_details_are_dropped_when_an_item_is_counted_in_pieces(): void

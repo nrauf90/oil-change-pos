@@ -183,8 +183,8 @@ class ActivityLogTest extends TestCase
             ->delete(route('sales.destroy', $sale))
             ->assertForbidden();
 
-        $this->assertDatabaseMissing('activity_logs', ['action' => 'sale.deleted']);
-        $this->assertDatabaseHas('sales', ['id' => $sale->id]);
+        $this->assertDatabaseMissing('activity_logs', ['action' => 'sale.deleted'], 'tenant');
+        $this->assertDatabaseHas('sales', ['id' => $sale->id], 'tenant');
     }
 
     /* ---------------------------------------------------------------- */
@@ -374,7 +374,7 @@ class ActivityLogTest extends TestCase
         // like that is not an administrative act and must not drown the trail.
         $staff->forceFill(['last_login_at' => now()])->save();
 
-        $this->assertDatabaseMissing('activity_logs', ['action' => 'user.updated']);
+        $this->assertDatabaseMissing('activity_logs', ['action' => 'user.updated'], 'tenant');
     }
 
     public function test_an_update_that_moves_only_the_timestamp_is_not_logged(): void
@@ -387,7 +387,7 @@ class ActivityLogTest extends TestCase
         $this->travel(5)->minutes();
         $item->touch();
 
-        $this->assertDatabaseMissing('activity_logs', ['action' => 'item.updated']);
+        $this->assertDatabaseMissing('activity_logs', ['action' => 'item.updated'], 'tenant');
     }
 
     /* ---------------------------------------------------------------- */
@@ -434,7 +434,7 @@ class ActivityLogTest extends TestCase
 
         $this->assertThrows(fn () => ActivityLog::query()->firstOrFail()->delete(), LogicException::class);
 
-        $this->assertDatabaseHas('activity_logs', ['id' => $entry->id, 'description' => 'Indelible entry']);
+        $this->assertDatabaseHas('activity_logs', ['id' => $entry->id, 'description' => 'Indelible entry'], 'tenant');
     }
 
     public function test_a_log_entry_cannot_be_modified(): void
@@ -443,8 +443,8 @@ class ActivityLogTest extends TestCase
 
         $this->assertThrows(fn () => $entry->update(['description' => 'Tampered wording']), LogicException::class);
 
-        $this->assertDatabaseHas('activity_logs', ['id' => $entry->id, 'description' => 'Original wording']);
-        $this->assertDatabaseMissing('activity_logs', ['description' => 'Tampered wording']);
+        $this->assertDatabaseHas('activity_logs', ['id' => $entry->id, 'description' => 'Original wording'], 'tenant');
+        $this->assertDatabaseMissing('activity_logs', ['description' => 'Tampered wording'], 'tenant');
     }
 
     public function test_the_activity_log_is_append_only_over_http(): void
@@ -482,7 +482,7 @@ class ActivityLogTest extends TestCase
         // a genuinely empty trail is the one the model refuses to offer: going
         // around it, straight at the table. That is the point — the log empties
         // when the database is wiped, and by no other means.
-        DB::table('activity_logs')->delete();
+        DB::connection('tenant')->table('activity_logs')->delete();
 
         $this->get(route('activity-log.index'))
             ->assertOk()

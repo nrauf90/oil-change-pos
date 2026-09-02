@@ -56,6 +56,7 @@ class CentralDomainTest extends TestCase
 
         $this->tenantDatabaseRoot = $this->newTemporaryDirectory('tenant-databases-');
         config()->set('database.tenant_sqlite_root', $this->tenantDatabaseRoot);
+        config()->set('database.default', 'central');
 
         $centralDatabasePath = $this->newTemporaryDatabasePath('central-domain-');
 
@@ -88,6 +89,11 @@ class CentralDomainTest extends TestCase
         } finally {
             parent::tearDown();
         }
+    }
+
+    protected function usesDefaultTenantContext(): bool
+    {
+        return false;
     }
 
     public function test_central_models_never_use_the_tenant_connection(): void
@@ -152,16 +158,18 @@ class CentralDomainTest extends TestCase
         $this->assertSame(1, $centralForeignKeys);
     }
 
-    public function test_central_database_remains_distinct_from_the_default_connection(): void
+    public function test_central_database_is_the_default_without_operational_tables(): void
     {
         $shop = Shop::factory()->create();
 
         $this->assertDatabaseHas('shops', ['id' => $shop->getKey()], 'central');
-        $this->assertFalse(Schema::connection(config('database.default'))->hasTable('shops'));
-        $this->assertNotSame(
-            DB::connection(config('database.default'))->getDatabaseName(),
+        $this->assertSame('central', config('database.default'));
+        $this->assertSame(
             DB::connection('central')->getDatabaseName(),
+            DB::connection((string) config('database.default'))->getDatabaseName(),
         );
+        $this->assertFalse(Schema::connection('central')->hasTable('items'));
+        $this->assertFalse(Schema::connection('central')->hasTable('sales'));
     }
 
     public function test_shop_connection_overrides_are_not_serialized(): void

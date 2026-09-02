@@ -220,7 +220,7 @@ class MeasuredStockTest extends TestCase
             'manually_charged_price' => '2400',
         ]);
 
-        $this->assertDatabaseCount('sales', 1);
+        $this->assertDatabaseCount('sales', 1, 'tenant');
         $this->assertSame('7.000', $filter->refresh()->stock_level);
     }
 
@@ -301,7 +301,7 @@ class MeasuredStockTest extends TestCase
             'manually_charged_price' => '300',
         ])->assertSessionHasErrors('lines.0.dispensed_quantity');
 
-        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
     }
 
     public function test_running_the_cylinder_dry_does_not_block_the_sale(): void
@@ -319,7 +319,7 @@ class MeasuredStockTest extends TestCase
 
         // The gas is already in the customer's car. A drifted count must never
         // stop the shop billing them; the negative is the cue to recount.
-        $this->assertDatabaseCount('sales', 1);
+        $this->assertDatabaseCount('sales', 1, 'tenant');
         $this->assertSame('-1.000', $gas->refresh()->stock_level);
     }
 

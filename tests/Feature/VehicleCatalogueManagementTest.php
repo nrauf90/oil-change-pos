@@ -103,7 +103,7 @@ class VehicleCatalogueManagementTest extends TestCase
         );
         $this->assertDatabaseMissing('vehicle_models', [
             'id' => $city->getKey(),
-        ]);
+        ], 'tenant');
     }
 
     public function test_the_vehicle_catalogue_table_can_be_searched_by_make_or_model_name(): void
@@ -131,8 +131,8 @@ class VehicleCatalogueManagementTest extends TestCase
             ->assertHasNoTableActionErrors()
             ->assertNotified();
 
-        $this->assertDatabaseMissing('vehicle_makes', ['id' => $unusedMake->getKey()]);
-        $this->assertDatabaseMissing('vehicle_models', ['vehicle_make_id' => $unusedMake->getKey()]);
+        $this->assertDatabaseMissing('vehicle_makes', ['id' => $unusedMake->getKey()], 'tenant');
+        $this->assertDatabaseMissing('vehicle_models', ['vehicle_make_id' => $unusedMake->getKey()], 'tenant');
     }
 
     public function test_deleting_a_linked_vehicle_make_warns_about_affected_products_and_removes_only_compatibility_assignments(): void
@@ -166,9 +166,9 @@ class VehicleCatalogueManagementTest extends TestCase
             ->assertHasNoTableActionErrors()
             ->assertNotified();
 
-        $this->assertDatabaseMissing('vehicle_makes', ['id' => $make->getKey()]);
-        $this->assertDatabaseMissing('vehicle_models', ['id' => $corolla->getKey()]);
-        $this->assertDatabaseMissing('vehicle_models', ['id' => $yaris->getKey()]);
+        $this->assertDatabaseMissing('vehicle_makes', ['id' => $make->getKey()], 'tenant');
+        $this->assertDatabaseMissing('vehicle_models', ['id' => $corolla->getKey()], 'tenant');
+        $this->assertDatabaseMissing('vehicle_models', ['id' => $yaris->getKey()], 'tenant');
         $this->assertSame(0, $linkedFilter->fresh()->vehicleCompatibilities()->count());
         $this->assertSame(0, $spareFilter->fresh()->vehicleCompatibilities()->count());
         $page->assertCanSeeTableRecords([]);
@@ -211,9 +211,9 @@ class VehicleCatalogueManagementTest extends TestCase
 
         $this->assertSame('Honda', $make->name);
         $this->assertSame(['City'], $make->vehicleModels()->orderBy('name')->pluck('name')->all());
-        $this->assertDatabaseMissing('vehicle_models', ['id' => $linkedModel->getKey()]);
+        $this->assertDatabaseMissing('vehicle_models', ['id' => $linkedModel->getKey()], 'tenant');
         $this->assertSame(0, $linkedFilter->fresh()->vehicleCompatibilities()->count());
-        $this->assertDatabaseHas('items', ['id' => $linkedFilter->getKey()]);
+        $this->assertDatabaseHas('items', ['id' => $linkedFilter->getKey()], 'tenant');
     }
 
     private function vehicleModelRepeaterRowKey(Testable $page, int $vehicleModelId): string

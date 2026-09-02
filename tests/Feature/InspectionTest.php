@@ -120,19 +120,19 @@ class InspectionTest extends TestCase
             'inspection_id' => $inspection->id,
             'point' => 'engine_oil',
             'status' => InspectionStatus::Ok->value,
-        ]);
+        ], 'tenant');
         $this->assertDatabaseHas('inspection_items', [
             'inspection_id' => $inspection->id,
             'point' => 'brake_pads',
             'status' => InspectionStatus::NeedsAttention->value,
             'note' => 'Fronts down to 3mm',
-        ]);
+        ], 'tenant');
         $this->assertDatabaseHas('inspection_items', [
             'inspection_id' => $inspection->id,
             'point' => 'battery',
             'status' => InspectionStatus::Urgent->value,
             'note' => 'Will not hold a charge',
-        ]);
+        ], 'tenant');
     }
 
     public function test_an_inspection_can_optionally_be_linked_to_a_sale(): void
@@ -201,7 +201,7 @@ class InspectionTest extends TestCase
             ->post(route('inspections.store'), $this->payload(['vehicle_plate' => '']))
             ->assertSessionHasErrors('vehicle_plate');
 
-        $this->assertDatabaseCount('inspections', 0);
+        $this->assertDatabaseCount('inspections', 0, 'tenant');
     }
 
     public function test_an_unknown_check_point_status_is_rejected(): void
@@ -212,7 +212,7 @@ class InspectionTest extends TestCase
             ]))
             ->assertSessionHasErrors('points.engine_oil.status');
 
-        $this->assertDatabaseCount('inspections', 0);
+        $this->assertDatabaseCount('inspections', 0, 'tenant');
     }
 
     public function test_an_unknown_check_point_is_rejected(): void
@@ -223,7 +223,7 @@ class InspectionTest extends TestCase
             ]))
             ->assertSessionHasErrors('points');
 
-        $this->assertDatabaseCount('inspections', 0);
+        $this->assertDatabaseCount('inspections', 0, 'tenant');
     }
 
     public function test_at_least_one_check_point_must_be_recorded(): void
@@ -232,7 +232,7 @@ class InspectionTest extends TestCase
             ->post(route('inspections.store'), $this->payload(['points' => []]))
             ->assertSessionHasErrors('points');
 
-        $this->assertDatabaseCount('inspections', 0);
+        $this->assertDatabaseCount('inspections', 0, 'tenant');
     }
 
     public function test_mileage_must_be_an_integer(): void
@@ -241,7 +241,7 @@ class InspectionTest extends TestCase
             ->post(route('inspections.store'), $this->payload(['mileage' => 'seventy thousand']))
             ->assertSessionHasErrors('mileage');
 
-        $this->assertDatabaseCount('inspections', 0);
+        $this->assertDatabaseCount('inspections', 0, 'tenant');
     }
 
     public function test_mileage_cannot_be_negative(): void
@@ -250,7 +250,7 @@ class InspectionTest extends TestCase
             ->post(route('inspections.store'), $this->payload(['mileage' => -5]))
             ->assertSessionHasErrors('mileage');
 
-        $this->assertDatabaseCount('inspections', 0);
+        $this->assertDatabaseCount('inspections', 0, 'tenant');
     }
 
     public function test_mileage_is_optional(): void
@@ -327,10 +327,10 @@ class InspectionTest extends TestCase
 
         $this->assertDatabaseMissing('inspection_items', [
             'inspection_id' => $inspection->id, 'point' => 'coolant',
-        ]);
+        ], 'tenant');
         $this->assertDatabaseHas('inspection_items', [
             'inspection_id' => $inspection->id, 'point' => 'engine_oil',
-        ]);
+        ], 'tenant');
         $this->assertSame(3, $inspection->fresh()->points()->count());
     }
 

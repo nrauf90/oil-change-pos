@@ -35,7 +35,7 @@ class SupplierLedgerTest extends TestCase
             'address' => 'Lahore',
         ])->assertRedirect();
 
-        $this->assertDatabaseHas('suppliers', ['name' => 'Pak Lubricants', 'contact_person' => 'Ali Raza']);
+        $this->assertDatabaseHas('suppliers', ['name' => 'Pak Lubricants', 'contact_person' => 'Ali Raza'], 'tenant');
     }
 
     public function test_supplier_list_renders_ledger_totals(): void
@@ -57,7 +57,7 @@ class SupplierLedgerTest extends TestCase
         $this->actingAs($manager)->get(route('suppliers.index'))->assertForbidden();
         $this->actingAs($manager)->post(route('suppliers.store'), ['name' => 'Hidden'])->assertForbidden();
 
-        $this->assertDatabaseMissing('suppliers', ['name' => 'Hidden']);
+        $this->assertDatabaseMissing('suppliers', ['name' => 'Hidden'], 'tenant');
     }
 
     public function test_each_supply_is_saved_separately_with_a_private_bill_image(): void
@@ -92,7 +92,7 @@ class SupplierLedgerTest extends TestCase
             'bill_image' => UploadedFile::fake()->create('bill.svg', 10, 'image/svg+xml'),
         ])->assertSessionHasErrors('bill_image');
 
-        $this->assertDatabaseCount('supplies', 0);
+        $this->assertDatabaseCount('supplies', 0, 'tenant');
     }
 
     #[TestWith(['cash'])]
@@ -117,7 +117,7 @@ class SupplierLedgerTest extends TestCase
             'category' => 'shop_supplies',
             'payment_method' => $method,
             'amount' => '250.00',
-        ]);
+        ], 'tenant');
         $this->assertSame($payment->id, Expense::sole()->supplierPayment->id);
     }
 

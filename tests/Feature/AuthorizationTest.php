@@ -136,7 +136,7 @@ class AuthorizationTest extends TestCase
             ])
             ->assertForbidden();
 
-        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
     }
 
     public function test_a_technician_cannot_read_sales_history_or_an_invoice(): void
@@ -179,7 +179,7 @@ class AuthorizationTest extends TestCase
             ->delete(route('sales.destroy', $sale))
             ->assertForbidden();
 
-        $this->assertDatabaseHas('sales', ['id' => $sale->id]);
+        $this->assertDatabaseHas('sales', ['id' => $sale->id], 'tenant');
     }
 
     public function test_an_admin_can_delete_a_sale(): void
@@ -190,7 +190,7 @@ class AuthorizationTest extends TestCase
             ->delete(route('sales.destroy', $sale))
             ->assertRedirect(route('sales.index'));
 
-        $this->assertDatabaseMissing('sales', ['id' => $sale->id]);
+        $this->assertDatabaseMissing('sales', ['id' => $sale->id], 'tenant');
     }
 
     public function test_a_manager_cannot_delete_an_inventory_item(): void
@@ -201,7 +201,7 @@ class AuthorizationTest extends TestCase
             ->delete(route('items.destroy', $item))
             ->assertForbidden();
 
-        $this->assertDatabaseHas('items', ['id' => $item->id]);
+        $this->assertDatabaseHas('items', ['id' => $item->id], 'tenant');
     }
 
     public function test_a_manager_can_create_an_item_on_the_fly(): void
@@ -217,7 +217,7 @@ class AuthorizationTest extends TestCase
             ->postJson(route('quick-items.store'), ['name' => 'Sneaky Item', 'type' => 'product'])
             ->assertForbidden();
 
-        $this->assertDatabaseCount('items', 0);
+        $this->assertDatabaseCount('items', 0, 'tenant');
     }
 
     /* ---------------------------------------------------------------- */
@@ -278,7 +278,7 @@ class AuthorizationTest extends TestCase
             'lines' => [['item_id' => null, 'item_name' => 'X', 'type' => 'custom', 'manually_charged_price' => '100']],
         ])->assertRedirect(route('login'));
 
-        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('sales', 0, 'tenant');
     }
 
     /* ---------------------------------------------------------------- */

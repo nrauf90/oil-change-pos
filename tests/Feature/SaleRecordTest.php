@@ -39,7 +39,7 @@ class SaleRecordTest extends TestCase
 
         $this->assertNull($line->item_id);
         $this->assertSame(SaleLineType::Custom, $line->type);
-        $this->assertDatabaseHas('sale_items', ['item_name' => 'Fixed jammed passenger door latch']);
+        $this->assertDatabaseHas('sale_items', ['item_name' => 'Fixed jammed passenger door latch'], 'tenant');
     }
 
     public function test_deleting_an_inventory_item_preserves_the_historical_sale_line(): void
@@ -188,7 +188,7 @@ class SaleRecordTest extends TestCase
     {
         // SQLite does not create indexes for foreign keys, so withCount('lines')
         // and every dashboard rollup would full-scan without these.
-        $indexed = collect(Schema::getIndexes('sale_items'))
+        $indexed = collect(Schema::connection('tenant')->getIndexes('sale_items'))
             ->pluck('columns')
             ->flatten()
             ->unique();
