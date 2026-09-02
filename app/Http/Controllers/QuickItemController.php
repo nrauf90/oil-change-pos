@@ -77,7 +77,7 @@ class QuickItemController extends Controller
      *
      * Delegates to the sale screen's own presenter so a quick-added item is
      * shaped exactly like one that came down with the page - same category,
-     * same glyph, same stock label. Anything the tile grid does not need but
+     * same Heroicon, same stock label. Anything the tile grid does not need but
      * inventory callers do is merged on top.
      *
      * @return array<string, mixed>

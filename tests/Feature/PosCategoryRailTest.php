@@ -129,6 +129,32 @@ class PosCategoryRailTest extends TestCase
         $this->assertSame('gas', $seeded->firstWhere('name', 'AC Gas Refill')['group']);
     }
 
+    public function test_the_sale_screen_uses_heroicons_instead_of_emoji_glyphs(): void
+    {
+        $item = Item::factory()->create();
+
+        $presented = PosController::present($item, showCost: false);
+        $response = $this->get(route('pos.create'))->assertOk();
+
+        $this->assertArrayHasKey('icon', $presented);
+        $this->assertStringStartsWith('heroicon-o-', $presented['icon']);
+        $this->assertArrayNotHasKey('glyph', $presented);
+
+        foreach ($response->viewData('groups') as $group) {
+            $this->assertStringStartsWith('heroicon-o-', $group['icon']);
+            $this->assertArrayNotHasKey('glyph', $group);
+        }
+
+        $response
+            ->assertSee('data-pos-icon', false)
+            ->assertDontSee('x-text="group.glyph"', false)
+            ->assertDontSee('x-text="item.glyph"', false)
+            ->assertDontSee('glyphOf(line)', false)
+            ->assertDontSee('&#128269;', false)
+            ->assertDontSee('&#9888;', false)
+            ->assertDontSee('&#9998;', false);
+    }
+
     /** Every shelf named in the rail is one the seeded tiles can be filed under. */
     public function test_no_tile_is_seeded_onto_a_shelf_the_rail_does_not_offer(): void
     {

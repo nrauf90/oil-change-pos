@@ -32,7 +32,10 @@
             :aria-expanded="open ? 'true' : 'false'"
             aria-haspopup="dialog"
             class="{{ $triggerClass }} {{ $floating ? 'fixed bottom-5 right-5 z-40 shadow-xl' : '' }}">
-        <span aria-hidden="true" class="{{ $iconClass }}">&#128172;</span>{{ $label }}
+        <span aria-hidden="true" class="{{ $iconClass }}">
+            <x-filament::icon icon="heroicon-o-chat-bubble-left-right" class="size-5" />
+        </span>
+        {{ $label }}
     </button>
 
     {{-- Slide-over --}}

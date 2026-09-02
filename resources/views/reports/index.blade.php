@@ -44,7 +44,7 @@
 
 @if (! $hasSales)
     <div class="card p-12 text-center">
-        <div class="text-5xl">&#128203;</div>
+        <x-filament::icon icon="heroicon-o-clipboard-document-list" class="mx-auto size-12 text-slate-400" />
         <p class="mt-4 text-xl font-black tracking-tight">No sales recorded yet</p>
         <p class="mt-1 text-sm font-medium text-slate-500">
             Ring up the first bill on the sale screen and the numbers will appear here.

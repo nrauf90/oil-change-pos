@@ -14,7 +14,9 @@
     <form method="GET" action="{{ route('sales.index') }}"
           class="flex h-14 items-center gap-3 border-b border-slate-200 bg-slate-50/80 px-4">
         <div class="relative min-w-0 flex-1">
-            <span class="pointer-events-none absolute inset-y-0 left-3 grid place-items-center text-slate-400">&#128269;</span>
+            <span class="pointer-events-none absolute inset-y-0 left-3 grid place-items-center text-slate-400">
+                <x-filament::icon icon="heroicon-o-magnifying-glass" class="size-4" />
+            </span>
             <label class="sr-only" for="q">Search invoices</label>
             <input id="q" name="q" type="search"
                    class="w-full rounded-lg border border-slate-300 bg-white py-2 pr-3 pl-9 text-sm font-semibold
@@ -88,7 +90,7 @@
                 @empty
                     <tr>
                         <td colspan="8" class="px-6 py-16 text-center">
-                            <p class="text-3xl">&#129534;</p>
+                            <x-filament::icon icon="heroicon-o-receipt-percent" class="mx-auto size-8 text-slate-400" />
                             <p class="mt-3 font-bold text-slate-500">
                                 {{ $search ? 'No invoice matches that search.' : 'No sales recorded yet.' }}
                             </p>

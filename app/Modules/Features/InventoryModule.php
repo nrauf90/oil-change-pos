@@ -24,7 +24,7 @@ class InventoryModule extends Module
 
     public function icon(): string
     {
-        return '&#128230;';
+        return 'heroicon-o-cube';
     }
 
     public function isCore(): bool
@@ -50,7 +50,7 @@ class InventoryModule extends Module
     public function navigation(): array
     {
         return [
-            ['route' => 'items.index', 'pattern' => 'items*', 'label' => 'Inventory', 'permission' => Permission::ViewAnyItem, 'icon' => '&#128230;'],
+            ['route' => 'items.index', 'pattern' => 'items*', 'label' => 'Inventory', 'permission' => Permission::ViewAnyItem, 'icon' => 'heroicon-o-cube'],
         ];
     }
 }
