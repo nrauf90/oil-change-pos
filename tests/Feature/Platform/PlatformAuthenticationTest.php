@@ -56,11 +56,15 @@ class PlatformAuthenticationTest extends PlatformTestCase
 
     public function test_platform_identity_cannot_satisfy_the_tenant_guard(): void
     {
+        config()->set('app.url', 'https://pos.example.test');
+        $shop = Shop::factory()->create(['slug' => 'tenant-guard-shop']);
+        $this->createMigratedTenantDatabase($shop);
+        $shop->markActive();
         $platformUser = PlatformUser::factory()->create();
 
         $this->actingAs($platformUser, 'platform')
-            ->get('/admin')
-            ->assertRedirect('/login');
+            ->get('https://tenant-guard-shop.pos.example.test/admin')
+            ->assertRedirectContains('/login');
 
         $this->assertAuthenticatedAs($platformUser, 'platform');
         $this->assertGuest('web');

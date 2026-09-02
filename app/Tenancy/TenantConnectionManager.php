@@ -14,14 +14,11 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Eloquent\Model;
 use LogicException;
 use PDO;
-use Spatie\Permission\PermissionRegistrar;
 use Throwable;
 
 final class TenantConnectionManager
 {
     private const CONNECTION = 'tenant';
-
-    private const NO_TENANT_PERMISSION_CACHE_KEY = 'spatie.permission.cache.no-tenant';
 
     private ?TenantConnectionLease $activeLease = null;
 
@@ -41,7 +38,7 @@ final class TenantConnectionManager
         private readonly DatabaseManager $database,
         private readonly ConfigRepository $config,
         private readonly TenantRuntimeState $runtimeState,
-        private readonly PermissionRegistrar $permissionRegistrar,
+        private readonly TenantPermissionCache $permissionCache,
         private readonly AuthManager $auth,
         private readonly TenantDatabaseAttestor $attestor,
         private readonly ModuleRegistry $moduleRegistry,
@@ -238,8 +235,8 @@ final class TenantConnectionManager
         });
         Model::setConnectionResolver($this->database);
         $this->moduleRegistry->flush();
-        $this->initializePermissionState((string) $shop->getKey());
-        $this->auth->forgetGuards();
+        $this->permissionCache->activate($shop);
+        $this->auth->guard('web')->forgetUser();
     }
 
     private function reconnectOwnedConnection(
@@ -282,6 +279,13 @@ final class TenantConnectionManager
 
     private function clearRuntimeState(): void
     {
+        $hadTenantState = $this->runtimeState->initialized()
+            || $this->activeLease !== null
+            || $this->activeConnection !== null
+            || $this->activePdo !== null
+            || $this->activeShop !== null
+            || $this->pendingShop !== null
+            || $this->pendingSnapshot !== null;
         $connections = [];
         $registeredConnection = $this->database->getConnections()[self::CONNECTION] ?? null;
 
@@ -298,7 +302,6 @@ final class TenantConnectionManager
         $this->activeShop = null;
         $this->pendingShop = null;
         $this->pendingSnapshot = null;
-        $this->config->set('permission.cache.key', self::NO_TENANT_PERMISSION_CACHE_KEY);
         $this->removeTenantConfiguration();
 
         foreach ($connections as $connection) {
@@ -323,9 +326,10 @@ final class TenantConnectionManager
 
         $this->attemptCleanup(fn (): mixed => Model::setConnectionResolver($this->database));
         $this->attemptCleanup(fn (): mixed => $this->moduleRegistry->flush());
-        $this->attemptCleanup(fn (): mixed => $this->auth->forgetGuards());
-        $this->attemptCleanup(fn (): mixed => $this->permissionRegistrar->clearPermissionsCollection());
-        $this->attemptCleanup(fn (): mixed => $this->permissionRegistrar->initializeCache());
+        if ($hadTenantState) {
+            $this->attemptCleanup(fn (): mixed => $this->auth->guard('web')->forgetUser());
+        }
+        $this->attemptCleanup(fn (): mixed => $this->permissionCache->clear());
     }
 
     private function removeTenantConfiguration(): void
@@ -336,12 +340,6 @@ final class TenantConnectionManager
             unset($connections[self::CONNECTION]);
             $this->config->set('database.connections', $connections);
         }
-    }
-
-    private function initializePermissionState(string $shopId): void
-    {
-        $this->config->set('permission.cache.key', 'spatie.permission.cache.tenant.'.$shopId);
-        $this->permissionRegistrar->initializeCache();
     }
 
     private function attemptCleanup(#[\SensitiveParameter] Closure $operation): void

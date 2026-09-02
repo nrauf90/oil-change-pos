@@ -3,7 +3,9 @@
 namespace App\Filament\Resources\Users\Schemas;
 
 use App\Enums\Role;
+use App\Filament\Resources\Roles\RoleResource;
 use App\Filament\Resources\Users\UserResource;
+use App\Models\Role as RoleModel;
 use App\Models\User;
 use Closure;
 use Filament\Forms\Components\Select;
@@ -22,7 +24,7 @@ class UserForm
         return $schema->components([
             Section::make('Staff member')
                 ->description('Shop staff sign in with a username, not an email address.')
-                ->columns(2)
+                ->columns(['default' => 1, 'md' => 2])
                 ->schema([
                     TextInput::make('name')
                         ->label('Full name')
@@ -57,7 +59,9 @@ class UserForm
                             static fn (mixed $value): bool => (bool) $value,
                             'This is the last active admin. Promote or activate another admin before deactivating this one.',
                         ))
-                        ->helperText('Deactivated staff cannot sign in, but their sales history is kept.'),
+                        ->helperText(fn (?Model $record): string => self::isSelf($record)
+                            ? 'You cannot deactivate your own signed-in account.'
+                            : 'Deactivated staff cannot sign in, but their sales history is kept.'),
                 ]),
 
             Section::make('Role')
@@ -72,19 +76,21 @@ class UserForm
                             static fn (mixed $value): bool => $value === Role::Admin->value,
                             'This is the last active admin. Promote another staff member to admin before changing this role.',
                         ))
-                        ->options(collect(Role::cases())->mapWithKeys(
-                            fn (Role $role) => [$role->value => $role->label()]
-                        ))
-                        ->helperText(new HtmlString(
-                            collect(Role::cases())
-                                ->map(fn (Role $role) => '<strong>'.e($role->label()).'</strong> &mdash; '.e($role->description()))
-                                ->implode('<br>')
-                        ))
+                        ->searchable()
+                        ->preload()
+                        ->options(fn (): array => RoleModel::query()
+                            ->where('guard_name', 'web')
+                            ->orderBy('name')
+                            ->get()
+                            ->mapWithKeys(fn (RoleModel $role): array => [
+                                $role->name => RoleResource::displayName($role),
+                            ])
+                            ->all())
+                        ->helperText(fn (?Model $record): HtmlString|string => self::roleHelperText($record))
                         // Roles live in the spatie pivot, not on the users table.
-                        ->formatStateUsing(fn ($record) => $record?->role()?->value)
                         ->dehydrated(false)
-                        ->afterStateHydrated(function (Select $component, $record): void {
-                            $component->state($record?->role()?->value);
+                        ->afterStateHydrated(function (Select $component, ?User $record): void {
+                            $component->state($record?->roleName());
                         }),
                 ]),
         ]);
@@ -99,14 +105,32 @@ class UserForm
         return $record instanceof User && $record->is(auth()->user());
     }
 
+    private static function roleHelperText(?Model $record): HtmlString|string
+    {
+        if (self::isSelf($record)) {
+            return 'You cannot change the role of your own signed-in account.';
+        }
+
+        $descriptions = RoleModel::query()
+            ->where('guard_name', 'web')
+            ->orderBy('name')
+            ->get()
+            ->map(function (RoleModel $role): string {
+                $description = RoleResource::displayDescription($role);
+
+                return '<strong>'.e(RoleResource::displayName($role)).'</strong>'
+                    .(filled($description) ? ' &mdash; '.e($description) : '');
+            })
+            ->implode('<br>');
+
+        return new HtmlString($descriptions);
+    }
+
     /**
-     * A field-level rule refusing any value that would leave the shop with no
-     * admin able to sign in.
+     * Field-level feedback for a value that would leave no active admin.
      *
-     * This is the enforcement, not the ->disabled() above it: Filament's form
-     * state is a public Livewire property, so a crafted request can set a
-     * disabled field. Validation runs before the record is written and before
-     * EditUser::afterSave() syncs roles, so both paths are covered.
+     * EditUser repeats this check in its server-side mutation hook because a
+     * crafted Livewire request can set disabled form state.
      *
      * @param  Closure(mixed): bool  $keepsAdmin  does this value leave the admin in place?
      */
