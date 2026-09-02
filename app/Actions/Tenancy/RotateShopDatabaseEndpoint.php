@@ -572,13 +572,11 @@ final readonly class RotateShopDatabaseEndpoint
                 ShopLifecycleEvent::DatabaseEndpointRotationCompleted->value,
                 ShopLifecycleEvent::DatabaseEndpointRotationSuperseded->value,
             ])
-            ->orderBy('id')
-            ->get(['id', 'event', 'metadata']);
+            ->get(['event', 'metadata']);
         $started = [];
-        $startedActivityIds = [];
         $terminals = [];
 
-        foreach ($activities as $activityIndex => $activity) {
+        foreach ($activities as $activity) {
             $metadata = $activity->metadata;
 
             if (! is_array($metadata) || ! $this->isExactRotationMetadata($metadata)) {
@@ -593,7 +591,6 @@ final readonly class RotateShopDatabaseEndpoint
                 }
 
                 $started[$rotationId] = $metadata;
-                $startedActivityIds[$rotationId] = $activityIndex;
             } else {
                 if (array_key_exists($rotationId, $terminals)) {
                     throw $this->rotationStateConflict();
@@ -601,7 +598,6 @@ final readonly class RotateShopDatabaseEndpoint
 
                 $terminals[$rotationId] = [
                     'event' => $activity->event,
-                    'activity_index' => $activityIndex,
                     'metadata' => $metadata,
                 ];
             }
@@ -609,9 +605,7 @@ final readonly class RotateShopDatabaseEndpoint
 
         foreach ($terminals as $rotationId => $terminal) {
             if (! isset($started[$rotationId])
-                || $started[$rotationId] !== $terminal['metadata']
-                || ($startedActivityIds[$rotationId] ?? PHP_INT_MAX)
-                    >= $terminal['activity_index']) {
+                || $started[$rotationId] !== $terminal['metadata']) {
                 throw $this->rotationStateConflict();
             }
         }
@@ -630,10 +624,6 @@ final readonly class RotateShopDatabaseEndpoint
 
             if (! is_array($predecessor)
                 || ! is_array($predecessorTerminal)
-                || ($startedActivityIds[$predecessorRotationId] ?? PHP_INT_MAX)
-                    >= ($startedActivityIds[$rotationId] ?? 0)
-                || ($predecessorTerminal['activity_index'] ?? PHP_INT_MAX)
-                    >= ($startedActivityIds[$rotationId] ?? 0)
                 || isset($successors[$predecessorRotationId])
                 || ! hash_equals(
                     $predecessor['new_target_fingerprint'],
@@ -656,6 +646,8 @@ final readonly class RotateShopDatabaseEndpoint
 
             $successors[$predecessorRotationId] = $rotationId;
         }
+
+        $this->assertAcyclicRotationGraph($started);
 
         foreach ($terminals as $rotationId => $terminal) {
             if ($terminal['event'] === ShopLifecycleEvent::DatabaseEndpointRotationSuperseded
@@ -732,8 +724,32 @@ final readonly class RotateShopDatabaseEndpoint
             && ! hash_equals(
                 $metadata['old_target_fingerprint'],
                 $metadata['new_target_fingerprint'],
-            )
-            && ! hash_equals($markerSourceFingerprint, $metadata['new_target_fingerprint']);
+            );
+    }
+
+    /** @param array<string, array<string, string>> $started */
+    private function assertAcyclicRotationGraph(array $started): void
+    {
+        foreach (array_keys($started) as $rotationId) {
+            $visited = [];
+            $currentRotationId = $rotationId;
+
+            while (isset($started[$currentRotationId])) {
+                if (isset($visited[$currentRotationId])) {
+                    throw $this->rotationStateConflict();
+                }
+
+                $visited[$currentRotationId] = true;
+                $predecessorRotationId = $started[$currentRotationId]['predecessor_rotation_id']
+                    ?? null;
+
+                if ($predecessorRotationId === null) {
+                    break;
+                }
+
+                $currentRotationId = $predecessorRotationId;
+            }
+        }
     }
 
     /**

@@ -22,6 +22,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\SQLiteConnection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Livewire\Livewire;
 use PDO;
 use RuntimeException;
@@ -842,6 +843,71 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         ));
     }
 
+    public function test_dns_rollback_to_the_authenticated_old_marker_supersedes_then_completes_the_successor(): void
+    {
+        [$shop, $actor, $marker, $fingerprintA] = $this->rotationScenario(
+            'old-marker-dns-rollback',
+        );
+        $marker->failAfterCentral = true;
+
+        try {
+            $this->confirmedRotation($actor, $shop);
+            $this->fail('The initial central transition did not interrupt.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_RECONCILIATION_FAILED', $exception->errorCode);
+        }
+
+        $fingerprintB = (string) $shop->fresh()->database_target_fingerprint;
+        $rotationOne = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationStarted)
+            ->sole();
+
+        $this->assertNotSame($fingerprintA, $fingerprintB);
+        $this->assertSame($fingerprintA, $marker->markerFingerprint);
+
+        $marker->failAfterCentral = false;
+        $this->resolveDatabaseHostTo('1.1.1.1');
+        $rollbackPreview = app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop);
+
+        $this->assertSame($fingerprintA, $rollbackPreview['new_target']['fingerprint']);
+
+        app(RotateShopDatabaseEndpoint::class)->handle(
+            $actor,
+            $shop,
+            $shop->slug,
+            $rollbackPreview['preview_token'],
+        );
+
+        $rotationTwo = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationStarted)
+            ->where('metadata->rotation_id', '!=', $rotationOne->metadata['rotation_id'])
+            ->sole();
+        $superseded = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationSuperseded)
+            ->sole();
+        $completed = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationCompleted)
+            ->sole();
+
+        $this->assertSame($fingerprintA, $shop->fresh()->database_target_fingerprint);
+        $this->assertSame($fingerprintA, $marker->markerFingerprint);
+        $this->assertSame($rotationOne->metadata, $superseded->metadata);
+        $this->assertSame($fingerprintB, $rotationTwo->metadata['old_target_fingerprint']);
+        $this->assertSame($fingerprintA, $rotationTwo->metadata['new_target_fingerprint']);
+        $this->assertSame($fingerprintA, $rotationTwo->metadata['marker_source_fingerprint']);
+        $this->assertSame(
+            $rotationOne->metadata['rotation_id'],
+            $rotationTwo->metadata['predecessor_rotation_id'],
+        );
+        $this->assertSame($rotationTwo->metadata, $completed->metadata);
+
+        $this->resolveDatabaseHostTo('9.9.9.9');
+        $laterPreview = app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop);
+
+        $this->assertFalse($laterPreview['pending']);
+        $this->assertSame($fingerprintA, $laterPreview['old_target']['fingerprint']);
+    }
+
     public function test_dns_drift_completes_a_pending_rotation_when_the_marker_is_new_then_starts_from_that_marker(): void
     {
         [$shop, $actor, $marker, $fingerprintA] = $this->rotationScenario(
@@ -1271,7 +1337,54 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         }
     }
 
-    public function test_supersession_terminal_must_precede_its_successor_start(): void
+    public function test_cyclic_rotation_audit_graph_is_rejected(): void
+    {
+        [$shop, $actor] = $this->rotationScenario('cyclic-rotation-audit');
+        $fingerprintA = (string) $shop->database_target_fingerprint;
+        $fingerprintB = app(RotateShopDatabaseEndpoint::class)
+            ->preview($actor, $shop)['new_target']['fingerprint'];
+        $rotationOneId = (string) Str::uuid();
+        $rotationTwoId = (string) Str::uuid();
+        $rotationOne = [
+            'rotation_id' => $rotationOneId,
+            'old_target_fingerprint' => $fingerprintB,
+            'new_target_fingerprint' => $fingerprintA,
+            'marker_source_fingerprint' => $fingerprintB,
+            'predecessor_rotation_id' => $rotationTwoId,
+        ];
+        $rotationTwo = [
+            'rotation_id' => $rotationTwoId,
+            'old_target_fingerprint' => $fingerprintA,
+            'new_target_fingerprint' => $fingerprintB,
+            'marker_source_fingerprint' => $fingerprintA,
+            'predecessor_rotation_id' => $rotationOneId,
+        ];
+        $activities = resolve(RecordShopLifecycleActivity::class);
+
+        foreach ([$rotationOne, $rotationTwo] as $metadata) {
+            $activities->handle(
+                $shop,
+                ShopLifecycleEvent::DatabaseEndpointRotationStarted,
+                $actor,
+                $metadata,
+            );
+            $activities->handle(
+                $shop,
+                ShopLifecycleEvent::DatabaseEndpointRotationCompleted,
+                $actor,
+                $metadata,
+            );
+        }
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop);
+            $this->fail('A cyclic rotation audit graph was accepted.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_STATE_CONFLICT', $exception->errorCode);
+        }
+    }
+
+    public function test_valid_graph_with_lexically_lower_terminal_and_successor_ids_remains_recoverable(): void
     {
         [$shop, $actor, $marker] = $this->rotationScenario('late-supersession-terminal');
         $marker->failAfterCentral = true;
@@ -1296,20 +1409,48 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         } catch (TenantDatabaseEndpointRotationException) {
         }
 
+        $rotationOne = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationStarted)
+            ->whereNull('metadata->predecessor_rotation_id')
+            ->sole();
+        $rotationTwo = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationStarted)
+            ->whereNotNull('metadata->predecessor_rotation_id')
+            ->sole();
         $superseded = $shop->lifecycleActivities()
             ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationSuperseded)
             ->sole();
         DB::connection('central')
             ->table('shop_lifecycle_activities')
             ->where('id', $superseded->getKey())
-            ->update(['id' => 'ffffffff-ffff-8fff-bfff-ffffffffffff']);
+            ->update(['id' => '00000000-0000-8000-8000-000000000002']);
+        DB::connection('central')
+            ->table('shop_lifecycle_activities')
+            ->where('id', $rotationTwo->getKey())
+            ->update(['id' => '00000000-0000-8000-8000-000000000001']);
 
-        try {
-            app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop);
-            $this->fail('A successor recorded before its predecessor terminal was accepted.');
-        } catch (TenantDatabaseEndpointRotationException $exception) {
-            $this->assertSame('ROTATION_STATE_CONFLICT', $exception->errorCode);
-        }
+        $this->assertLessThan(
+            (string) $rotationOne->getKey(),
+            '00000000-0000-8000-8000-000000000002',
+        );
+        $this->assertLessThan(
+            (string) $rotationOne->getKey(),
+            '00000000-0000-8000-8000-000000000001',
+        );
+        $marker->failAfterCentral = false;
+
+        $result = $this->confirmedRotation($actor, $shop);
+
+        $this->assertTrue($result['pending']);
+        $this->assertSame(1, $this->rotationEventCount(
+            $shop,
+            ShopLifecycleEvent::DatabaseEndpointRotationCompleted->value,
+        ));
+
+        $this->resolveDatabaseHostTo('8.8.4.4');
+        $this->assertFalse(
+            app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop)['pending'],
+        );
     }
 
     public function test_actor_is_reauthorized_after_candidate_marker_verification(): void
@@ -1550,12 +1691,12 @@ final class EndpointRotationMarkerDouble implements TenantDatabaseEndpointMarker
     ): void {
         $sourceMarkerHmac = $eligibleSourceMarkerHmacs[$this->markerFingerprint] ?? null;
 
-        if (is_string($sourceMarkerHmac)
-            && hash_equals($sourceMarkerHmac, $this->markerHmac)) {
-            $state = TenantDatabaseEndpointMarkerState::Old;
-        } elseif (hash_equals($candidate->target()->fingerprint, $this->markerFingerprint)
+        if (hash_equals($candidate->target()->fingerprint, $this->markerFingerprint)
             && hash_equals($candidate->expectedMarkerHmac(), $this->markerHmac)) {
             $state = TenantDatabaseEndpointMarkerState::New;
+        } elseif (is_string($sourceMarkerHmac)
+            && hash_equals($sourceMarkerHmac, $this->markerHmac)) {
+            $state = TenantDatabaseEndpointMarkerState::Old;
         } else {
             throw new RuntimeException('Unexpected marker state.');
         }
