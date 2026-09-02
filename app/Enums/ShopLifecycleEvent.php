@@ -15,4 +15,7 @@ enum ShopLifecycleEvent: string
     case MigrationSucceeded = 'tenant.migration_succeeded';
     case MigrationFailed = 'tenant.migration_failed';
     case ExistingDatabaseAdopted = 'tenant.existing_database_adopted';
+    case DatabaseEndpointRotationStarted = 'tenant.database_endpoint_rotation_started';
+    case DatabaseEndpointRotationCompleted = 'tenant.database_endpoint_rotation_completed';
+    case DatabaseEndpointRotationSuperseded = 'tenant.database_endpoint_rotation_superseded';
 }

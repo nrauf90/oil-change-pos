@@ -27,6 +27,7 @@ use App\Observers\SupplyObserver;
 use App\Observers\UserObserver;
 use App\Tenancy\CentralTenantResolver;
 use App\Tenancy\DatabaseHostResolver;
+use App\Tenancy\LaravelTenantDatabaseEndpointConnectionRunner;
 use App\Tenancy\NullTenantConnectionAttestationHook;
 use App\Tenancy\OpenedTenantDatabaseIdentityVerifier;
 use App\Tenancy\PdoTenantSqliteWitnessConnection;
@@ -36,6 +37,7 @@ use App\Tenancy\Provisioning\LaravelMySqlServerConnectionFactory;
 use App\Tenancy\Provisioning\MySqlServerConnectionFactory;
 use App\Tenancy\Provisioning\NullTenantProvisioningHook;
 use App\Tenancy\Provisioning\TenantProvisioningHook;
+use App\Tenancy\ReconcileTenantDatabaseEndpointMarker;
 use App\Tenancy\SupportAccessContext;
 use App\Tenancy\SystemDatabaseHostResolver;
 use App\Tenancy\TenantConnectionAttestationHook;
@@ -43,6 +45,8 @@ use App\Tenancy\TenantConnectionConfigurationFactory;
 use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
 use App\Tenancy\TenantDatabaseAttestor;
+use App\Tenancy\TenantDatabaseEndpointConnectionRunner;
+use App\Tenancy\TenantDatabaseEndpointMarkerReconciler;
 use App\Tenancy\TenantLivewireUploadUrlGenerator;
 use App\Tenancy\TenantPermissionCache;
 use App\Tenancy\TenantResolver;
@@ -83,6 +87,14 @@ class AppServiceProvider extends ServiceProvider
 
         $this->app->bind(DatabaseHostResolver::class, SystemDatabaseHostResolver::class);
         $this->app->bind(TenantResolver::class, CentralTenantResolver::class);
+        $this->app->bind(
+            TenantDatabaseEndpointConnectionRunner::class,
+            LaravelTenantDatabaseEndpointConnectionRunner::class,
+        );
+        $this->app->bind(
+            TenantDatabaseEndpointMarkerReconciler::class,
+            ReconcileTenantDatabaseEndpointMarker::class,
+        );
         $this->app->bind(DatabaseProvisioner::class, DatabaseProvisionerManager::class);
         $this->app->bind(
             MySqlServerConnectionFactory::class,
