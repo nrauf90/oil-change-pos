@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Http\Middleware\EnsureFilamentActionMatchesTenant;
 use App\Http\Middleware\EnsureLivewireUploadMatchesTenant;
 use App\Http\Middleware\InitializeTenancy;
 use App\Models\Expense;
@@ -35,8 +36,6 @@ use App\Tenancy\TenantResolver;
 use App\Tenancy\TenantRuntimeState;
 use App\Tenancy\TenantSqliteAttestationLock;
 use App\Tenancy\TenantSqliteWitnessConnection;
-use Filament\Actions\Exports\Http\Controllers\DownloadExport;
-use Filament\Actions\Imports\Http\Controllers\DownloadImportFailureCsv;
 use Illuminate\Auth\EloquentUserProvider;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Eloquent\Builder;
@@ -53,7 +52,6 @@ use Livewire\Features\SupportFileUploads\FileUploadController;
 use Livewire\Features\SupportFileUploads\GenerateSignedUploadUrl;
 use Livewire\Livewire;
 use Livewire\Mechanisms\HandleComponents\ComponentContext;
-use Livewire\Mechanisms\HandleRequests\EndpointResolver;
 use Spatie\Permission\PermissionRegistrar;
 
 use function Livewire\before;
@@ -62,8 +60,6 @@ use function Livewire\on;
 class AppServiceProvider extends ServiceProvider
 {
     private const LIVEWIRE_SHOP_MEMO = 'tenantShopId';
-
-    private const TENANT_SLUG_PATTERN = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
 
     /**
      * Register any application services.
@@ -104,9 +100,6 @@ class AppServiceProvider extends ServiceProvider
                 moduleRegistry: $application->make(ModuleRegistry::class),
             ),
         );
-        $this->app->booting(function (): void {
-            $this->registerLocalTenantPackageRoutes();
-        });
     }
 
     /**
@@ -117,22 +110,10 @@ class AppServiceProvider extends ServiceProvider
         $this->registerTenantLivewireUploadBoundary();
         $this->registerTenantLivewireSnapshotBoundary();
 
-        if ($this->app->environment('local', 'testing')) {
-            Livewire::setUpdateRoute(
-                static fn (array|string $handle, string $path): RoutingRoute => Route::post($path, $handle)
-                    ->middleware(['web', InitializeTenancy::class.':optional'])
-                    ->name('tenant.host.livewire.update'),
-            );
-        }
-
         Livewire::setUpdateRoute(
-            static fn (array|string $handle, string $path): RoutingRoute => Route::post(
-                self::tenantPackagePath($path),
-                $handle,
-            )
+            static fn (array|string $handle, string $path): RoutingRoute => Route::post($path, $handle)
                 ->middleware(['web', InitializeTenancy::class.':optional'])
-                ->where('tenant', self::TENANT_SLUG_PATTERN)
-                ->name('tenant.livewire.update'),
+                ->name('livewire.update'),
         );
         FileUploadController::$defaultMiddleware = [
             'web',
@@ -147,6 +128,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->make(Router::class)->middlewareGroup('filament.actions', [
             'web',
             InitializeTenancy::class.':optional',
+            EnsureFilamentActionMatchesTenant::class,
         ]);
 
         Event::listen(
@@ -183,35 +165,6 @@ class AppServiceProvider extends ServiceProvider
         Supply::observe(SupplyObserver::class);
         SupplierPayment::observe(SupplierPaymentObserver::class);
         User::observe(UserObserver::class);
-    }
-
-    private function registerLocalTenantPackageRoutes(): void
-    {
-        if (! $this->app->environment('local', 'testing')) {
-            return;
-        }
-
-        Route::post(self::tenantPackagePath(EndpointResolver::uploadPath()), [FileUploadController::class, 'handle'])
-            ->middleware(['web', InitializeTenancy::class.':optional'])
-            ->where('tenant', self::TENANT_SLUG_PATTERN)
-            ->name('livewire.upload-file');
-
-        Route::get(self::tenantPackagePath(EndpointResolver::previewPath()), [FilePreviewController::class, 'handle'])
-            ->middleware(['web', InitializeTenancy::class.':optional'])
-            ->where('tenant', self::TENANT_SLUG_PATTERN)
-            ->name('livewire.preview-file');
-
-        Route::middleware('filament.actions')
-            ->name('filament.')
-            ->prefix('__tenants/{tenant}/'.trim((string) config('filament.system_route_prefix', 'filament'), '/'))
-            ->where(['tenant' => self::TENANT_SLUG_PATTERN])
-            ->group(function (): void {
-                Route::get('/exports/{export}/download', DownloadExport::class)
-                    ->name('exports.download');
-
-                Route::get('/imports/{import}/failed-rows/download', DownloadImportFailureCsv::class)
-                    ->name('imports.failed-rows.download');
-            });
     }
 
     private function registerTenantLivewireSnapshotBoundary(): void
@@ -253,14 +206,5 @@ class AppServiceProvider extends ServiceProvider
             $this->app->make(GenerateSignedUploadUrl::class),
             $this->app->make(TenantContext::class),
         ));
-    }
-
-    private static function tenantPackagePath(string $path): string
-    {
-        if (! app()->environment('local', 'testing')) {
-            return $path;
-        }
-
-        return '__tenants/{tenant}/'.ltrim($path, '/');
     }
 }

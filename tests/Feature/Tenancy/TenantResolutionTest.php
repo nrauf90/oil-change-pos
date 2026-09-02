@@ -3,6 +3,7 @@
 namespace Tests\Feature\Tenancy;
 
 use App\Enums\ShopStatus;
+use App\Http\Middleware\EnsureFilamentActionMatchesTenant;
 use App\Http\Middleware\EnsureLivewireUploadMatchesTenant;
 use App\Http\Middleware\EnsureModuleIsEnabled;
 use App\Http\Middleware\EnsureShopIsActive;
@@ -20,24 +21,26 @@ use Filament\Http\Middleware\AuthenticateSession as FilamentAuthenticateSession;
 use Filament\Http\Middleware\SetUpPanel;
 use Illuminate\Auth\Middleware\Authenticate;
 use Illuminate\Database\Events\ConnectionEstablished;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Session\Middleware\StartSession;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 use Livewire\Component;
 use Livewire\Facades\GenerateSignedUploadUrlFacade;
 use Livewire\Features\SupportFileUploads\FileUploadController;
 use Livewire\Features\SupportFileUploads\GenerateSignedUploadUrl;
 use Livewire\Livewire;
+use Livewire\Mechanisms\HandleRequests\EndpointResolver;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Spatie\Permission\Middleware\PermissionMiddleware;
@@ -71,16 +74,9 @@ class TenantResolutionTest extends TestCase
             'database.tenant_attestation_lock_path',
             $this->tenantRoot.DIRECTORY_SEPARATOR.'attestation-locks',
         );
-        config()->set('database.connections.central', $this->sqliteConfiguration($centralDatabase));
-        DB::purge('central');
+        $this->configureCentralDatabase($centralDatabase);
         DB::purge('tenant');
-
-        Artisan::call('migrate', [
-            '--database' => 'central',
-            '--path' => 'database/migrations/central',
-            '--realpath' => false,
-            '--no-interaction' => true,
-        ]);
+        $this->migrateCentralDatabase();
 
         $this->manager = app(TenantConnectionManager::class);
         Livewire::component('tenant-snapshot-probe', TenantSnapshotProbe::class);
@@ -212,7 +208,7 @@ class TenantResolutionTest extends TestCase
     {
         $shop = $this->createTenant('unattested-shop', ShopStatus::Active);
         $database = (string) $shop->database_name;
-        $connection = DB::build($this->sqliteConfiguration($database));
+        $connection = DB::build($this->sqliteTestConnectionConfiguration($database));
 
         try {
             $connection->table('tenant_installations')->update([
@@ -486,6 +482,56 @@ class TenantResolutionTest extends TestCase
         $this->assertTenantStateIsRevoked();
     }
 
+    public function test_filament_logout_destroys_tenant_identity_while_preserving_platform_session_state(): void
+    {
+        $shop = $this->createTenant('filament-logout-shop', ShopStatus::Active);
+        $this->migrateTenant($shop);
+        $user = $this->manager->within(
+            $shop,
+            static fn (): User => User::factory()->admin()->create([
+                'username' => 'filament-logout-user',
+                'password' => Hash::make('secret-password'),
+            ]),
+        );
+        $platformSessionKey = auth('platform')->getName();
+        $this->withSession([
+            $platformSessionKey => 'platform-user-id',
+            'platform.support_state' => 'preserve-me',
+        ]);
+
+        $loginResponse = $this->post('https://filament-logout-shop.pos.example.test/login', [
+            'username' => $user->username,
+            'password' => 'secret-password',
+            'remember' => true,
+        ]);
+        $recallerName = auth('web')->getRecallerName();
+        $oldRecaller = $loginResponse->getCookie($recallerName);
+        $oldSessionId = session()->getId();
+        session()->save();
+
+        $loginResponse->assertRedirect();
+        $this->assertNotNull($oldRecaller);
+        $this->withCookie((string) config('session.cookie'), $oldSessionId)
+            ->withCookie($recallerName, $oldRecaller->getValue())
+            ->post('https://filament-logout-shop.pos.example.test/admin/logout')
+            ->assertRedirect()
+            ->assertCookieExpired($recallerName)
+            ->assertSessionHas($platformSessionKey, 'platform-user-id')
+            ->assertSessionHas('platform.support_state', 'preserve-me')
+            ->assertSessionMissing(auth('web')->getName())
+            ->assertSessionMissing(InitializeTenancy::SESSION_SHOP_KEY);
+
+        $this->assertNotSame($oldSessionId, session()->getId());
+
+        $this->withCookie((string) config('session.cookie'), $oldSessionId)
+            ->withCookie($recallerName, $oldRecaller->getValue())
+            ->get('https://pos.example.test/__tenants/filament-logout-shop/session-probe')
+            ->assertRedirect()
+            ->assertSessionMissing(auth('web')->getName());
+
+        $this->assertTenantStateIsRevoked();
+    }
+
     public function test_login_rate_limits_are_scoped_by_shop_uuid(): void
     {
         $shopA = $this->createTenant('login-limit-a', ShopStatus::Active);
@@ -566,20 +612,35 @@ class TenantResolutionTest extends TestCase
         $this->assertMiddlewarePrecedes($filamentMiddleware, InitializeTenancy::class, FilamentAuthenticate::class);
         $this->assertMiddlewarePrecedes($filamentMiddleware, InitializeTenancy::class, FilamentAuthenticateSession::class);
         $this->assertMiddlewarePrecedes($filamentMiddleware, InitializeTenancy::class, SubstituteBindings::class);
+
+        foreach (['filament.exports.download', 'filament.imports.failed-rows.download'] as $routeName) {
+            $actionMiddleware = $this->routeMiddleware($routeName);
+            $this->assertMiddlewarePrecedes(
+                $actionMiddleware,
+                InitializeTenancy::class,
+                EnsureFilamentActionMatchesTenant::class,
+            );
+            $this->assertMiddlewarePrecedes(
+                $actionMiddleware,
+                EnsureFilamentActionMatchesTenant::class,
+                SubstituteBindings::class,
+            );
+        }
     }
 
     public function test_livewire_upload_preview_and_filament_action_routes_cannot_bypass_initialization(): void
     {
-        $updateRoute = $this->livewireUpdateRoute();
-
-        $this->assertNotNull($updateRoute);
-
         foreach ([
-            $updateRoute,
+            Route::getRoutes()->getByName('livewire.update'),
+            Route::getRoutes()->getByName('tenant.local.livewire.update'),
             Route::getRoutes()->getByName('livewire.upload-file'),
+            Route::getRoutes()->getByName('tenant.local.livewire.upload-file'),
             Route::getRoutes()->getByName('livewire.preview-file'),
+            Route::getRoutes()->getByName('tenant.local.livewire.preview-file'),
             Route::getRoutes()->getByName('filament.exports.download'),
+            Route::getRoutes()->getByName('tenant.local.filament.exports.download'),
             Route::getRoutes()->getByName('filament.imports.failed-rows.download'),
+            Route::getRoutes()->getByName('tenant.local.filament.imports.failed-rows.download'),
         ] as $route) {
             $this->assertNotNull($route);
             $middleware = array_map(
@@ -592,11 +653,29 @@ class TenantResolutionTest extends TestCase
 
         foreach ([
             Route::getRoutes()->getByName('livewire.upload-file'),
+            Route::getRoutes()->getByName('tenant.local.livewire.upload-file'),
             Route::getRoutes()->getByName('livewire.preview-file'),
+            Route::getRoutes()->getByName('tenant.local.livewire.preview-file'),
         ] as $route) {
             $this->assertNotNull($route);
             $this->assertContains(
                 EnsureLivewireUploadMatchesTenant::class,
+                array_map(
+                    static fn (string $name): string => Str::before($name, ':'),
+                    app('router')->gatherRouteMiddleware($route),
+                ),
+            );
+        }
+
+        foreach ([
+            Route::getRoutes()->getByName('filament.exports.download'),
+            Route::getRoutes()->getByName('tenant.local.filament.exports.download'),
+            Route::getRoutes()->getByName('filament.imports.failed-rows.download'),
+            Route::getRoutes()->getByName('tenant.local.filament.imports.failed-rows.download'),
+        ] as $route) {
+            $this->assertNotNull($route);
+            $this->assertContains(
+                EnsureFilamentActionMatchesTenant::class,
                 array_map(
                     static fn (string $name): string => Str::before($name, ':'),
                     app('router')->gatherRouteMiddleware($route),
@@ -611,20 +690,204 @@ class TenantResolutionTest extends TestCase
     public function test_local_package_routes_carry_the_trusted_route_selector(): void
     {
         foreach ([
-            $this->livewireUpdateRoute(),
+            Route::getRoutes()->getByName('tenant.local.livewire.update'),
+            Route::getRoutes()->getByName('tenant.local.livewire.upload-file'),
+            Route::getRoutes()->getByName('tenant.local.livewire.preview-file'),
+            Route::getRoutes()->getByName('tenant.local.filament.exports.download'),
+            Route::getRoutes()->getByName('tenant.local.filament.imports.failed-rows.download'),
+        ] as $route) {
+            $this->assertNotNull($route);
+            $this->assertStringStartsWith('__tenants/{tenant}/', ltrim($route->uri(), '/'));
+        }
+
+        foreach ([
+            Route::getRoutes()->getByName('livewire.update'),
             Route::getRoutes()->getByName('livewire.upload-file'),
             Route::getRoutes()->getByName('livewire.preview-file'),
             Route::getRoutes()->getByName('filament.exports.download'),
             Route::getRoutes()->getByName('filament.imports.failed-rows.download'),
         ] as $route) {
             $this->assertNotNull($route);
-            $this->assertStringStartsWith('__tenants/{tenant}/', ltrim($route->uri(), '/'));
+            $this->assertStringNotContainsString('__tenants/{tenant}/', ltrim($route->uri(), '/'));
         }
 
         $adminRoute = Route::getRoutes()->getByName('filament.admin.pages.admin-dashboard');
 
         $this->assertNotNull($adminRoute);
         $this->assertSame('admin', ltrim($adminRoute->uri(), '/'));
+    }
+
+    public function test_package_route_names_are_unique_serializable_and_central_urls_need_no_tenant_default(): void
+    {
+        $namedRoutes = array_values(array_filter(array_map(
+            static fn (RoutingRoute $route): ?string => $route->getName(),
+            Route::getRoutes()->getRoutes(),
+        )));
+        $duplicateNames = array_keys(array_filter(
+            array_count_values($namedRoutes),
+            static fn (int $count): bool => $count > 1,
+        ));
+
+        $this->assertSame([], $duplicateNames);
+        Route::getRoutes()->toSymfonyRouteCollection();
+        $this->assertArrayNotHasKey('tenant', app('url')->getDefaultParameters());
+        $this->assertSame(EndpointResolver::updatePath(), Livewire::getUpdateUri());
+
+        $uploadUrl = GenerateSignedUploadUrlFacade::forLocal();
+        $parts = parse_url($uploadUrl);
+        $this->assertIsArray($parts);
+        $this->assertSame(EndpointResolver::uploadPath(), $parts['path'] ?? null);
+        parse_str($parts['query'] ?? '', $query);
+        $this->assertSame(TenantLivewireUploadUrlGenerator::CENTRAL_CLAIM, $query['tenant_shop_id'] ?? null);
+    }
+
+    public function test_local_tenant_package_url_generation_uses_the_unique_route_fallbacks(): void
+    {
+        $this->createTenant('package-url-shop', ShopStatus::Active);
+
+        $urls = $this->get('https://pos.example.test/__tenants/package-url-shop/__tenancy/package-urls')
+            ->assertOk()
+            ->json();
+
+        $this->assertStringStartsWith('/__tenants/package-url-shop/'.ltrim(EndpointResolver::updatePath(), '/'), $urls['update']);
+        $this->assertStringStartsWith(
+            'https://pos.example.test/__tenants/package-url-shop/'.ltrim(EndpointResolver::uploadPath(), '/'),
+            $urls['upload'],
+        );
+        $this->assertStringStartsWith(
+            '/__tenants/package-url-shop/filament/exports/1/download',
+            $urls['export'],
+        );
+
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_unknown_tenant_host_returns_branded_404_before_a_central_livewire_update(): void
+    {
+        $snapshotResponse = $this->get('https://pos.example.test/__central/livewire-probe');
+        $snapshot = $this->extractLivewireSnapshot($snapshotResponse->getContent());
+        $updateRoute = $this->livewireUpdateRoute();
+
+        $snapshotResponse->assertOk();
+        $this->assertNotNull($updateRoute);
+
+        $this->withHeader('X-Livewire', 'true')
+            ->postJson($this->hostPackageUrl($updateRoute, 'missing-shop'), [
+                'components' => [[
+                    'snapshot' => $snapshot,
+                    'updates' => [],
+                    'calls' => [],
+                ]],
+            ])
+            ->assertNotFound()
+            ->assertJsonPath('message', 'Shop unavailable.');
+
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_unknown_tenant_host_returns_branded_404_before_a_central_upload_can_write(): void
+    {
+        Storage::fake('tmp-for-tests');
+        $uploadUrl = $this->replaceUrlHost(
+            GenerateSignedUploadUrlFacade::forLocal(),
+            'missing-shop.pos.example.test',
+        );
+
+        $this->post($uploadUrl, [
+            'files' => [UploadedFile::fake()->image('unknown-host.jpg')],
+        ])->assertNotFound()->assertSee('Shop unavailable');
+
+        $this->assertSame([], Storage::disk('tmp-for-tests')->allFiles());
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_unknown_tenant_host_returns_branded_404_before_a_central_preview_can_read(): void
+    {
+        Storage::fake('tmp-for-tests');
+        Storage::disk('tmp-for-tests')->putFileAs(
+            'livewire-tmp',
+            UploadedFile::fake()->image('central-preview.jpg'),
+            'central-preview.jpg',
+        );
+        $previewUrl = $this->replaceUrlHost(
+            GenerateSignedUploadUrlFacade::signedRoute(
+                'livewire.preview-file',
+                now()->addMinutes(5),
+                ['filename' => 'central-preview.jpg'],
+            ),
+            'missing-shop.pos.example.test',
+        );
+
+        $this->get($previewUrl)
+            ->assertNotFound()
+            ->assertSee('Shop unavailable');
+
+        $this->assertTrue(Storage::disk('tmp-for-tests')->exists('livewire-tmp/central-preview.jpg'));
+        $this->assertTenantStateIsRevoked();
+    }
+
+    #[DataProvider('filamentActionPaths')]
+    public function test_unknown_tenant_host_returns_branded_404_before_filament_action_binding(string $path): void
+    {
+        $this->get('https://missing-shop.pos.example.test'.$path)
+            ->assertNotFound()
+            ->assertSee('Shop unavailable');
+
+        $this->assertTenantStateIsRevoked();
+    }
+
+    /** @return array<string, array{string}> */
+    public static function filamentActionPaths(): array
+    {
+        return [
+            'export download' => ['/filament/exports/1/download'],
+            'failed import rows download' => ['/filament/imports/1/failed-rows/download'],
+        ];
+    }
+
+    #[DataProvider('filamentActionRoutes')]
+    public function test_tenant_filament_action_download_is_shop_bound_and_disabled_before_record_read(
+        string $action,
+    ): void {
+        $shopA = $this->createTenant('filament-action-a', ShopStatus::Active);
+        $shopB = $this->createTenant('filament-action-b', ShopStatus::Active);
+        config()->set('app.env', 'production');
+        Storage::fake('local');
+
+        $generatedUrl = $this->get(
+            "https://filament-action-a.pos.example.test/__tenancy/filament-action-url/{$action}",
+        )->assertOk()->json('url');
+
+        $this->assertIsString($generatedUrl);
+        $this->assertStringContainsString($shopA->getKey(), $generatedUrl);
+        $replayedUrl = $this->replaceUrlHost($generatedUrl, 'filament-action-b.pos.example.test');
+        $this->assertTrue(Request::create($replayedUrl)->hasValidRelativeSignature());
+        $filamentRecordQueries = 0;
+        DB::listen(static function (QueryExecuted $event) use (&$filamentRecordQueries): void {
+            if (preg_match('/\b(exports|imports|failed_import_rows)\b/i', $event->sql) === 1) {
+                $filamentRecordQueries++;
+            }
+        });
+
+        $this->get($replayedUrl)
+            ->assertNotFound()
+            ->assertSee('Shop unavailable');
+        $this->get($this->replaceUrlHost($generatedUrl, 'filament-action-a.pos.example.test'))
+            ->assertNotFound()
+            ->assertSee('Shop unavailable');
+
+        $this->assertSame(0, $filamentRecordQueries);
+        $this->assertSame([], Storage::disk('local')->allFiles());
+        $this->assertTenantStateIsRevoked();
+    }
+
+    /** @return array<string, array{string}> */
+    public static function filamentActionRoutes(): array
+    {
+        return [
+            'export download' => ['export'],
+            'failed import rows download' => ['import'],
+        ];
     }
 
     public function test_local_livewire_update_and_upload_requests_initialize_and_revoke_tenancy(): void
@@ -638,8 +901,8 @@ class TenantResolutionTest extends TestCase
             }
         });
 
-        $updateRoute = $this->livewireUpdateRoute();
-        $uploadRoute = Route::getRoutes()->getByName('livewire.upload-file');
+        $updateRoute = Route::getRoutes()->getByName('tenant.local.livewire.update');
+        $uploadRoute = Route::getRoutes()->getByName('tenant.local.livewire.upload-file');
 
         $this->assertNotNull($updateRoute);
         $this->assertNotNull($uploadRoute);
@@ -787,6 +1050,37 @@ class TenantResolutionTest extends TestCase
             ])
             ->name('tenancy.livewire-upload-url');
 
+        Route::middleware(['web', 'shop.active', 'tenant'])
+            ->get('/__tenants/{tenant}/__tenancy/package-urls', static fn (): array => [
+                'update' => Livewire::getUpdateUri(),
+                'upload' => GenerateSignedUploadUrlFacade::forLocal(),
+                'export' => URL::signedRoute('filament.exports.download', [
+                    'authGuard' => 'web',
+                    'export' => 1,
+                    'format' => 'csv',
+                ], absolute: false),
+            ])
+            ->name('tenancy.package-urls');
+
+        Route::middleware(['web', 'shop.active', 'tenant'])
+            ->get('/__tenancy/filament-action-url/{action}', static function (string $action): array {
+                [$routeName, $parameters] = match ($action) {
+                    'export' => ['filament.exports.download', [
+                        'authGuard' => 'web',
+                        'export' => 1,
+                        'format' => 'csv',
+                    ]],
+                    'import' => ['filament.imports.failed-rows.download', [
+                        'authGuard' => 'web',
+                        'import' => 1,
+                    ]],
+                    default => abort(Response::HTTP_NOT_FOUND),
+                };
+
+                return ['url' => URL::signedRoute($routeName, $parameters, absolute: false)];
+            })
+            ->name('tenancy.filament-action-url');
+
         Route::post('/__tenancy/livewire-upload', [FileUploadController::class, 'handle'])
             ->name('tenancy.livewire-upload-probe');
 
@@ -818,12 +1112,19 @@ class TenantResolutionTest extends TestCase
             })
             ->name('central.probe');
 
+        Route::middleware('web')
+            ->get(
+                '/__central/livewire-probe',
+                static fn (): string => Livewire::mount('tenant-snapshot-probe'),
+            )
+            ->name('central.livewire-probe');
+
         Route::getRoutes()->refreshNameLookups();
     }
 
     private function livewireUpdateRoute(): ?RoutingRoute
     {
-        return Route::getRoutes()->getByName('tenant.livewire.update');
+        return Route::getRoutes()->getByName('livewire.update');
     }
 
     private function createTenant(
@@ -834,10 +1135,6 @@ class TenantResolutionTest extends TestCase
     ): Shop {
         $database = $this->tenantRoot.DIRECTORY_SEPARATOR.$slug.'.sqlite';
 
-        if (File::put($database, '') === false) {
-            throw new RuntimeException('Unable to create a tenant test database.');
-        }
-
         $shop = Shop::registerForProvisioning(
             name: str($slug)->headline()->toString(),
             slug: $slug,
@@ -845,7 +1142,7 @@ class TenantResolutionTest extends TestCase
             databaseName: $database,
             databasePassword: $databasePassword,
         );
-        $this->writeTenantMarker($database, $shop);
+        $this->createTenantDatabase($shop);
 
         match ($status) {
             ShopStatus::Provisioning => null,
@@ -893,6 +1190,19 @@ class TenantResolutionTest extends TestCase
         return "https://{$slug}.pos.example.test/".ltrim($uri, '/');
     }
 
+    private function replaceUrlHost(string $url, string $host): string
+    {
+        $parts = parse_url($url);
+        $this->assertIsArray($parts);
+        $url = 'https://'.$host.($parts['path'] ?? '/');
+
+        if (isset($parts['query'])) {
+            $url .= '?'.$parts['query'];
+        }
+
+        return $url;
+    }
+
     private function extractLivewireSnapshot(string $html): string
     {
         $matched = preg_match('/wire:snapshot="([^"]+)"/', $html, $matches);
@@ -928,58 +1238,7 @@ class TenantResolutionTest extends TestCase
 
     private function migrateTenant(Shop $shop): void
     {
-        $this->manager->connect($shop);
-
-        try {
-            Artisan::call('migrate', [
-                '--database' => 'tenant',
-                '--path' => 'database/migrations',
-                '--realpath' => false,
-                '--no-interaction' => true,
-            ]);
-        } finally {
-            $this->manager->disconnect();
-        }
-    }
-
-    private function writeTenantMarker(string $database, Shop $shop): void
-    {
-        $connection = DB::build($this->sqliteConfiguration($database));
-
-        try {
-            $connection->statement(<<<'SQL'
-                CREATE TABLE tenant_installations (
-                    id INTEGER PRIMARY KEY,
-                    shop_id VARCHAR(36) NOT NULL UNIQUE,
-                    target_fingerprint VARCHAR(64) NOT NULL,
-                    attestation_hmac VARCHAR(64) NOT NULL,
-                    connection_nonce VARCHAR(64) NULL,
-                    created_at DATETIME NOT NULL
-                )
-                SQL);
-            $connection->table('tenant_installations')->insert([
-                'id' => 1,
-                'shop_id' => $shop->getKey(),
-                'target_fingerprint' => $shop->database_target_fingerprint,
-                'attestation_hmac' => $shop->databaseAttestationHmac(),
-                'connection_nonce' => null,
-                'created_at' => now(),
-            ]);
-        } finally {
-            DB::purge($connection->getName());
-        }
-    }
-
-    /** @return array<string, mixed> */
-    private function sqliteConfiguration(string $database): array
-    {
-        return [
-            'driver' => 'sqlite',
-            'database' => $database,
-            'prefix' => '',
-            'foreign_key_constraints' => true,
-            'transaction_mode' => 'DEFERRED',
-        ];
+        $this->migrateTenantDatabase($shop);
     }
 
     /** @return list<string> */
@@ -1034,7 +1293,7 @@ final class TenantSnapshotProbe extends Component
 
     public function mount(TenantContext $context): void
     {
-        $this->shopId = $context->id();
+        $this->shopId = $context->initialized() ? $context->id() : 'central';
     }
 
     public function render(): string

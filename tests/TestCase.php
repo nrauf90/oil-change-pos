@@ -2,13 +2,18 @@
 
 namespace Tests;
 
+use App\Http\Middleware\EnsureShopIsActive;
+use App\Http\Middleware\InitializeTenancy;
 use App\Models\Central\Shop;
 use App\Tenancy\TenantConnectionManager;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Foundation\Testing\RefreshDatabaseState;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Tests\Concerns\UsesTenantDatabases;
@@ -25,6 +30,8 @@ abstract class TestCase extends BaseTestCase
     protected array $connectionsToTransact = ['central', 'tenant'];
 
     private ?string $defaultTestTenantDatabase = null;
+
+    private ?string $defaultTestTenantSlug = null;
 
     protected function setUpTraits()
     {
@@ -53,6 +60,17 @@ abstract class TestCase extends BaseTestCase
 
         // Feature tests assert on rendered Blade, not on the asset pipeline.
         $this->withoutVite();
+
+        if ($this->usesDefaultTenantContext()) {
+            $this->withoutMiddleware([
+                EnsureShopIsActive::class,
+                InitializeTenancy::class,
+            ]);
+            URL::defaults(['tenant' => $this->defaultTestTenantSlug]);
+            Event::listen(RouteMatched::class, static function (RouteMatched $event): void {
+                $event->route->forgetParameter('tenant');
+            });
+        }
     }
 
     protected function usesDefaultTenantContext(): bool
@@ -94,6 +112,7 @@ abstract class TestCase extends BaseTestCase
             databaseDriver: 'sqlite',
             databaseName: $this->defaultTestTenantDatabase,
         );
+        $this->defaultTestTenantSlug = $shop->slug;
         $this->createMigratedTenantDatabase($shop);
         app(TenantConnectionManager::class)->connect($shop);
         RefreshDatabaseState::$migrated = true;
@@ -103,6 +122,7 @@ abstract class TestCase extends BaseTestCase
     {
         $tenantDatabase = $this->defaultTestTenantDatabase;
         $this->defaultTestTenantDatabase = null;
+        $this->defaultTestTenantSlug = null;
 
         try {
             app(TenantConnectionManager::class)->disconnect();

@@ -5,9 +5,11 @@ namespace App\Http\Middleware;
 use App\Enums\ShopStatus;
 use App\Http\Responses\ShopUnavailableResponse;
 use App\Models\Central\Shop;
+use App\Tenancy\CentralTenantResolver;
 use App\Tenancy\Exceptions\TenantDatabaseAttestationFailed;
 use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
+use App\Tenancy\TenantLivewireUploadUrlGenerator;
 use App\Tenancy\TenantResolver;
 use Closure;
 use Illuminate\Auth\AuthManager;
@@ -15,6 +17,7 @@ use Illuminate\Auth\SessionGuard;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Cookie\QueueingFactory as CookieJar;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Routing\UrlGenerator;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\Response;
@@ -26,8 +29,17 @@ final readonly class InitializeTenancy
 
     private const OPTIONAL = 'optional';
 
+    private const LOCAL_PACKAGE_ROUTES = [
+        'livewire.update',
+        'livewire.upload-file',
+        'livewire.preview-file',
+        'filament.exports.download',
+        'filament.imports.failed-rows.download',
+    ];
+
     public function __construct(
         private TenantResolver $resolver,
+        private CentralTenantResolver $centralResolver,
         private TenantConnectionManager $manager,
         private TenantContext $context,
         private ShopUnavailableResponse $unavailableResponse,
@@ -67,9 +79,11 @@ final readonly class InitializeTenancy
         }
 
         if ($shop === null) {
-            return $mode === self::OPTIONAL
-                ? $next($request)
-                : $this->unavailableResponse->notFound($request);
+            if ($mode === self::OPTIONAL && $this->centralResolver->isTrustedCentralRequest($request)) {
+                return $next($request);
+            }
+
+            return $this->unavailableResponse->notFound($request);
         }
 
         if ($shop->status !== ShopStatus::Active) {
@@ -78,7 +92,13 @@ final readonly class InitializeTenancy
 
         $routeTenant = $request->route('tenant');
         $previousTenantDefault = $this->url->getDefaultParameters()['tenant'] ?? null;
-        $this->url->defaults(['tenant' => $shop->slug]);
+        $previousShopDefault = $this->url->getDefaultParameters()[TenantLivewireUploadUrlGenerator::TENANT_CLAIM] ?? null;
+        $previousPathFormatter = $this->url->pathFormatter();
+        $this->url->defaults([
+            'tenant' => $shop->slug,
+            TenantLivewireUploadUrlGenerator::TENANT_CLAIM => (string) $shop->getKey(),
+        ]);
+        $this->useLocalTenantPackagePaths($shop, $previousPathFormatter);
 
         if (is_string($routeTenant)) {
             $request->route()?->forgetParameter('tenant');
@@ -95,7 +115,11 @@ final readonly class InitializeTenancy
                 return $this->unavailableResponse->unavailable($request);
             }
         } finally {
-            $this->url->defaults(['tenant' => $previousTenantDefault]);
+            $this->url->defaults([
+                'tenant' => $previousTenantDefault,
+                TenantLivewireUploadUrlGenerator::TENANT_CLAIM => $previousShopDefault,
+            ]);
+            $this->url->formatPathUsing($previousPathFormatter);
         }
     }
 
@@ -186,5 +210,26 @@ final readonly class InitializeTenancy
         }
 
         $session->put(self::SESSION_SHOP_KEY, $activeShopId);
+    }
+
+    private function useLocalTenantPackagePaths(Shop $shop, Closure $previousFormatter): void
+    {
+        if (! in_array((string) $this->config->get('app.env'), ['local', 'testing'], true)) {
+            return;
+        }
+
+        $this->url->formatPathUsing(static function (
+            string $path,
+            ?RoutingRoute $route = null,
+        ) use ($previousFormatter, $shop): string {
+            $path = $previousFormatter($path, $route);
+
+            if (! $route instanceof RoutingRoute
+                || ! in_array($route->getName(), self::LOCAL_PACKAGE_ROUTES, true)) {
+                return $path;
+            }
+
+            return '/__tenants/'.$shop->slug.'/'.ltrim($path, '/');
+        });
     }
 }

@@ -46,6 +46,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use LogicException;
@@ -1289,6 +1290,7 @@ PHP;
     public function test_quick_item_and_inspection_write_transactions_use_only_the_active_tenant(): void
     {
         $this->manager->connect($this->shopA);
+        URL::defaults(['tenant' => $this->shopA->slug]);
         $user = User::factory()->create();
         $this->actingAs($user);
         $quickItemRequest = $this->validatedFormRequest(QuickItemRequest::class, [

@@ -39,6 +39,17 @@ final readonly class CentralTenantResolver implements TenantResolver
         return Shop::query()->where('slug', $slug)->first();
     }
 
+    public function isTrustedCentralRequest(Request $request): bool
+    {
+        $baseHost = $this->baseHost();
+        $requestHost = $this->requestHost($request);
+
+        return $baseHost !== null
+            && $requestHost !== null
+            && hash_equals($baseHost, $requestHost)
+            && $request->route('tenant') === null;
+    }
+
     private function baseHost(): ?string
     {
         $host = parse_url((string) $this->config->get('app.url'), PHP_URL_HOST);

@@ -1,14 +1,17 @@
 <?php
 
+use App\Http\Middleware\EnsureFilamentActionMatchesTenant;
 use App\Http\Middleware\EnsureModuleIsEnabled;
 use App\Http\Middleware\EnsureShopIsActive;
 use App\Http\Middleware\InitializeTenancy;
 use App\Http\Middleware\TenantThrottleRequests;
+use App\Tenancy\TenantPackageRouteRegistrar;
 use Filament\Http\Middleware\SetUpPanel;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Session\TokenMismatchException;
 use Spatie\Permission\Middleware\PermissionMiddleware;
@@ -19,6 +22,9 @@ return Application::configure(basePath: dirname(__DIR__))
         web: __DIR__.'/../routes/web.php',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
+        then: static function (): void {
+            resolve(TenantPackageRouteRegistrar::class)->register();
+        },
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->trustHosts();
@@ -33,6 +39,8 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
         $middleware->appendToPriorityList(StartSession::class, EnsureShopIsActive::class);
         $middleware->appendToPriorityList(EnsureShopIsActive::class, InitializeTenancy::class);
+        $middleware->appendToPriorityList(InitializeTenancy::class, EnsureFilamentActionMatchesTenant::class);
+        $middleware->appendToPriorityList(EnsureFilamentActionMatchesTenant::class, SubstituteBindings::class);
         $middleware->appendToPriorityList(InitializeTenancy::class, SetUpPanel::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
