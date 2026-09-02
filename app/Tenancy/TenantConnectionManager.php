@@ -3,18 +3,22 @@
 namespace App\Tenancy;
 
 use App\Models\Central\Shop;
+use App\Modules\ModuleRegistry;
 use App\Tenancy\Exceptions\TenantDatabaseAttestationFailed;
 use Closure;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
 use LogicException;
 use PDO;
 use Spatie\Permission\PermissionRegistrar;
 use Throwable;
 
-class TenantConnectionManager
+final class TenantConnectionManager
 {
     private const CONNECTION = 'tenant';
 
@@ -23,67 +27,85 @@ class TenantConnectionManager
     /** @var array<string, mixed> */
     private readonly array $tenantConnectionTemplate;
 
+    private ?TenantConnectionLease $activeLease = null;
+
+    private ?Connection $activeConnection = null;
+
+    private ?PDO $activePdo = null;
+
+    private ?Shop $activeShop = null;
+
+    private ?Shop $pendingShop = null;
+
+    private ?ValidatedTenantConnection $pendingSnapshot = null;
+
+    private ?Connection $testingSourceConnection = null;
+
+    private ?Shop $testingPendingShop = null;
+
+    private bool $handlingConnectionEvent = false;
+
     public function __construct(
         private readonly DatabaseManager $database,
         private readonly ConfigRepository $config,
-        private readonly TenantContext $context,
+        private readonly TenantRuntimeState $runtimeState,
         private readonly PermissionRegistrar $permissionRegistrar,
         private readonly AuthManager $auth,
+        private readonly Application $application,
+        private readonly TenantDatabaseAttestor $attestor,
+        private readonly ModuleRegistry $moduleRegistry,
     ) {
-        $tenantConnectionTemplate = $this->config->get('database.connections.tenant');
+        $tenantConnectionTemplate = $this->config->get('database.tenant_connection_template');
 
         if (! is_array($tenantConnectionTemplate)) {
             throw new LogicException('The tenant database connection template is not configured.');
         }
 
-        unset($tenantConnectionTemplate['url']);
+        unset($tenantConnectionTemplate['url'], $tenantConnectionTemplate['name']);
         $this->tenantConnectionTemplate = $tenantConnectionTemplate;
-        $this->config->set('database.tenant_connection_template', $tenantConnectionTemplate);
     }
 
     public function connect(#[\SensitiveParameter] Shop $shop): void
     {
-        if ($this->context->initialized()) {
-            if (! hash_equals($this->context->id(), (string) $shop->getKey())) {
+        $shopId = $shop->getKey();
+
+        if (! $shop->exists || ! is_string($shopId) || $shopId === '') {
+            throw new LogicException('Tenant connections require a persisted shop.');
+        }
+
+        if ($this->activeLease !== null) {
+            if ($this->activeShop === null
+                || ! hash_equals((string) $this->activeShop->getKey(), $shopId)) {
                 throw new LogicException('A different tenant is already initialized.');
             }
 
-            return;
+            if ($this->hasLiveAttestedConnection($this->activeLease)) {
+                return;
+            }
         }
 
         $this->clearRuntimeState();
-        $validatedConnection = $shop->validatedDatabaseConnection();
-        $target = $validatedConnection->target();
 
         try {
-            if ($target->driver === 'mysql') {
-                $this->reAttestMySqlEndpoints($target);
-            }
-
-            $configuration = array_replace(
-                $this->tenantConnectionTemplate,
-                $validatedConnection->connectionOverrides(),
-            );
-            unset($configuration['url']);
-
-            $this->database->purge(self::CONNECTION);
-            $this->config->set('database.connections.'.self::CONNECTION, $configuration);
-            $connection = $this->database->reconnect(self::CONNECTION);
-            $pdo = $connection->getPdo();
-
-            if ($target->driver === 'sqlite') {
-                $this->attestSqliteConnection($pdo, $target);
-            } elseif ($target->driver === 'mysql') {
-                $this->attestMySqlConnection($pdo, $target);
-            } else {
+            if ($shop::class !== Shop::class) {
                 throw new TenantDatabaseAttestationFailed;
             }
 
-            $this->attestTenantMarker($pdo, $shop, $target);
-            Model::setConnectionResolver($this->database);
-            $this->context->initialize($shop);
-            $this->initializePermissionState($this->context->id());
-            $this->auth->forgetGuards();
+            $snapshot = $shop->validatedDatabaseConnection();
+            $this->pendingShop = clone $shop;
+            $this->pendingSnapshot = $snapshot;
+            $this->config->set(
+                'database.connections.'.self::CONNECTION,
+                $this->connectionConfiguration($snapshot),
+            );
+            $this->database->purge(self::CONNECTION);
+            $this->database->connection(self::CONNECTION);
+
+            if ($this->activeLease === null
+                || $this->activeShop === null
+                || ! $this->runtimeState->isOwnedBy($this->activeLease)) {
+                throw new TenantDatabaseAttestationFailed;
+            }
         } catch (Throwable) {
             $this->clearRuntimeState();
 
@@ -99,11 +121,17 @@ class TenantConnectionManager
     public function within(
         #[\SensitiveParameter]
         Shop $shop,
+        #[\SensitiveParameter]
         Closure $operation,
     ): mixed {
-        if ($this->context->initialized()) {
-            if (! hash_equals($this->context->id(), (string) $shop->getKey())) {
+        if ($this->activeLease !== null) {
+            if ($this->activeShop === null
+                || ! hash_equals((string) $this->activeShop->getKey(), (string) $shop->getKey())) {
                 throw new LogicException('A different tenant is already initialized.');
+            }
+
+            if (! $this->hasLiveAttestedConnection($this->activeLease)) {
+                throw new LogicException('The active tenant connection is no longer attested.');
             }
 
             return $operation();
@@ -118,20 +146,264 @@ class TenantConnectionManager
         }
     }
 
+    public function attestEstablishedConnection(Connection $connection): void
+    {
+        if ($connection->getName() !== self::CONNECTION) {
+            return;
+        }
+
+        if ($this->handlingConnectionEvent) {
+            $this->failClosed();
+
+            throw new TenantDatabaseAttestationFailed;
+        }
+
+        $this->handlingConnectionEvent = true;
+
+        try {
+            if ($this->testingPendingShop !== null || $this->testingSourceConnection !== null) {
+                $this->attestTestingConnection($connection);
+
+                return;
+            }
+
+            [$shop, $snapshot] = $this->connectionAttestationSubject();
+            $this->runtimeState->deactivate();
+            $pdo = $this->attestor->attest(
+                $connection,
+                $shop,
+                $snapshot,
+                $this->connectionConfiguration($snapshot),
+            );
+
+            $this->activate($shop, $connection, $pdo);
+        } catch (Throwable) {
+            $this->failClosed();
+
+            throw new TenantDatabaseAttestationFailed;
+        } finally {
+            $this->handlingConnectionEvent = false;
+        }
+    }
+
+    /**
+     * Temporary Task 2 compatibility seam. Task 4 replaces this with its real
+     * file-backed central/tenant migration harness.
+     */
+    public function bootstrapForTesting(
+        #[\SensitiveParameter]
+        string $shopId,
+        #[\SensitiveParameter]
+        Connection $sourceConnection,
+    ): void {
+        if (! $this->application->runningUnitTests() || ! Str::isUuid($shopId)) {
+            throw new LogicException('Synthetic tenant bootstrap is available only to the test harness.');
+        }
+
+        $this->clearRuntimeState();
+        $shop = new Shop;
+        $shop->setRawAttributes([
+            'id' => $shopId,
+            'name' => 'Test tenant',
+            'slug' => 'test-tenant',
+        ], true);
+        $shop->exists = true;
+        $configuration = $sourceConnection->getConfig();
+        unset($configuration['name'], $configuration['url']);
+        $this->testingPendingShop = $shop;
+        $this->testingSourceConnection = $sourceConnection;
+        $this->config->set('database.connections.'.self::CONNECTION, $configuration);
+        $this->database->purge(self::CONNECTION);
+        $this->database->connection(self::CONNECTION);
+    }
+
+    /** @return array{Shop, ValidatedTenantConnection} */
+    private function connectionAttestationSubject(): array
+    {
+        if ($this->pendingShop !== null && $this->pendingSnapshot !== null) {
+            return [$this->pendingShop, $this->pendingSnapshot];
+        }
+
+        if ($this->activeLease === null
+            || $this->activeShop === null
+            || ! $this->runtimeState->isOwnedBy($this->activeLease)) {
+            throw new TenantDatabaseAttestationFailed;
+        }
+
+        $snapshot = $this->activeShop->validatedDatabaseConnection();
+
+        return [$this->activeShop, $snapshot];
+    }
+
+    private function activate(
+        #[\SensitiveParameter]
+        Shop $shop,
+        Connection $connection,
+        PDO $pdo,
+    ): void {
+        $lease = new TenantConnectionLease;
+        $this->activeLease = $lease;
+        $this->activeConnection = $connection;
+        $this->activePdo = $pdo;
+        $this->activeShop = clone $shop;
+        $this->pendingShop = null;
+        $this->pendingSnapshot = null;
+        $this->runtimeState->activate($shop, $lease);
+        $this->redactConnectionCredentials($connection);
+        $connection->setReconnector(static function (#[\SensitiveParameter] Connection $reconnecting) use ($lease): void {
+            resolve(self::class)->reconnectOwnedConnection($reconnecting, $lease);
+        });
+        Model::setConnectionResolver($this->database);
+        $this->moduleRegistry->flush();
+        $this->initializePermissionState((string) $shop->getKey());
+        $this->auth->forgetGuards();
+    }
+
+    private function attestTestingConnection(Connection $connection): void
+    {
+        if (! $this->application->runningUnitTests()
+            || $this->testingSourceConnection === null
+            || ($this->testingPendingShop === null && $this->activeShop === null)) {
+            throw new TenantDatabaseAttestationFailed;
+        }
+
+        $shop = $this->testingPendingShop ?? $this->activeShop;
+        $source = $this->testingSourceConnection;
+        $connection->setPdo($source->getPdo());
+        $connection->setReadPdo($source->getReadPdo());
+
+        if ($shop === null) {
+            throw new TenantDatabaseAttestationFailed;
+        }
+
+        $this->testingPendingShop = null;
+        $this->activate($shop, $connection, $source->getPdo());
+    }
+
+    private function reconnectOwnedConnection(
+        #[\SensitiveParameter]
+        Connection $connection,
+        #[\SensitiveParameter]
+        TenantConnectionLease $lease,
+    ): void {
+        $registeredConnection = $this->database->getConnections()[self::CONNECTION] ?? null;
+
+        if ($this->activeLease === null
+            || ! $lease->owns($this->activeLease)
+            || ! $this->runtimeState->isOwnedBy($lease)
+            || $this->activeConnection !== $connection
+            || $registeredConnection !== $connection) {
+            throw new LogicException('A stale tenant connection cannot be reconnected.');
+        }
+
+        $freshConnection = $this->database->reconnect(self::CONNECTION);
+        $connection->setPdo($freshConnection->getRawPdo());
+        $connection->setReadPdo($freshConnection->getRawReadPdo());
+    }
+
+    private function hasLiveAttestedConnection(TenantConnectionLease $lease): bool
+    {
+        $registeredConnection = $this->database->getConnections()[self::CONNECTION] ?? null;
+
+        return $this->runtimeState->isOwnedBy($lease)
+            && $this->activeConnection !== null
+            && $registeredConnection === $this->activeConnection
+            && $this->activeConnection->getRawPdo() === $this->activePdo
+            && $this->activePdo instanceof PDO
+            && $this->config->has('database.connections.'.self::CONNECTION);
+    }
+
+    /** @return array<string, mixed> */
+    private function connectionConfiguration(
+        #[\SensitiveParameter]
+        ValidatedTenantConnection $snapshot,
+    ): array {
+        $target = $snapshot->target();
+        $configuration = array_replace(
+            $this->tenantConnectionTemplate,
+            $snapshot->connectionOverrides(),
+        );
+        unset($configuration['url'], $configuration['name']);
+        $configuration['driver'] = $target->driver;
+        $configuration['database'] = $target->database;
+
+        if ($target->effectiveSocket !== null) {
+            unset($configuration['host'], $configuration['port']);
+            $configuration['unix_socket'] = $target->effectiveSocket;
+        } elseif ($target->driver === 'mysql') {
+            unset($configuration['unix_socket']);
+            $configuration['host'] = $target->effectiveHost;
+            $configuration['port'] = $target->effectivePort;
+        } else {
+            unset($configuration['host'], $configuration['port'], $configuration['unix_socket']);
+        }
+
+        return $configuration;
+    }
+
+    private function failClosed(): void
+    {
+        $this->clearRuntimeState();
+    }
+
     private function clearRuntimeState(): void
     {
-        $this->database->purge(self::CONNECTION);
+        $connections = [];
+        $registeredConnection = $this->database->getConnections()[self::CONNECTION] ?? null;
+
+        foreach ([$registeredConnection, $this->activeConnection] as $connection) {
+            if ($connection instanceof Connection) {
+                $connections[spl_object_id($connection)] = $connection;
+            }
+        }
+
+        $this->runtimeState->deactivate();
+        $this->activeLease = null;
+        $this->activeConnection = null;
+        $this->activePdo = null;
+        $this->activeShop = null;
+        $this->pendingShop = null;
+        $this->pendingSnapshot = null;
+        $this->testingPendingShop = null;
+        $this->testingSourceConnection = null;
+        $this->config->set('permission.cache.key', self::NO_TENANT_PERMISSION_CACHE_KEY);
+        $this->removeTenantConfiguration();
+
+        foreach ($connections as $connection) {
+            $this->redactConnectionCredentials($connection);
+            $connection->setReconnector(
+                static function (#[\SensitiveParameter] Connection $staleConnection): never {
+                    throw new LogicException('A stale tenant connection cannot be reconnected.');
+                },
+            );
+            $connection->setPdo(null)->setReadPdo(null)->setDirectPdo(null);
+        }
+
+        $this->attemptCleanup(fn (): mixed => $this->database->purge(self::CONNECTION));
+
+        if (array_key_exists(self::CONNECTION, $this->database->getConnections())) {
+            foreach ($connections as $connection) {
+                $connection->unsetTransactionManager();
+            }
+
+            $this->attemptCleanup(fn (): mixed => $this->database->purge(self::CONNECTION));
+        }
+
+        $this->attemptCleanup(fn (): mixed => Model::setConnectionResolver($this->database));
+        $this->attemptCleanup(fn (): mixed => $this->moduleRegistry->flush());
+        $this->attemptCleanup(fn (): mixed => $this->auth->forgetGuards());
+        $this->attemptCleanup(fn (): mixed => $this->permissionRegistrar->clearPermissionsCollection());
+        $this->attemptCleanup(fn (): mixed => $this->permissionRegistrar->initializeCache());
+    }
+
+    private function removeTenantConfiguration(): void
+    {
         $connections = $this->config->get('database.connections');
 
         if (is_array($connections)) {
             unset($connections[self::CONNECTION]);
             $this->config->set('database.connections', $connections);
         }
-        $this->context->clear();
-        Model::setConnectionResolver($this->database);
-        $this->auth->forgetGuards();
-        $this->config->set('permission.cache.key', self::NO_TENANT_PERMISSION_CACHE_KEY);
-        $this->permissionRegistrar->initializeCache();
     }
 
     private function initializePermissionState(string $shopId): void
@@ -140,92 +412,29 @@ class TenantConnectionManager
         $this->permissionRegistrar->initializeCache();
     }
 
-    private function reAttestMySqlEndpoints(
-        #[\SensitiveParameter]
-        NormalizedDatabaseTarget $target,
-    ): void {
-        if (! $target->hasCurrentMySqlEndpoints(resolve(DatabaseHostResolver::class))) {
-            throw new TenantDatabaseAttestationFailed;
+    private function attemptCleanup(#[\SensitiveParameter] Closure $operation): void
+    {
+        try {
+            $operation();
+        } catch (Throwable) {
         }
     }
 
-    private function attestSqliteConnection(
-        PDO $pdo,
-        #[\SensitiveParameter]
-        NormalizedDatabaseTarget $target,
-    ): void {
-        if ($target->filesystemIdentity === null || ! $target->hasStableFilesystemIdentity) {
-            throw new TenantDatabaseAttestationFailed;
+    private function redactConnectionCredentials(#[\SensitiveParameter] Connection $connection): void
+    {
+        $configurationProperty = new \ReflectionProperty(Connection::class, 'config');
+        $configuration = $configurationProperty->getValue($connection);
+
+        if (! is_array($configuration)) {
+            return;
         }
 
-        $statement = $pdo->query('PRAGMA database_list');
-        $databases = $statement === false ? [] : $statement->fetchAll(PDO::FETCH_ASSOC);
-        $mainDatabase = null;
-
-        foreach ($databases as $database) {
-            if (($database['name'] ?? null) === 'main' && is_string($database['file'] ?? null)) {
-                $mainDatabase = $database['file'];
-                break;
+        foreach (['username', 'password', 'url'] as $credential) {
+            if (array_key_exists($credential, $configuration)) {
+                $configuration[$credential] = '[redacted]';
             }
         }
 
-        $canonicalDatabase = is_string($mainDatabase) ? realpath($mainDatabase) : false;
-        $expectedDatabase = realpath($target->database);
-
-        if ($canonicalDatabase === false
-            || $expectedDatabase === false
-            || ! hash_equals($expectedDatabase, $canonicalDatabase)
-            || ! hash_equals($target->filesystemIdentity, $this->filesystemIdentity($canonicalDatabase))) {
-            throw new TenantDatabaseAttestationFailed;
-        }
-    }
-
-    private function attestMySqlConnection(
-        PDO $pdo,
-        #[\SensitiveParameter]
-        NormalizedDatabaseTarget $target,
-    ): void {
-        $statement = $pdo->query('SELECT DATABASE()');
-        $database = $statement === false ? false : $statement->fetchColumn();
-
-        if (! is_string($database) || ! hash_equals($target->database, $database)) {
-            throw new TenantDatabaseAttestationFailed;
-        }
-    }
-
-    private function attestTenantMarker(
-        PDO $pdo,
-        #[\SensitiveParameter]
-        Shop $shop,
-        #[\SensitiveParameter]
-        NormalizedDatabaseTarget $target,
-    ): void {
-        $statement = $pdo->prepare(
-            'SELECT shop_id, target_fingerprint FROM tenant_installations WHERE id = ? LIMIT 2',
-        );
-        $statement->execute([1]);
-        $markers = $statement->fetchAll(PDO::FETCH_ASSOC);
-
-        if (count($markers) !== 1
-            || ! is_string($markers[0]['shop_id'] ?? null)
-            || ! is_string($markers[0]['target_fingerprint'] ?? null)
-            || ! hash_equals((string) $shop->getKey(), $markers[0]['shop_id'])
-            || ! hash_equals($target->fingerprint, $markers[0]['target_fingerprint'])) {
-            throw new TenantDatabaseAttestationFailed;
-        }
-    }
-
-    private function filesystemIdentity(#[\SensitiveParameter] string $database): string
-    {
-        $metadata = @stat($database);
-
-        if (! is_array($metadata)
-            || ! is_int($metadata['dev'] ?? null)
-            || ! is_int($metadata['ino'] ?? null)
-            || ($metadata['dev'] === 0 && $metadata['ino'] === 0)) {
-            throw new TenantDatabaseAttestationFailed;
-        }
-
-        return $metadata['dev'].':'.$metadata['ino'];
+        $configurationProperty->setValue($connection, $configuration);
     }
 }

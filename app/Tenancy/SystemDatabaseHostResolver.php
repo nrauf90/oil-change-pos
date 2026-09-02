@@ -55,4 +55,10 @@ final class SystemDatabaseHostResolver implements DatabaseHostResolver
 
         return $this->resolvedAddresses[$host] = array_values(array_unique($addresses));
     }
+
+    /** @return array<string, string> */
+    public function __debugInfo(): array
+    {
+        return ['resolved_addresses' => '[redacted]'];
+    }
 }

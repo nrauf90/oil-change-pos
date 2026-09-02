@@ -18,6 +18,8 @@ use App\Tenancy\DatabaseHostResolver;
 use App\Tenancy\DatabaseTargetConfiguration;
 use App\Tenancy\NormalizedDatabaseTarget;
 use App\Tenancy\SqliteDatabaseIdentitySnapshot;
+use App\Tenancy\SystemDatabaseHostResolver;
+use App\Tenancy\TenantConnectionManager;
 use Illuminate\Database\Eloquent\MassAssignmentException;
 use Illuminate\Database\QueryException;
 use Illuminate\Encryption\Encrypter;
@@ -174,7 +176,7 @@ class CentralDomainTest extends TestCase
         $arrayPayload = $shop->toArray();
         $jsonPayload = json_decode($shop->toJson(), true, flags: JSON_THROW_ON_ERROR);
 
-        foreach (['database_host', 'database_port', 'database_username', 'database_password'] as $field) {
+        foreach (['database_host', 'database_port', 'database_username', 'database_password', 'database_attestation_key'] as $field) {
             $this->assertArrayNotHasKey($field, $arrayPayload);
             $this->assertArrayNotHasKey($field, $jsonPayload);
         }
@@ -231,6 +233,84 @@ class CentralDomainTest extends TestCase
         $this->assertSame('App\\Tenancy\\DatabaseTargetConfiguration', (string) $parameters[0]->getType());
         $this->assertSame('App\\Tenancy\\DatabaseTargetConfiguration', (string) $parameters[1]->getType());
         $this->assertSame('?App\\Tenancy\\DatabaseTargetConfiguration', (string) $parameters[2]->getType());
+    }
+
+    public function test_connection_scope_and_topology_resolvers_redact_sensitive_arguments(): void
+    {
+        $withinParameters = collect((new ReflectionMethod(
+            TenantConnectionManager::class,
+            'within',
+        ))->getParameters())->keyBy(
+            static fn (ReflectionParameter $parameter): string => $parameter->getName(),
+        );
+
+        $this->assertCount(1, $withinParameters['shop']->getAttributes(\SensitiveParameter::class));
+        $this->assertCount(1, $withinParameters['operation']->getAttributes(\SensitiveParameter::class));
+
+        foreach (['forTenant', 'fromCentralConfiguration', 'normalize', 'resolveMySqlHostEndpoints'] as $method) {
+            $resolverParameter = collect((new ReflectionMethod(
+                NormalizedDatabaseTarget::class,
+                $method,
+            ))->getParameters())->first(
+                static fn (ReflectionParameter $parameter): bool => $parameter->getName() === 'hostResolver',
+            );
+
+            $this->assertInstanceOf(ReflectionParameter::class, $resolverParameter);
+            $this->assertCount(1, $resolverParameter->getAttributes(\SensitiveParameter::class));
+        }
+
+        $this->assertSame(
+            ['resolved_addresses' => '[redacted]'],
+            (new SystemDatabaseHostResolver)->__debugInfo(),
+        );
+    }
+
+    public function test_connection_scope_closure_is_not_captured_in_exception_traces(): void
+    {
+        $secret = 'tenant-operation-secret';
+        $operation = static fn (): string => $secret;
+        $previousIgnoreArguments = ini_get('zend.exception_ignore_args');
+        $caughtException = null;
+        ini_set('zend.exception_ignore_args', '0');
+
+        try {
+            app(TenantConnectionManager::class)->within(new Shop, $operation);
+        } catch (Throwable $exception) {
+            $caughtException = $exception;
+        } finally {
+            if (is_string($previousIgnoreArguments)) {
+                ini_set('zend.exception_ignore_args', $previousIgnoreArguments);
+            }
+        }
+
+        $traceContainsSecret = function (mixed $value) use (&$traceContainsSecret, $secret): bool {
+            if ($value instanceof \SensitiveParameterValue) {
+                return false;
+            }
+
+            if (is_string($value)) {
+                return str_contains($value, $secret);
+            }
+
+            if ($value instanceof \Closure) {
+                return $traceContainsSecret((new \ReflectionFunction($value))->getStaticVariables());
+            }
+
+            if (! is_array($value)) {
+                return false;
+            }
+
+            foreach ($value as $nestedValue) {
+                if ($traceContainsSecret($nestedValue)) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        $this->assertInstanceOf(LogicException::class, $caughtException);
+        $this->assertFalse($traceContainsSecret($caughtException->getTrace()));
     }
 
     public function test_system_host_resolution_cache_is_scoped_to_one_identity_evaluation(): void
@@ -472,14 +552,14 @@ class CentralDomainTest extends TestCase
         $this->writeDatabaseMarker($shopADatabasePath, 'shop-a');
         $this->writeDatabaseMarker($shopBDatabasePath, 'shop-b');
         $tenantTemplate = $this->tenantTemplateWithDatabaseUrl('sqlite:///:memory:');
-        $shopA = Shop::factory()->make([
-            'database_driver' => 'sqlite',
-            'database_name' => $shopADatabasePath,
-        ]);
-        $shopB = Shop::factory()->make([
-            'database_driver' => 'sqlite',
-            'database_name' => $shopBDatabasePath,
-        ]);
+        $shopA = $this->registerShop(
+            slug: 'generic-url-shop-a',
+            databaseName: $shopADatabasePath,
+        );
+        $shopB = $this->registerShop(
+            slug: 'generic-url-shop-b',
+            databaseName: $shopBDatabasePath,
+        );
 
         $this->assertArrayNotHasKey('url', $tenantTemplate);
         $this->assertArrayNotHasKey('url', $shopA->databaseConfig());
@@ -1096,15 +1176,16 @@ class CentralDomainTest extends TestCase
 
     public function test_mysql_template_defaults_affect_identity_without_becoming_shop_overrides(): void
     {
-        config()->set('database.connections.tenant.host', '192.0.2.60');
-        config()->set('database.connections.tenant.port', 3310);
-        config()->set('database.connections.tenant.unix_socket', '');
+        config()->set('database.tenant_connection_template.host', '192.0.2.60');
+        config()->set('database.tenant_connection_template.port', 3310);
+        config()->set('database.tenant_connection_template.unix_socket', '');
 
         $shop = $this->registerShop(
             databaseDriver: 'mysql',
             databaseName: 'tenant_defaults',
         );
         $storedShop = DB::connection('central')->table('shops')->where('id', $shop->getKey())->first();
+        $snapshot = $shop->validatedDatabaseConnection();
 
         $this->assertNotNull($storedShop);
         $this->assertNull($storedShop->database_host);
@@ -1114,6 +1195,34 @@ class CentralDomainTest extends TestCase
             'driver' => 'mysql',
             'database' => 'tenant_defaults',
         ], $shop->databaseConfig());
+        $this->assertSame('192.0.2.60', $snapshot->target()->effectiveHost);
+        $this->assertSame(3310, $snapshot->target()->effectivePort);
+        $this->assertNull($snapshot->target()->effectiveSocket);
+        $this->assertNull($snapshot->target()->host);
+        $this->assertNull($snapshot->target()->port);
+    }
+
+    public function test_inherited_mysql_socket_is_effective_without_becoming_a_shop_override(): void
+    {
+        $socketPath = $this->newTenantDatabasePath('inherited-mysql-socket-', create: false);
+        config()->set('database.tenant_connection_template.host', 'ignored.example.test');
+        config()->set('database.tenant_connection_template.port', 4408);
+        config()->set('database.tenant_connection_template.unix_socket', $socketPath);
+
+        $shop = $this->registerShop(
+            databaseDriver: 'mysql',
+            databaseName: 'inherited_socket',
+        );
+        $snapshot = $shop->validatedDatabaseConnection();
+
+        $this->assertSame([
+            'driver' => 'mysql',
+            'database' => 'inherited_socket',
+        ], $snapshot->connectionOverrides());
+        $this->assertSame($socketPath, $snapshot->target()->effectiveSocket);
+        $this->assertNull($snapshot->target()->socket);
+        $this->assertNull($snapshot->target()->effectiveHost);
+        $this->assertNull($snapshot->target()->effectivePort);
     }
 
     public function test_mysql_socket_replaces_irrelevant_host_and_port_in_the_normalized_target(): void
@@ -1791,7 +1900,7 @@ class CentralDomainTest extends TestCase
         $this->resolveDatabaseHosts([
             'claim-race.example.test' => ['192.0.2.96'],
         ]);
-        $tenantConfiguration = config('database.connections.tenant');
+        $tenantConfiguration = config('database.tenant_connection_template');
         $centralConfiguration = config('database.connections.central');
 
         if (! is_array($tenantConfiguration) || ! is_array($centralConfiguration)) {
@@ -1874,6 +1983,92 @@ class CentralDomainTest extends TestCase
 
         $this->assertDatabaseMissing('shops', ['slug' => 'atomic-claim-publication'], 'central');
         $this->assertDatabaseCount('shop_database_target_claims', 0, 'central');
+    }
+
+    public function test_direct_factory_creation_is_atomic_with_claim_publication(): void
+    {
+        DB::connection('central')->unprepared(<<<'SQL'
+            CREATE TRIGGER reject_direct_shop_database_target_claim
+            BEFORE INSERT ON shop_database_target_claims
+            BEGIN
+                SELECT RAISE(ABORT, 'forced direct claim publication failure');
+            END
+            SQL);
+
+        try {
+            Shop::factory()->create(['slug' => 'direct-atomic-creation']);
+            $this->fail('Direct model creation left a Shop without its complete claim set.');
+        } catch (QueryException $exception) {
+            $this->assertStringContainsString('forced direct claim publication failure', $exception->getMessage());
+        }
+
+        $this->assertDatabaseMissing('shops', ['slug' => 'direct-atomic-creation'], 'central');
+        $this->assertDatabaseCount('shop_database_target_claims', 0, 'central');
+    }
+
+    public function test_shop_creation_rolls_back_its_unit_when_an_outer_transaction_catches_a_claim_failure(): void
+    {
+        DB::connection('central')->unprepared(<<<'SQL'
+            CREATE TRIGGER reject_nested_shop_database_target_claim
+            BEFORE INSERT ON shop_database_target_claims
+            BEGIN
+                SELECT RAISE(ABORT, 'forced nested claim publication failure');
+            END
+            SQL);
+
+        $connection = DB::connection('central');
+        $caughtClaimFailure = false;
+        $connection->beginTransaction();
+
+        try {
+            try {
+                Shop::factory()->create(['slug' => 'nested-atomic-creation']);
+            } catch (QueryException $exception) {
+                $caughtClaimFailure = true;
+                $this->assertStringContainsString(
+                    'forced nested claim publication failure',
+                    $exception->getMessage(),
+                );
+            }
+
+            $connection->commit();
+        } finally {
+            while ($connection->transactionLevel() > 0) {
+                $connection->rollBack();
+            }
+        }
+
+        $this->assertTrue($caughtClaimFailure);
+        $this->assertDatabaseMissing('shops', ['slug' => 'nested-atomic-creation'], 'central');
+        $this->assertDatabaseCount('shop_database_target_claims', 0, 'central');
+    }
+
+    public function test_quiet_shop_creation_cannot_bypass_atomic_claim_publication(): void
+    {
+        $shop = Shop::factory()->createQuietly();
+        $expectedClaims = $shop->revalidateDatabaseTarget()->claimFingerprints();
+
+        $this->assertEqualsCanonicalizing(
+            $expectedClaims,
+            $shop->databaseTargetClaims()->pluck('fingerprint')->all(),
+        );
+    }
+
+    public function test_forward_migration_enforces_restrict_on_the_claim_foreign_key(): void
+    {
+        $foreignKeys = DB::connection('central')->select(
+            "PRAGMA foreign_key_list('shop_database_target_claims')",
+        );
+        $shopForeignKey = collect($foreignKeys)->first(
+            static fn (object $foreignKey): bool => $foreignKey->from === 'shop_id'
+                && $foreignKey->table === 'shops',
+        );
+
+        $this->assertNotNull($shopForeignKey);
+        $this->assertSame('RESTRICT', $shopForeignKey->on_delete);
+        $this->assertDatabaseHas('migrations', [
+            'migration' => '2026_09_02_002917_restrict_shop_database_target_claim_deletion_and_add_attestation_key',
+        ], 'central');
     }
 
     public function test_validated_connection_rejects_a_missing_or_extra_owned_claim(): void
@@ -2687,7 +2882,7 @@ class CentralDomainTest extends TestCase
 require $argv[1].'/vendor/autoload.php';
 $application = require $argv[1].'/bootstrap/app.php';
 $configuration = require $argv[1].'/config/database.php';
-echo json_encode($configuration['connections']['tenant'], JSON_THROW_ON_ERROR);
+echo json_encode($configuration['tenant_connection_template'], JSON_THROW_ON_ERROR);
 PHP;
         $process = new Process(
             [PHP_BINARY, '-r', $script, base_path()],

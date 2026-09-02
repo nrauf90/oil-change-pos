@@ -25,6 +25,13 @@ final readonly class NormalizedDatabaseTarget
         public ?int $port,
         #[\SensitiveParameter]
         public ?string $socket,
+        /** @var list<string>|string|null */
+        #[\SensitiveParameter]
+        public array|string|null $effectiveHost,
+        #[\SensitiveParameter]
+        public ?int $effectivePort,
+        #[\SensitiveParameter]
+        public ?string $effectiveSocket,
         public string $fingerprint,
         public ?string $pendingSqliteFingerprint,
         public bool $hasStableFilesystemIdentity,
@@ -45,21 +52,23 @@ final readonly class NormalizedDatabaseTarget
         return $this->claimFingerprints;
     }
 
-    public function hasCurrentMySqlEndpoints(DatabaseHostResolver $hostResolver): bool
-    {
+    public function hasCurrentMySqlEndpoints(
+        #[\SensitiveParameter]
+        DatabaseHostResolver $hostResolver,
+    ): bool {
         if ($this->driver !== 'mysql') {
             return false;
         }
 
-        if ($this->socket !== null) {
+        if ($this->effectiveSocket !== null) {
             return true;
         }
 
         $currentTarget = self::normalize(
             driver: $this->driver,
             database: $this->database,
-            host: $this->host,
-            port: $this->port,
+            host: $this->effectiveHost,
+            port: $this->effectivePort,
             socket: null,
             allowSqliteMemoryDatabase: false,
             hostResolver: $hostResolver,
@@ -78,6 +87,7 @@ final readonly class NormalizedDatabaseTarget
         ?DatabaseTargetConfiguration $central,
         #[\SensitiveParameter]
         string $sqliteRoot,
+        #[\SensitiveParameter]
         DatabaseHostResolver $hostResolver,
     ): self {
         $normalizedTarget = self::normalize(
@@ -132,6 +142,9 @@ final readonly class NormalizedDatabaseTarget
             $host,
             $port,
             $socket,
+            $this->effectiveHost,
+            $this->effectivePort,
+            $this->effectiveSocket,
             $this->fingerprint,
             $this->pendingSqliteFingerprint,
             $this->hasStableFilesystemIdentity,
@@ -145,6 +158,7 @@ final readonly class NormalizedDatabaseTarget
     private static function fromCentralConfiguration(
         #[\SensitiveParameter]
         ?DatabaseTargetConfiguration $configuration,
+        #[\SensitiveParameter]
         DatabaseHostResolver $hostResolver,
     ): ?self {
         if ($configuration === null) {
@@ -182,6 +196,7 @@ final readonly class NormalizedDatabaseTarget
         #[\SensitiveParameter]
         ?string $socket,
         bool $allowSqliteMemoryDatabase,
+        #[\SensitiveParameter]
         DatabaseHostResolver $hostResolver,
         #[\SensitiveParameter]
         ?string $sqliteBasePath,
@@ -214,6 +229,9 @@ final readonly class NormalizedDatabaseTarget
                 null,
                 null,
                 null,
+                null,
+                null,
+                null,
                 $fingerprint,
                 $pendingFingerprint,
                 $filesystemIdentity !== null,
@@ -237,6 +255,9 @@ final readonly class NormalizedDatabaseTarget
             return new self(
                 $driver,
                 $database,
+                null,
+                null,
+                $socket,
                 null,
                 null,
                 $socket,
@@ -284,6 +305,9 @@ final readonly class NormalizedDatabaseTarget
         return new self(
             $driver,
             $database,
+            $host,
+            $port,
+            null,
             $host,
             $port,
             null,
@@ -414,6 +438,7 @@ final readonly class NormalizedDatabaseTarget
     private static function resolveMySqlHostEndpoints(
         #[\SensitiveParameter]
         string $host,
+        #[\SensitiveParameter]
         DatabaseHostResolver $hostResolver,
     ): array {
         if ($host === 'localhost') {

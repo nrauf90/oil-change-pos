@@ -20,6 +20,31 @@ return [
 
     'tenant_sqlite_root' => env('TENANT_SQLITE_ROOT', database_path('tenants')),
 
+    'tenant_attestation_lock_path' => env(
+        'TENANT_ATTESTATION_LOCK_PATH',
+        storage_path('framework/tenant-attestation-locks'),
+    ),
+
+    'tenant_connection_template' => [
+        'driver' => env('TENANT_DB_CONNECTION', env('DB_CONNECTION', 'sqlite')),
+        'host' => env('TENANT_DB_HOST', env('DB_HOST', '127.0.0.1')),
+        'port' => env('TENANT_DB_PORT', env('DB_PORT', '3306')),
+        'database' => env('TENANT_DB_DATABASE', env('DB_DATABASE', database_path('database.sqlite'))),
+        'username' => env('TENANT_DB_USERNAME', env('DB_USERNAME', 'root')),
+        'password' => env('TENANT_DB_PASSWORD', env('DB_PASSWORD', '')),
+        'unix_socket' => env('TENANT_DB_SOCKET', env('DB_SOCKET', '')),
+        'charset' => env('TENANT_DB_CHARSET', env('DB_CHARSET', 'utf8mb4')),
+        'collation' => env('TENANT_DB_COLLATION', env('DB_COLLATION', 'utf8mb4_unicode_ci')),
+        'prefix' => '',
+        'prefix_indexes' => true,
+        'strict' => true,
+        'engine' => null,
+        'foreign_key_constraints' => env('TENANT_DB_FOREIGN_KEYS', env('DB_FOREIGN_KEYS', true)),
+        'options' => extension_loaded('pdo_mysql') ? array_filter([
+            PDO::MYSQL_ATTR_SSL_CA => env('TENANT_MYSQL_ATTR_SSL_CA', env('MYSQL_ATTR_SSL_CA')),
+        ]) : [],
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Database Connections
@@ -63,26 +88,6 @@ return [
             'foreign_key_constraints' => env('CENTRAL_DB_FOREIGN_KEYS', env('DB_FOREIGN_KEYS', true)),
             'options' => extension_loaded('pdo_mysql') ? array_filter([
                 PDO::MYSQL_ATTR_SSL_CA => env('CENTRAL_MYSQL_ATTR_SSL_CA', env('MYSQL_ATTR_SSL_CA')),
-            ]) : [],
-        ],
-
-        'tenant' => [
-            'driver' => env('TENANT_DB_CONNECTION', env('DB_CONNECTION', 'sqlite')),
-            'host' => env('TENANT_DB_HOST', env('DB_HOST', '127.0.0.1')),
-            'port' => env('TENANT_DB_PORT', env('DB_PORT', '3306')),
-            'database' => env('TENANT_DB_DATABASE', env('DB_DATABASE', database_path('database.sqlite'))),
-            'username' => env('TENANT_DB_USERNAME', env('DB_USERNAME', 'root')),
-            'password' => env('TENANT_DB_PASSWORD', env('DB_PASSWORD', '')),
-            'unix_socket' => env('TENANT_DB_SOCKET', env('DB_SOCKET', '')),
-            'charset' => env('TENANT_DB_CHARSET', env('DB_CHARSET', 'utf8mb4')),
-            'collation' => env('TENANT_DB_COLLATION', env('DB_COLLATION', 'utf8mb4_unicode_ci')),
-            'prefix' => '',
-            'prefix_indexes' => true,
-            'strict' => true,
-            'engine' => null,
-            'foreign_key_constraints' => env('TENANT_DB_FOREIGN_KEYS', env('DB_FOREIGN_KEYS', true)),
-            'options' => extension_loaded('pdo_mysql') ? array_filter([
-                PDO::MYSQL_ATTR_SSL_CA => env('TENANT_MYSQL_ATTR_SSL_CA', env('MYSQL_ATTR_SSL_CA')),
             ]) : [],
         ],
 

@@ -10,6 +10,8 @@ final readonly class ValidatedTenantConnection
         private array $connectionOverrides,
         #[\SensitiveParameter]
         private NormalizedDatabaseTarget $target,
+        #[\SensitiveParameter]
+        private string $expectedMarkerHmac,
     ) {}
 
     /** @return array<string, mixed> */
@@ -21,6 +23,11 @@ final readonly class ValidatedTenantConnection
     public function target(): NormalizedDatabaseTarget
     {
         return $this->target;
+    }
+
+    public function expectedMarkerHmac(): string
+    {
+        return $this->expectedMarkerHmac;
     }
 
     /** @return array<string, string> */

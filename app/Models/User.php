@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\Role as RoleEnum;
 use App\Models\Concerns\UsesTenantConnection;
+use App\Models\Contracts\TenantScoped;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
@@ -14,7 +15,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Spatie\Permission\Traits\HasRoles;
 
-class User extends Authenticatable implements FilamentUser
+class User extends Authenticatable implements FilamentUser, TenantScoped
 {
     /** @use HasFactory<UserFactory> */
     use HasFactory, HasRoles, Notifiable, UsesTenantConnection;

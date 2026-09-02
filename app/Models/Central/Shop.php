@@ -35,6 +35,7 @@ class Shop extends CentralModel
         'database_socket',
         'database_username',
         'database_password',
+        'database_attestation_key',
     ];
 
     private const DATABASE_TARGET_UNIQUE_INDEX = 'shops_database_target_fingerprint_unique';
@@ -53,6 +54,7 @@ class Shop extends CentralModel
         'database_socket',
         'database_username',
         'database_password',
+        'database_attestation_key',
     ];
 
     private bool $allowsLifecycleTransition = false;
@@ -73,6 +75,7 @@ class Shop extends CentralModel
             'database_socket' => 'encrypted',
             'database_username' => 'encrypted',
             'database_password' => 'encrypted',
+            'database_attestation_key' => 'encrypted',
             'provisioning_failed_at' => 'datetime',
             'provisioned_at' => 'datetime',
         ];
@@ -81,12 +84,6 @@ class Shop extends CentralModel
     protected static function booted(): void
     {
         static::saving(function (self $shop): void {
-            if (! $shop->exists) {
-                $target = $shop->prevalidatedDatabaseTarget ?? $shop->normalizedDatabaseTarget();
-                $shop->applyNormalizedDatabaseTarget($target);
-                $shop->assertDatabaseTargetIsAvailable($target);
-            }
-
             if ($shop->exists && $shop->isDirty('status') && ! $shop->allowsLifecycleTransition) {
                 throw new LogicException('Shop status must be changed through a lifecycle method.');
             }
@@ -98,9 +95,44 @@ class Shop extends CentralModel
             }
         });
 
-        static::created(function (self $shop): void {
-            $shop->replaceDatabaseTargetClaims($shop->pendingDatabaseTargetClaimFingerprints);
-        });
+    }
+
+    /** @param array<string, mixed> $options */
+    public function save(array $options = []): bool
+    {
+        $connection = $this->getConnection();
+
+        if ($this->exists) {
+            return parent::save($options);
+        }
+
+        $this->prepareNewShopForPersistence();
+
+        try {
+            return $connection->transaction(function () use ($options): bool {
+                $saved = parent::save($options);
+
+                if ($saved) {
+                    $this->replaceDatabaseTargetClaims($this->pendingDatabaseTargetClaimFingerprints);
+                }
+
+                return $saved;
+            });
+        } catch (UniqueConstraintViolationException $exception) {
+            $this->exists = false;
+            $this->wasRecentlyCreated = false;
+
+            if ($this->violatesDatabaseTargetIdentity($exception)) {
+                throw TenantDatabaseTargetConflict::alreadyAssigned();
+            }
+
+            throw $exception;
+        } catch (\Throwable $exception) {
+            $this->exists = false;
+            $this->wasRecentlyCreated = false;
+
+            throw $exception;
+        }
     }
 
     public static function registerForProvisioning(
@@ -360,7 +392,30 @@ class Shop extends CentralModel
             }
         }
 
-        return new ValidatedTenantConnection($configuration, $target);
+        return new ValidatedTenantConnection(
+            $configuration,
+            $target,
+            $shop->databaseAttestationHmac(),
+        );
+    }
+
+    public function databaseAttestationHmac(): string
+    {
+        $shopId = $this->getKey();
+        $fingerprint = $this->getAttribute('database_target_fingerprint');
+        $key = $this->getAttribute('database_attestation_key');
+
+        if (! is_string($shopId) || $shopId === ''
+            || ! is_string($fingerprint) || $fingerprint === ''
+            || ! is_string($key) || $key === '') {
+            throw new LogicException('Shop database attestation material is incomplete.');
+        }
+
+        return hash_hmac(
+            'sha256',
+            "tenant-installation:v1\0{$shopId}\0{$fingerprint}",
+            $key,
+        );
     }
 
     public function forceDelete(): never
@@ -540,8 +595,7 @@ class Shop extends CentralModel
         #[\SensitiveParameter]
         ?string $databaseSocket,
     ): NormalizedDatabaseTarget {
-        $tenantConfiguration = config('database.tenant_connection_template')
-            ?? config('database.connections.tenant');
+        $tenantConfiguration = config('database.tenant_connection_template');
         $centralConfiguration = config('database.connections.central');
         $sqliteRoot = config('database.tenant_sqlite_root');
 
@@ -621,6 +675,27 @@ class Shop extends CentralModel
                 $this->setEncryptedAttribute($attribute, $value);
             }
         }
+    }
+
+    private function ensureDatabaseAttestationKey(): void
+    {
+        if (is_string($this->getAttribute('database_attestation_key'))
+            && $this->getAttribute('database_attestation_key') !== '') {
+            return;
+        }
+
+        $this->setEncryptedAttribute(
+            'database_attestation_key',
+            base64_encode(random_bytes(32)),
+        );
+    }
+
+    private function prepareNewShopForPersistence(): void
+    {
+        $this->ensureDatabaseAttestationKey();
+        $target = $this->prevalidatedDatabaseTarget ?? $this->normalizedDatabaseTarget();
+        $this->applyNormalizedDatabaseTarget($target);
+        $this->assertDatabaseTargetIsAvailable($target);
     }
 
     private function setEncryptedAttribute(

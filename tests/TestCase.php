@@ -2,16 +2,16 @@
 
 namespace Tests;
 
-use App\Models\Central\Shop;
-use App\Tenancy\TenantContext;
+use App\Tenancy\TenantConnectionManager;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use Spatie\Permission\PermissionRegistrar;
 
 abstract class TestCase extends BaseTestCase
 {
+    private ?string $defaultTestTenantId = null;
+
     protected function setUpTraits()
     {
         if ($this->usesDefaultTenantContext()) {
@@ -53,30 +53,18 @@ abstract class TestCase extends BaseTestCase
             return;
         }
 
-        unset($defaultConfiguration['url']);
-        config()->set('database.connections.tenant', $defaultConfiguration);
-        DB::purge('tenant');
-
+        $this->defaultTestTenantId = (string) Str::uuid();
         $this->aliasTenantConnectionToDefault();
-
-        $shop = new Shop;
-        $shop->setRawAttributes([
-            'id' => (string) Str::uuid(),
-            'name' => 'Test tenant',
-            'slug' => 'test-tenant',
-        ], true);
-        $shop->exists = true;
-        app(TenantContext::class)->initialize($shop);
-        config()->set('permission.cache.key', 'spatie.permission.cache.tenant.'.$shop->getKey());
-        app(PermissionRegistrar::class)->initializeCache();
     }
 
     private function aliasTenantConnectionToDefault(): void
     {
         $defaultConnection = DB::connection((string) config('database.default'));
+        app(TenantConnectionManager::class)->bootstrapForTesting(
+            $this->defaultTestTenantId ??= (string) Str::uuid(),
+            $defaultConnection,
+        );
         $tenantConnection = DB::connection('tenant');
-        $tenantConnection->setPdo($defaultConnection->getPdo());
-        $tenantConnection->setReadPdo($defaultConnection->getReadPdo());
 
         if ($this->app->bound('db.transactions')) {
             $tenantConnection->setTransactionManager($this->app->make('db.transactions'));

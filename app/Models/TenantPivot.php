@@ -4,9 +4,9 @@ namespace App\Models;
 
 use App\Models\Concerns\UsesTenantConnection;
 use App\Models\Contracts\TenantScoped;
-use Spatie\Permission\Models\Role as SpatieRole;
+use Illuminate\Database\Eloquent\Relations\Pivot;
 
-class Role extends SpatieRole implements TenantScoped
+class TenantPivot extends Pivot implements TenantScoped
 {
     use UsesTenantConnection;
 }
