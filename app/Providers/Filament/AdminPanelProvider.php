@@ -4,7 +4,9 @@ namespace App\Providers\Filament;
 
 use App\Enums\Permission;
 use App\Filament\Pages\AdminDashboard;
+use App\Http\Middleware\EnforceReadOnlySupportAccess;
 use App\Http\Middleware\EnsureShopIsActive;
+use App\Http\Middleware\InitializeSupportAccess;
 use App\Http\Middleware\InitializeTenancy;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
@@ -14,6 +16,7 @@ use Filament\Navigation\NavigationItem;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
+use Filament\View\PanelsRenderHook;
 use Filament\Widgets\AccountWidget;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
@@ -44,6 +47,10 @@ class AdminPanelProvider extends PanelProvider
             ->widgets([
                 AccountWidget::class,
             ])
+            ->renderHook(
+                PanelsRenderHook::BODY_START,
+                static fn (): string => view('components.support-access-banner')->render(),
+            )
             // The back office is a side trip, not a destination. Without a way
             // back the owner who opens it is stranded: the panel is its own
             // shell, so the counter's header is gone and the only exits are
@@ -64,8 +71,10 @@ class AdminPanelProvider extends PanelProvider
                 EncryptCookies::class,
                 AddQueuedCookiesToResponse::class,
                 StartSession::class,
+                InitializeSupportAccess::class,
                 EnsureShopIsActive::class,
                 InitializeTenancy::class,
+                EnforceReadOnlySupportAccess::class,
                 AuthenticateSession::class,
                 ShareErrorsFromSession::class,
                 PreventRequestForgery::class,
@@ -74,8 +83,10 @@ class AdminPanelProvider extends PanelProvider
                 DispatchServingFilamentEvent::class,
             ])
             ->persistentMiddleware([
+                InitializeSupportAccess::class,
                 EnsureShopIsActive::class,
                 InitializeTenancy::class,
+                EnforceReadOnlySupportAccess::class,
             ])
             ->authMiddleware([
                 Authenticate::class,

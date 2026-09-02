@@ -2,13 +2,17 @@
 
 namespace App\Tenancy;
 
+use App\Http\Middleware\InitializeSupportAccess;
 use App\Models\Central\Shop;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Http\Request;
 
 final readonly class CentralTenantResolver implements TenantResolver
 {
-    public function __construct(private ConfigRepository $config) {}
+    public function __construct(
+        private ConfigRepository $config,
+        private SupportAccessContext $supportAccess,
+    ) {}
 
     public function resolve(Request $request): ?Shop
     {
@@ -33,10 +37,18 @@ final readonly class CentralTenantResolver implements TenantResolver
         }
 
         if ($slug === null) {
+            return $this->supportFallback($request, $requestHost, $baseHost);
+        }
+
+        $shop = Shop::query()->where('slug', $slug)->first();
+
+        if ($this->supportAccess->active()
+            && (! $shop instanceof Shop
+                || ! hash_equals((string) $this->supportAccess->shop()->getKey(), (string) $shop->getKey()))) {
             return null;
         }
 
-        return Shop::query()->where('slug', $slug)->first();
+        return $shop;
     }
 
     public function isTrustedCentralRequest(Request $request): bool
@@ -104,6 +116,19 @@ final readonly class CentralTenantResolver implements TenantResolver
         $slug = $request->route('tenant');
 
         return is_string($slug) && $this->isValidSlug($slug) ? $slug : null;
+    }
+
+    private function supportFallback(Request $request, string $requestHost, string $baseHost): ?Shop
+    {
+        if (! in_array((string) $this->config->get('app.env'), ['local', 'testing'], true)
+            || ! hash_equals($baseHost, $requestHost)
+            || $request->route('tenant') !== null
+            || $request->attributes->get(InitializeSupportAccess::VALIDATED_ATTRIBUTE) !== true
+            || ! $this->supportAccess->active()) {
+            return null;
+        }
+
+        return $this->supportAccess->shop();
     }
 
     private function isValidSlug(string $slug): bool

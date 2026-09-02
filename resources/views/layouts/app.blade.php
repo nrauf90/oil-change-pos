@@ -9,6 +9,8 @@
 </head>
 <body class="flex min-h-full flex-col bg-slate-100 font-sans text-slate-900 antialiased">
 
+<x-support-access-banner />
+
 @php
     // Driven by the module registry: switching a module off in the admin panel
     // removes its links here with no edit to this file. Each module also says
@@ -115,16 +117,22 @@
                             </div>
                         @endif
 
-                        <div class="p-1.5">
-                            <form method="POST" action="{{ route('logout') }}">
-                                @csrf
-                                <button type="submit" role="menuitem"
-                                        class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-bold text-red-600 transition hover:bg-red-50">
-                                    <x-filament::icon icon="heroicon-o-arrow-right-start-on-rectangle" aria-hidden="true" class="size-5" />
-                                    <span>Sign out</span>
-                                </button>
-                            </form>
-                        </div>
+                        @if (resolve(\App\Tenancy\SupportAccessContext::class)->active())
+                            <p class="p-3 text-xs font-semibold text-amber-800">
+                                Use the support banner to leave this read-only view.
+                            </p>
+                        @else
+                            <div class="p-1.5">
+                                <form method="POST" action="{{ route('logout') }}">
+                                    @csrf
+                                    <button type="submit" role="menuitem"
+                                            class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-bold text-red-600 transition hover:bg-red-50">
+                                        <x-filament::icon icon="heroicon-o-arrow-right-start-on-rectangle" aria-hidden="true" class="size-5" />
+                                        <span>Sign out</span>
+                                    </button>
+                                </form>
+                            </div>
+                        @endif
                     </div>
                 </div>
 

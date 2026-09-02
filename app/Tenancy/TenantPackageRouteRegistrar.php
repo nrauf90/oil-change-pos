@@ -3,6 +3,8 @@
 namespace App\Tenancy;
 
 use App\Http\Controllers\Auth\TenantPanelLogoutController;
+use App\Http\Middleware\EnforceReadOnlySupportAccess;
+use App\Http\Middleware\InitializeSupportAccess;
 use App\Http\Middleware\InitializeTenancy;
 use Filament\Actions\Exports\Http\Controllers\DownloadExport;
 use Filament\Actions\Imports\Http\Controllers\DownloadImportFailureCsv;
@@ -31,17 +33,33 @@ final readonly class TenantPackageRouteRegistrar
         }
 
         Route::post(self::tenantPackagePath(EndpointResolver::updatePath()), [HandleRequests::class, 'handleUpdate'])
-            ->middleware(['web', RequireLivewireHeaders::class, InitializeTenancy::class.':optional'])
+            ->middleware([
+                'web',
+                RequireLivewireHeaders::class,
+                InitializeSupportAccess::class,
+                InitializeTenancy::class.':optional',
+                EnforceReadOnlySupportAccess::class,
+            ])
             ->where('tenant', self::TENANT_SLUG_PATTERN)
             ->name('tenant.local.livewire.update');
 
         Route::post(self::tenantPackagePath(EndpointResolver::uploadPath()), [FileUploadController::class, 'handle'])
-            ->middleware(['web', InitializeTenancy::class.':optional'])
+            ->middleware([
+                'web',
+                InitializeSupportAccess::class,
+                InitializeTenancy::class.':optional',
+                EnforceReadOnlySupportAccess::class,
+            ])
             ->where('tenant', self::TENANT_SLUG_PATTERN)
             ->name('tenant.local.livewire.upload-file');
 
         Route::get(self::tenantPackagePath(EndpointResolver::previewPath()), [FilePreviewController::class, 'handle'])
-            ->middleware(['web', InitializeTenancy::class.':optional'])
+            ->middleware([
+                'web',
+                InitializeSupportAccess::class,
+                InitializeTenancy::class.':optional',
+                EnforceReadOnlySupportAccess::class,
+            ])
             ->where('tenant', self::TENANT_SLUG_PATTERN)
             ->name('tenant.local.livewire.preview-file');
 

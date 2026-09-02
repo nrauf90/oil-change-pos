@@ -7,7 +7,11 @@ use App\Http\Controllers\QuickItemController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\SaleController;
 use App\Http\Controllers\ScriptController;
+use App\Http\Middleware\EnforceReadOnlySupportAccess;
+use App\Http\Middleware\InitializeSupportAccess;
 use App\Modules\ModuleRegistry;
+use App\Tenancy\SupportAccessManager;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Route;
 
 $tenantRoutes = static function (): void {
@@ -129,14 +133,27 @@ $tenantRoutes = static function (): void {
 };
 
 if (app()->environment('local', 'testing')) {
-    Route::middleware(['shop.active', 'tenant'])
+    Route::middleware([InitializeSupportAccess::class, 'shop.active', 'tenant', EnforceReadOnlySupportAccess::class])
         ->name('host.')
         ->group($tenantRoutes);
 
-    Route::middleware(['shop.active', 'tenant'])
+    Route::middleware([InitializeSupportAccess::class, 'shop.active', 'tenant', EnforceReadOnlySupportAccess::class])
         ->prefix('__tenants/{tenant}')
         ->where(['tenant' => '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'])
         ->group($tenantRoutes);
 } else {
-    Route::middleware(['shop.active', 'tenant'])->group($tenantRoutes);
+    Route::middleware([InitializeSupportAccess::class, 'shop.active', 'tenant', EnforceReadOnlySupportAccess::class])
+        ->group($tenantRoutes);
 }
+
+Route::post('/support-access/exit', function (SupportAccessManager $manager): RedirectResponse {
+    $redirectUrl = $manager->centralExitUrl();
+    $manager->end();
+
+    return redirect()->away($redirectUrl);
+})->middleware([
+    InitializeSupportAccess::class,
+    'shop.active',
+    'tenant',
+    EnforceReadOnlySupportAccess::class,
+])->name('support-access.exit');
