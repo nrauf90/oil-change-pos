@@ -18,6 +18,7 @@ class RecordShopLifecycleActivity
      *     failure_stage?: string,
      *     error_code?: string,
      *     reason_code?: string,
+     *     target_fingerprint?: string,
      *     module_key?: string,
      *     migration?: string,
      *     batch?: int,
@@ -81,6 +82,9 @@ class RecordShopLifecycleActivity
                 'attempt', 'database_driver', 'migration_batch', 'duration_ms',
             ],
             ShopLifecycleEvent::ProvisioningFailed => ['attempt', 'failure_stage', 'error_code'],
+            ShopLifecycleEvent::TenantInstallationAuthorized => [
+                'database_driver', 'reason_code', 'target_fingerprint',
+            ],
             ShopLifecycleEvent::Suspended,
             ShopLifecycleEvent::Reactivated => ['reason_code'],
             ShopLifecycleEvent::FeatureEnabled,
@@ -107,6 +111,11 @@ class RecordShopLifecycleActivity
             return is_string($value) && in_array($value, ['mysql', 'sqlite'], true);
         }
 
+        if ($key === 'target_fingerprint') {
+            return is_string($value)
+                && preg_match('/\A[a-f0-9]{64}\z/', $value) === 1;
+        }
+
         if (! is_string($value) || $this->looksLikeCredential($value)) {
             return false;
         }
@@ -128,7 +137,7 @@ class RecordShopLifecycleActivity
     private function looksLikeCredential(string $value): bool
     {
         return preg_match(
-            '/password|passwd|secret|token|credential|authorization|bearer|api[_-]?key'
+            '/password|passwd|secret|token|credential|bearer|api[_-]?key'
                 .'|\Ask_(?:live|test)_|\AAKIA[0-9A-Z]{12,}|\Agh[pousr]_|\Axox[baprs]-'
                 .'|\A[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}\z/i',
             $value,

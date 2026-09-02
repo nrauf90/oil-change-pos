@@ -25,6 +25,13 @@ return [
         storage_path('framework/tenant-attestation-locks'),
     ),
 
+    'tenant_provisioning_lock_seconds' => env('TENANT_PROVISIONING_LOCK_SECONDS', 900),
+
+    'tenant_mysql_remote_provisioning_enabled' => env(
+        'TENANT_MYSQL_REMOTE_PROVISIONING_ENABLED',
+        false,
+    ),
+
     'tenant_connection_template' => [
         'driver' => env('TENANT_DB_CONNECTION', 'sqlite'),
         'host' => env('TENANT_DB_HOST', env('DB_HOST', '127.0.0.1')),
@@ -42,7 +49,8 @@ return [
         'foreign_key_constraints' => env('TENANT_DB_FOREIGN_KEYS', env('DB_FOREIGN_KEYS', true)),
         'options' => extension_loaded('pdo_mysql') ? array_filter([
             PDO::MYSQL_ATTR_SSL_CA => env('TENANT_MYSQL_ATTR_SSL_CA', env('MYSQL_ATTR_SSL_CA')),
-        ]) : [],
+            PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT => env('TENANT_MYSQL_VERIFY_SERVER_CERT', true),
+        ], static fn (mixed $value): bool => $value !== null) : [],
     ],
 
     /*

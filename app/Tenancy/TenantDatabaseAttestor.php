@@ -14,10 +14,12 @@ final readonly class TenantDatabaseAttestor
         private ConfigRepository $config,
         private TenantSqliteAttestationLock $sqliteAttestationLock,
         private TenantSqliteWitnessConnection $sqliteWitnessConnection,
+        private OpenedTenantDatabaseIdentityVerifier $identityVerifier,
     ) {}
 
     /** @param array<string, mixed> $expectedConfiguration */
     public function attest(
+        #[\SensitiveParameter]
         Connection $connection,
         #[\SensitiveParameter]
         Shop $shop,
@@ -28,23 +30,7 @@ final readonly class TenantDatabaseAttestor
     ): PDO {
         $this->assertConnectionConfiguration($connection, $expectedConfiguration);
         $target = $snapshot->target();
-        resolve(TenantConnectionAttestationHook::class)->beforeOpen($target);
-
-        if ($target->driver === 'mysql'
-            && ! $target->hasCurrentMySqlEndpoints(resolve(DatabaseHostResolver::class))) {
-            throw new TenantDatabaseAttestationFailed;
-        }
-
-        $pdo = $connection->getPdo();
-        resolve(TenantConnectionAttestationHook::class)->afterOpen($pdo, $target);
-
-        if ($target->driver === 'sqlite') {
-            $this->attestSqliteConnection($pdo, $target);
-        } elseif ($target->driver === 'mysql') {
-            $this->attestMySqlConnection($pdo, $target);
-        } else {
-            throw new TenantDatabaseAttestationFailed;
-        }
+        $pdo = $this->identityVerifier->openAndVerify($connection, $target);
 
         $this->attestTenantMarker($pdo, $shop, $snapshot);
 
@@ -60,6 +46,7 @@ final readonly class TenantDatabaseAttestor
 
     /** @param array<string, mixed> $expected */
     private function assertConnectionConfiguration(
+        #[\SensitiveParameter]
         Connection $connection,
         #[\SensitiveParameter]
         array $expected,
@@ -92,51 +79,6 @@ final readonly class TenantDatabaseAttestor
         return $configuration;
     }
 
-    private function attestSqliteConnection(
-        PDO $pdo,
-        #[\SensitiveParameter]
-        NormalizedDatabaseTarget $target,
-    ): void {
-        if ($target->filesystemIdentity === null || ! $target->hasStableFilesystemIdentity) {
-            throw new TenantDatabaseAttestationFailed;
-        }
-
-        $statement = $pdo->query('PRAGMA database_list');
-        $databases = $statement === false ? [] : $statement->fetchAll(PDO::FETCH_ASSOC);
-        $mainDatabase = null;
-
-        foreach ($databases as $database) {
-            if (($database['name'] ?? null) === 'main' && is_string($database['file'] ?? null)) {
-                $mainDatabase = $database['file'];
-                break;
-            }
-        }
-
-        clearstatcache(true, $target->database);
-        $canonicalDatabase = is_string($mainDatabase) ? realpath($mainDatabase) : false;
-        $expectedDatabase = realpath($target->database);
-
-        if ($canonicalDatabase === false
-            || $expectedDatabase === false
-            || ! hash_equals($expectedDatabase, $canonicalDatabase)
-            || ! hash_equals($target->filesystemIdentity, $this->filesystemIdentity($canonicalDatabase))) {
-            throw new TenantDatabaseAttestationFailed;
-        }
-    }
-
-    private function attestMySqlConnection(
-        PDO $pdo,
-        #[\SensitiveParameter]
-        NormalizedDatabaseTarget $target,
-    ): void {
-        $statement = $pdo->query('SELECT DATABASE()');
-        $database = $statement === false ? false : $statement->fetchColumn();
-
-        if (! is_string($database) || ! hash_equals($target->database, $database)) {
-            throw new TenantDatabaseAttestationFailed;
-        }
-    }
-
     private function attestTenantMarker(
         PDO $pdo,
         #[\SensitiveParameter]
@@ -167,7 +109,7 @@ final readonly class TenantDatabaseAttestor
         #[\SensitiveParameter]
         NormalizedDatabaseTarget $target,
     ): void {
-        $this->attestSqliteConnection($pdo, $target);
+        $this->identityVerifier->verifySqliteConnection($pdo, $target);
         $nonce = bin2hex(random_bytes(32));
         $statement = $pdo->prepare('UPDATE tenant_installations SET connection_nonce = ? WHERE id = ?');
         $statement->execute([$nonce, 1]);
@@ -176,9 +118,9 @@ final readonly class TenantDatabaseAttestor
         resolve(TenantConnectionAttestationHook::class)->afterSqliteNonceWritten($pdo, $target);
 
         try {
-            $this->attestSqliteConnection($pdo, $target);
+            $this->identityVerifier->verifySqliteConnection($pdo, $target);
             $witness = $this->sqliteWitnessConnection->open($target);
-            $this->attestSqliteConnection($witness, $target);
+            $this->identityVerifier->verifySqliteConnection($witness, $target);
             $observedNonce = $witness
                 ->query('SELECT connection_nonce FROM tenant_installations WHERE id = 1')
                 ?->fetchColumn();
@@ -187,27 +129,12 @@ final readonly class TenantDatabaseAttestor
                 throw new TenantDatabaseAttestationFailed;
             }
 
-            $this->attestSqliteConnection($pdo, $target);
-            $this->attestSqliteConnection($witness, $target);
+            $this->identityVerifier->verifySqliteConnection($pdo, $target);
+            $this->identityVerifier->verifySqliteConnection($witness, $target);
         } finally {
             $witness = null;
             $clearNonce = $pdo->prepare('UPDATE tenant_installations SET connection_nonce = NULL WHERE id = ?');
             $clearNonce->execute([1]);
         }
-    }
-
-    private function filesystemIdentity(#[\SensitiveParameter] string $database): string
-    {
-        clearstatcache(true, $database);
-        $metadata = @stat($database);
-
-        if (! is_array($metadata)
-            || ! is_int($metadata['dev'] ?? null)
-            || ! is_int($metadata['ino'] ?? null)
-            || ($metadata['dev'] === 0 && $metadata['ino'] === 0)) {
-            throw new TenantDatabaseAttestationFailed;
-        }
-
-        return $metadata['dev'].':'.$metadata['ino'];
     }
 }
