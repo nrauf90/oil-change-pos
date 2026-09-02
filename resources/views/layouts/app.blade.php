@@ -29,7 +29,9 @@
 
         <a href="{{ Route::has('pos.create') ? route('pos.create') : url('/') }}"
            class="flex shrink-0 items-center gap-2.5 text-base font-black tracking-tight">
-            <span class="grid size-9 place-items-center rounded-xl bg-amber-500 text-xl text-slate-900">&#9881;</span>
+            <span class="grid size-9 place-items-center rounded-xl bg-amber-500 text-slate-900">
+                <x-filament::icon icon="heroicon-o-wrench-screwdriver" class="size-5" />
+            </span>
             <span class="hidden leading-tight xl:inline">{{ config('app.name') }}</span>
         </a>
 
@@ -43,7 +45,9 @@
                    @if ($active) aria-current="page" @endif
                    class="relative flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-bold whitespace-nowrap transition
                           {{ $active ? 'bg-slate-800 text-white' : 'text-slate-300 hover:bg-slate-800/60 hover:text-white' }}">
-                    <span aria-hidden="true" class="text-sm opacity-80">{!! $entry['icon'] !!}</span>
+                    <span data-navigation-icon aria-hidden="true" class="opacity-80">
+                        <x-filament::icon :icon="$entry['icon']" class="size-4" />
+                    </span>
                     <span>{{ $entry['label'] }}</span>
                     {{-- The active marker is an underline, not a filled block: it
                          reads as "you are here" without shouting over the row. --}}
@@ -70,8 +74,12 @@
                             <span class="block text-sm leading-tight font-bold">{{ auth()->user()->name }}</span>
                             <span class="block text-[11px] leading-tight font-medium text-slate-400">{{ auth()->user()->role()?->label() }}</span>
                         </span>
-                        <span aria-hidden="true" class="text-[10px] text-slate-400 transition"
-                              :class="account ? 'rotate-180' : ''">&#9660;</span>
+                        <x-filament::icon
+                            icon="heroicon-o-chevron-down"
+                            aria-hidden="true"
+                            class="size-3 text-slate-400 transition"
+                            x-bind:class="account ? 'rotate-180' : ''"
+                        />
                     </button>
 
                     <div x-show="account" x-cloak x-transition.origin.top.right
@@ -90,7 +98,9 @@
                                     <a href="{{ route($entry['route']) }}" role="menuitem"
                                        class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-bold transition
                                               {{ request()->routeIs($entry['pattern']) ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' }}">
-                                        <span aria-hidden="true" class="w-5 text-center">{!! $entry['icon'] !!}</span>
+                                        <span data-navigation-icon aria-hidden="true" class="grid w-5 place-items-center">
+                                            <x-filament::icon :icon="$entry['icon']" class="size-4" />
+                                        </span>
                                         <span>{{ $entry['label'] }}</span>
                                     </a>
                                 @endforeach
@@ -98,7 +108,7 @@
                                 @can('users.view_any')
                                     <a href="{{ url('/admin') }}" role="menuitem"
                                        class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-bold text-slate-600 transition hover:bg-slate-100 hover:text-slate-900">
-                                        <span aria-hidden="true" class="w-5 text-center">&#9881;</span>
+                                        <x-filament::icon icon="heroicon-o-cog-6-tooth" aria-hidden="true" class="size-5" />
                                         <span>Admin panel</span>
                                     </a>
                                 @endcan
@@ -110,7 +120,7 @@
                                 @csrf
                                 <button type="submit" role="menuitem"
                                         class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-bold text-red-600 transition hover:bg-red-50">
-                                    <span aria-hidden="true" class="w-5 text-center">&#8629;</span>
+                                    <x-filament::icon icon="heroicon-o-arrow-right-start-on-rectangle" aria-hidden="true" class="size-5" />
                                     <span>Sign out</span>
                                 </button>
                             </form>
@@ -123,7 +133,7 @@
                         :aria-expanded="menu ? 'true' : 'false'"
                         aria-label="Main menu"
                         class="grid size-10 shrink-0 place-items-center rounded-lg border border-slate-700 text-lg text-slate-300 transition hover:bg-slate-800 hover:text-white lg:hidden">
-                    &#9776;
+                    <x-filament::icon icon="heroicon-o-bars-3" aria-hidden="true" class="size-5" />
                 </button>
             @endauth
         </div>
@@ -137,7 +147,9 @@
                 <a href="{{ route($entry['route']) }}"
                    class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-bold transition
                           {{ request()->routeIs($entry['pattern']) ? 'bg-amber-500 text-slate-900' : 'text-slate-300 hover:bg-slate-800' }}">
-                    <span aria-hidden="true" class="w-5 text-center">{!! $entry['icon'] !!}</span>
+                    <span data-navigation-icon aria-hidden="true" class="grid w-5 place-items-center">
+                        <x-filament::icon :icon="$entry['icon']" class="size-5" />
+                    </span>
                     <span>{{ $entry['label'] }}</span>
                 </a>
             @endforeach
@@ -148,9 +160,11 @@
 @if (session('status'))
     <div class="no-print mx-auto mt-4 w-full max-w-[1600px] px-4" x-data="{ show: true }" x-show="show" x-transition>
         <div class="flex items-center gap-3 rounded-lg border-2 border-emerald-300 bg-emerald-50 px-4 py-3 font-semibold text-emerald-900">
-            <span class="text-xl">&#10003;</span>
+            <x-filament::icon icon="heroicon-o-check-circle" aria-hidden="true" class="size-5" />
             <span class="flex-1">{{ session('status') }}</span>
-            <button type="button" @click="show = false" class="text-emerald-700 hover:text-emerald-900">&times;</button>
+            <button type="button" @click="show = false" aria-label="Dismiss" class="text-emerald-700 hover:text-emerald-900">
+                <x-filament::icon icon="heroicon-o-x-mark" aria-hidden="true" class="size-5" />
+            </button>
         </div>
     </div>
 @endif

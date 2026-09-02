@@ -74,7 +74,9 @@
         <button type="button" @click="customerOpen = ! customerOpen"
                 class="flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-slate-50"
                 :aria-expanded="customerOpen ? 'true' : 'false'">
-            <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-slate-900 text-sm text-amber-400">&#128663;</span>
+            <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-slate-900 text-amber-400">
+                <x-filament::icon icon="heroicon-o-truck" class="size-5" />
+            </span>
 
             <span class="pos-pane-title hidden shrink-0 sm:block">Customer &amp; vehicle</span>
             <span class="hidden h-7 w-px shrink-0 bg-slate-200 sm:block" aria-hidden="true"></span>
@@ -188,9 +190,11 @@
                             :class="railClassFor(group)"
                             @click="activeGroup = group.key"
                             :aria-pressed="activeGroup === group.key ? 'true' : 'false'">
-                        <span class="grid size-8 shrink-0 place-items-center rounded-lg text-base"
-                              :class="activeGroup === group.key ? 'bg-white/15' : accentFor(group.key).chip"
-                              x-text="group.glyph"></span>
+                        <x-pos-icon
+                            expression="group.icon"
+                            class="size-8 shrink-0 rounded-lg"
+                            x-bind:class="activeGroup === group.key ? 'bg-white/15' : accentFor(group.key).chip"
+                        />
                         <span class="min-w-0 flex-1 truncate" x-text="group.label"></span>
                         <span class="shrink-0 rounded-md px-1.5 py-0.5 font-mono text-xs tabular-nums"
                               :class="activeGroup === group.key ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-500'"
@@ -204,8 +208,10 @@
                         :class="lowStockOnly ? 'border-red-500 bg-red-500 text-white hover:border-red-500 hover:bg-red-500' : ''"
                         @click="lowStockOnly = ! lowStockOnly"
                         :aria-pressed="lowStockOnly ? 'true' : 'false'">
-                    <span class="grid size-8 shrink-0 place-items-center rounded-lg text-base"
-                          :class="lowStockOnly ? 'bg-white/15' : 'bg-red-100 text-red-600'">&#9888;</span>
+                    <span class="grid size-8 shrink-0 place-items-center rounded-lg"
+                          :class="lowStockOnly ? 'bg-white/15' : 'bg-red-100 text-red-600'">
+                        <x-filament::icon icon="heroicon-o-exclamation-triangle" class="size-5" />
+                    </span>
                     <span class="min-w-0 flex-1 truncate">Low stock</span>
                     <span class="shrink-0 rounded-md px-1.5 py-0.5 font-mono text-xs tabular-nums"
                           :class="lowStockOnly ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-500'"
@@ -213,7 +219,9 @@
                 </button>
 
                 <button type="button" class="pos-rail-btn" @click="addCustomLine()">
-                    <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-slate-200 text-base text-slate-600">&#9998;</span>
+                    <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-slate-200 text-slate-600">
+                        <x-filament::icon icon="heroicon-o-pencil-square" class="size-5" />
+                    </span>
                     <span class="min-w-0 flex-1 truncate">Custom line</span>
                 </button>
 
@@ -231,7 +239,9 @@
         <section class="pos-pane min-w-0 flex-1" aria-label="Products">
             <div class="pos-pane-head gap-3">
                 <div class="relative min-w-0 flex-1">
-                    <span class="pointer-events-none absolute inset-y-0 left-3 grid place-items-center text-slate-400">&#128269;</span>
+                    <span class="pointer-events-none absolute inset-y-0 left-3 grid place-items-center text-slate-400">
+                        <x-filament::icon icon="heroicon-o-magnifying-glass" class="size-4" />
+                    </span>
                     {{-- No name attribute: the search box is never posted with the bill. --}}
                     <input type="search" x-ref="search" x-model="query"
                            @keydown.enter.prevent="addFirstMatch()"
@@ -306,7 +316,7 @@
                                 class="shrink-0 rounded-full border border-slate-300 px-3 py-1.5 text-xs font-bold whitespace-nowrap text-slate-600"
                                 :class="activeGroup === group.key ? 'border-slate-900 bg-slate-900 text-white' : ''"
                                 @click="activeGroup = group.key">
-                            <span x-text="group.glyph"></span>
+                            <x-pos-icon expression="group.icon" class="inline-grid size-4 align-middle" size="size-4" />
                             <span x-text="group.label"></span>
                             <span class="ml-1 font-mono tabular-nums opacity-60" x-text="group.count"></span>
                         </button>
@@ -314,7 +324,10 @@
                     <button type="button"
                             class="shrink-0 rounded-full border border-slate-300 px-3 py-1.5 text-xs font-bold whitespace-nowrap text-slate-600"
                             :class="lowStockOnly ? 'border-red-500 bg-red-500 text-white' : ''"
-                            @click="lowStockOnly = ! lowStockOnly">&#9888; Low stock</button>
+                            @click="lowStockOnly = ! lowStockOnly">
+                        <x-filament::icon icon="heroicon-o-exclamation-triangle" class="mr-1 inline size-4 align-text-bottom" />
+                        Low stock
+                    </button>
                 </div>
             </div>
 
@@ -329,8 +342,11 @@
                             <span class="absolute inset-x-0 top-0 h-1" :class="accentFor(item.group).bar"></span>
 
                             <div class="flex items-start justify-between gap-2 pt-1">
-                                <span class="grid size-10 shrink-0 place-items-center rounded-lg text-xl"
-                                      :class="accentFor(item.group).chip" x-text="item.glyph"></span>
+                                <x-pos-icon
+                                    expression="item.icon"
+                                    class="size-10 shrink-0 rounded-lg"
+                                    x-bind:class="accentFor(item.group).chip"
+                                />
 
                                 <span class="flex flex-col items-end gap-1">
                                     <span x-show="countOf(item.id) > 0" x-cloak
@@ -351,7 +367,7 @@
                 </div>
 
                 <div x-show="visibleItems.length === 0" x-cloak class="grid place-items-center px-6 py-16 text-center">
-                    <p class="text-3xl">&#128269;</p>
+                    <x-filament::icon icon="heroicon-o-magnifying-glass" class="size-8 text-slate-400" />
                     <p class="mt-3 font-bold text-slate-500" x-text="emptyWallTitle"></p>
                     <p class="mt-1 text-sm font-medium text-slate-400">Clear the filters, or add it to inventory without leaving this bill.</p>
                     <div class="mt-4 flex gap-2">
@@ -392,8 +408,11 @@
                     <div class="px-3 py-3 transition-colors" :class="line.uid === flashedUid ? 'bg-amber-50' : ''">
 
                         <div class="flex items-start gap-2.5">
-                            <span class="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg text-base"
-                                  :class="accentFor(groupOf(line)).chip" x-text="glyphOf(line)"></span>
+                            <x-pos-icon
+                                expression="iconOf(line)"
+                                class="mt-0.5 size-8 shrink-0 rounded-lg"
+                                x-bind:class="accentFor(groupOf(line)).chip"
+                            />
 
                             <div class="min-w-0 flex-1">
                                 {{-- An inventory line names itself; a custom line is typed. --}}
@@ -469,7 +488,7 @@
                 </template>
 
                 <div x-show="lines.length === 0" x-cloak class="grid place-items-center px-6 py-16 text-center">
-                    <p class="text-3xl">&#129534;</p>
+                    <x-filament::icon icon="heroicon-o-receipt-percent" class="size-8 text-slate-400" />
                     <p class="mt-3 font-bold text-slate-500">The ticket is empty.</p>
                     <p class="mt-1 text-sm font-medium text-slate-400">Tap a product to start the bill.</p>
                 </div>
@@ -957,11 +976,11 @@
             get railGroups() {
                 const pool = this.vehicleFilteredItems;
 
-                return [{ key: 'all', label: 'All items', glyph: '▦', count: pool.length }].concat(
+                return [{ key: 'all', label: 'All items', icon: 'heroicon-o-squares-2x2', count: pool.length }].concat(
                     this.groups.map(group => ({
                         key: group.key,
                         label: group.label,
-                        glyph: group.glyph,
+                        icon: group.icon,
                         count: pool.filter(item => item.group === group.key).length,
                     }))
                 );
@@ -1181,8 +1200,10 @@
                 return line.mode === 'custom' ? 'custom' : (this.optionFor(line)?.group || 'part');
             },
 
-            glyphOf(line) {
-                return line.mode === 'custom' ? '✎' : (this.optionFor(line)?.glyph || '📦');
+            iconOf(line) {
+                return line.mode === 'custom'
+                    ? 'heroicon-o-pencil-square'
+                    : (this.optionFor(line)?.icon || 'heroicon-o-cube');
             },
 
             /** Oil and gas are poured, so the counter records how much came out. */

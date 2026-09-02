@@ -24,7 +24,7 @@ class SalesModule extends Module
 
     public function icon(): string
     {
-        return '&#128179;';
+        return 'heroicon-o-credit-card';
     }
 
     public function isCore(): bool
@@ -53,8 +53,8 @@ class SalesModule extends Module
     public function navigation(): array
     {
         return [
-            ['route' => 'pos.create', 'pattern' => 'pos*', 'label' => 'New Sale', 'permission' => Permission::UsePos, 'icon' => '&#128179;'],
-            ['route' => 'sales.index', 'pattern' => 'sales*', 'label' => 'Sales', 'permission' => Permission::ViewAnySale, 'icon' => '&#129534;'],
+            ['route' => 'pos.create', 'pattern' => 'pos*', 'label' => 'New Sale', 'permission' => Permission::UsePos, 'icon' => 'heroicon-o-shopping-cart'],
+            ['route' => 'sales.index', 'pattern' => 'sales*', 'label' => 'Sales', 'permission' => Permission::ViewAnySale, 'icon' => 'heroicon-o-receipt-percent'],
         ];
     }
 }

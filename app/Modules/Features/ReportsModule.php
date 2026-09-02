@@ -24,7 +24,7 @@ class ReportsModule extends Module
 
     public function icon(): string
     {
-        return '&#128202;';
+        return 'heroicon-o-chart-bar-square';
     }
 
     public function dependsOn(): array
@@ -45,7 +45,7 @@ class ReportsModule extends Module
     {
         return [
             // Owner-facing reading, not counter work: lives in the profile menu.
-            ['route' => 'reports.index', 'pattern' => 'reports*', 'label' => 'Dashboard', 'permission' => Permission::ViewDashboard, 'group' => 'account', 'icon' => '&#128202;'],
+            ['route' => 'reports.index', 'pattern' => 'reports*', 'label' => 'Dashboard', 'permission' => Permission::ViewDashboard, 'group' => 'account', 'icon' => 'heroicon-o-chart-bar-square'],
         ];
     }
 }

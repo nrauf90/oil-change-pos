@@ -25,16 +25,16 @@ class PosController extends Controller
      * two facts inventory already records - what kind of thing it is, and how
      * it is measured. That is exactly how an oil-change counter thinks about
      * its shelves: oils are poured, gas is weighed, parts are picked, work is
-     * done. Each entry carries its own colour and glyph so a tile is
+     * done. Each entry carries its own colour and Heroicon so a tile is
      * recognisable before the name is read.
      *
-     * @var array<int, array{key: string, label: string, glyph: string, accent: string}>
+     * @var array<int, array{key: string, label: string, icon: string, accent: string}>
      */
     private const GROUPS = [
-        ['key' => 'oil', 'label' => 'Oils & fluids', 'glyph' => '🛢', 'accent' => 'amber'],
-        ['key' => 'gas', 'label' => 'AC gas', 'glyph' => '❄', 'accent' => 'sky'],
-        ['key' => 'part', 'label' => 'Parts', 'glyph' => '⚙', 'accent' => 'emerald'],
-        ['key' => 'service', 'label' => 'Services', 'glyph' => '🔧', 'accent' => 'violet'],
+        ['key' => 'oil', 'label' => 'Oils & fluids', 'icon' => 'heroicon-o-beaker', 'accent' => 'amber'],
+        ['key' => 'gas', 'label' => 'AC gas', 'icon' => 'heroicon-o-cloud', 'accent' => 'sky'],
+        ['key' => 'part', 'label' => 'Parts', 'icon' => 'heroicon-o-cog-6-tooth', 'accent' => 'emerald'],
+        ['key' => 'service', 'label' => 'Services', 'icon' => 'heroicon-o-wrench-screwdriver', 'accent' => 'violet'],
     ];
 
     public function create(): View
@@ -129,7 +129,7 @@ class PosController extends Controller
             'stock_label' => $item->stockLabel(),
             'is_low_on_stock' => $item->isLowOnStock(),
             'group' => self::groupFor($item),
-            'glyph' => self::glyphFor($item),
+            'icon' => self::iconFor($item),
             'haystack' => mb_strtolower($item->name),
         ];
     }
@@ -181,16 +181,16 @@ class PosController extends Controller
             ->all();
     }
 
-    private static function glyphFor(Item $item): string
+    private static function iconFor(Item $item): string
     {
         $group = self::groupFor($item);
 
         foreach (self::GROUPS as $entry) {
             if ($entry['key'] === $group) {
-                return $entry['glyph'];
+                return $entry['icon'];
             }
         }
 
-        return '📦';
+        return 'heroicon-o-cube';
     }
 }
