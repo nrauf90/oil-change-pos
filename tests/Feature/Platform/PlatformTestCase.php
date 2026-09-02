@@ -83,4 +83,13 @@ abstract class PlatformTestCase extends TestCase
     {
         return false;
     }
+
+    protected function centralDatabasePath(): string
+    {
+        if ($this->centralDatabasePath === null) {
+            throw new RuntimeException('The temporary central database is not configured.');
+        }
+
+        return $this->centralDatabasePath;
+    }
 }

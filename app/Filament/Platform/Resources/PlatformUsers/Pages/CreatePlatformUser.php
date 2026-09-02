@@ -2,10 +2,13 @@
 
 namespace App\Filament\Platform\Resources\PlatformUsers\Pages;
 
+use App\Actions\ManagePlatformUsers;
 use App\Filament\Platform\Resources\PlatformUsers\PlatformUserResource;
 use App\Models\Central\PlatformUser;
 use Filament\Resources\Pages\CreateRecord;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Auth;
 
 class CreatePlatformUser extends CreateRecord
 {
@@ -14,20 +17,12 @@ class CreatePlatformUser extends CreateRecord
     /** @param array<string, mixed> $data */
     protected function handleRecordCreation(array $data): Model
     {
-        $isActive = (bool) ($data['is_active'] ?? true);
-        unset($data['is_active'], $data['role'], $data['last_login_at']);
+        $actor = Auth::guard('platform')->user();
 
-        $platformUser = new PlatformUser($data);
-        $platformUser->forceFill([
-            'role' => PlatformUser::ROLE_SUPER_ADMIN,
-            'is_active' => true,
-        ]);
-        $platformUser->save();
-
-        if (! $isActive) {
-            $platformUser->deactivate();
+        if (! $actor instanceof PlatformUser) {
+            throw new AuthorizationException('Platform administrator authentication is required.');
         }
 
-        return $platformUser;
+        return resolve(ManagePlatformUsers::class)->create($actor, $data);
     }
 }

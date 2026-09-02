@@ -84,7 +84,9 @@ class PlatformUserResource extends Resource
     {
         $currentUser = Auth::guard('platform')->user();
 
-        return $currentUser instanceof PlatformUser && $record->is($currentUser);
+        return $currentUser instanceof PlatformUser
+            && $record instanceof PlatformUser
+            && (string) $record->getKey() === (string) $currentUser->getKey();
     }
 
     public static function isFinalActiveSuperAdmin(?Model $record): bool
@@ -121,9 +123,23 @@ class PlatformUserResource extends Resource
     {
         $currentUser = Auth::guard('platform')->user();
 
-        return $currentUser instanceof PlatformUser
-            && $currentUser->is_active
-            && $currentUser->role === PlatformUser::ROLE_SUPER_ADMIN;
+        if (! $currentUser instanceof PlatformUser) {
+            return false;
+        }
+
+        $freshPlatformUser = PlatformUser::query()
+            ->whereKey($currentUser->getKey())
+            ->where('is_active', true)
+            ->where('role', PlatformUser::ROLE_SUPER_ADMIN)
+            ->first();
+
+        if (! $freshPlatformUser instanceof PlatformUser) {
+            return false;
+        }
+
+        Auth::guard('platform')->setUser($freshPlatformUser);
+
+        return true;
     }
 
     private static function isManagedRecord(Model $record): bool

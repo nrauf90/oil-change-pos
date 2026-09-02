@@ -3,7 +3,10 @@
 namespace App\Providers\Filament;
 
 use App\Filament\Platform\Pages\PlatformDashboard;
+use App\Http\Middleware\EnsureFreshPlatformAuthentication;
+use App\Http\Middleware\UsePlatformGuard;
 use App\Models\Central\PlatformUser;
+use App\Support\PlatformSessionAuthentication;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -29,7 +32,7 @@ class PlatformPanelProvider extends PanelProvider
     {
         Event::listen(Login::class, static function (Login $event): void {
             if ($event->guard === 'platform' && $event->user instanceof PlatformUser) {
-                $event->user->recordSuccessfulLogin();
+                resolve(PlatformSessionAuthentication::class)->recordLogin($event->user);
             }
         });
     }
@@ -61,6 +64,7 @@ class PlatformPanelProvider extends PanelProvider
                 EncryptCookies::class,
                 AddQueuedCookiesToResponse::class,
                 StartSession::class,
+                UsePlatformGuard::class,
                 AuthenticateSession::class,
                 ShareErrorsFromSession::class,
                 PreventRequestForgery::class,
@@ -68,8 +72,12 @@ class PlatformPanelProvider extends PanelProvider
                 DisableBladeIconComponents::class,
                 DispatchServingFilamentEvent::class,
             ])
+            ->persistentMiddleware([
+                UsePlatformGuard::class,
+            ])
             ->authMiddleware([
                 Authenticate::class,
-            ]);
+                EnsureFreshPlatformAuthentication::class,
+            ], isPersistent: true);
     }
 }

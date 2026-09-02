@@ -2,11 +2,14 @@
 
 namespace App\Filament\Platform\Resources\PlatformUsers\Pages;
 
+use App\Actions\ManagePlatformUsers;
 use App\Filament\Platform\Resources\PlatformUsers\PlatformUserResource;
 use App\Filament\Platform\Resources\PlatformUsers\Tables\PlatformUsersTable;
 use App\Models\Central\PlatformUser;
 use Filament\Resources\Pages\EditRecord;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Auth;
 use LogicException;
 
 class EditPlatformUser extends EditRecord
@@ -23,36 +26,20 @@ class EditPlatformUser extends EditRecord
     /** @param array<string, mixed> $data */
     protected function handleRecordUpdate(Model $record, array $data): Model
     {
-        $hasActiveState = array_key_exists('is_active', $data);
-        $isActive = (bool) ($data['is_active'] ?? false);
-        unset($data['is_active'], $data['role'], $data['last_login_at']);
+        $actor = Auth::guard('platform')->user();
+
+        if (! $actor instanceof PlatformUser || ! $record instanceof PlatformUser) {
+            throw new AuthorizationException('Platform administrator authentication is required.');
+        }
 
         try {
-            $attributes = $record->getConnection()->transaction(function () use (
-                $record,
-                $data,
-                $hasActiveState,
-                $isActive,
-            ): array {
-                $platformUser = PlatformUser::query()
-                    ->whereKey($record->getKey())
-                    ->where('role', PlatformUser::ROLE_SUPER_ADMIN)
-                    ->firstOrFail();
-
-                if ($hasActiveState && $isActive !== $platformUser->is_active) {
-                    $isActive ? $platformUser->activate() : $platformUser->deactivate();
-                }
-
-                $platformUser->fill($data)->save();
-
-                return $platformUser->getAttributes();
-            });
+            $platformUser = resolve(ManagePlatformUsers::class)->update($actor, $record, $data);
         } catch (LogicException $exception) {
             $this->addError('data.is_active', $exception->getMessage());
             $this->halt(shouldRollbackDatabaseTransaction: true);
         }
 
-        $record->setRawAttributes($attributes, true);
+        $record->setRawAttributes($platformUser->getAttributes(), true);
 
         return $record;
     }

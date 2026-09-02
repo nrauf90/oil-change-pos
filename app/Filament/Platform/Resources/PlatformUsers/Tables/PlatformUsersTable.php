@@ -2,6 +2,7 @@
 
 namespace App\Filament\Platform\Resources\PlatformUsers\Tables;
 
+use App\Actions\ManagePlatformUsers;
 use App\Filament\Platform\Resources\PlatformUsers\PlatformUserResource;
 use App\Models\Central\PlatformUser;
 use Filament\Actions\DeleteAction;
@@ -10,8 +11,10 @@ use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\HtmlString;
 use LogicException;
 
@@ -81,9 +84,15 @@ class PlatformUsersTable
     {
         return DeleteAction::make()
             ->using(static function (PlatformUser $record): bool {
+                $actor = Auth::guard('platform')->user();
+
+                if (! $actor instanceof PlatformUser) {
+                    return false;
+                }
+
                 try {
-                    return $record->delete() === true;
-                } catch (LogicException|QueryException) {
+                    return resolve(ManagePlatformUsers::class)->delete($actor, $record);
+                } catch (AuthorizationException|LogicException|QueryException) {
                     return false;
                 }
             })

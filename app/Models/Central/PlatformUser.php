@@ -2,6 +2,7 @@
 
 namespace App\Models\Central;
 
+use App\Support\PlatformSessionAuthentication;
 use Database\Factories\Central\PlatformUserFactory;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
@@ -9,6 +10,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Str;
 use LogicException;
 
 class PlatformUser extends Authenticatable implements FilamentUser
@@ -47,18 +49,22 @@ class PlatformUser extends Authenticatable implements FilamentUser
 
     public function deactivate(): void
     {
-        $attributes = $this->getConnection()->transaction(function (): array {
-            $platformUsers = static::query()
+        $connectionName = $this->getConnectionName() ?? 'central';
+        $result = $this->getConnection()->transaction(function () use ($connectionName): array {
+            $platformUsers = static::on($connectionName)
                 ->where('role', self::ROLE_SUPER_ADMIN)
                 ->orWhere($this->getKeyName(), $this->getKey())
                 ->orderBy($this->getKeyName())
                 ->lockForUpdate()
                 ->get();
             $platformUser = $platformUsers->firstWhere($this->getKeyName(), $this->getKey());
-            $platformUser ??= static::query()->lockForUpdate()->findOrFail($this->getKey());
+            $platformUser ??= static::on($connectionName)->lockForUpdate()->findOrFail($this->getKey());
 
             if (! $platformUser->is_active) {
-                return $platformUser->getAttributes();
+                return [
+                    'attributes' => $platformUser->getAttributes(),
+                    'revoked' => false,
+                ];
             }
 
             $activeSuperAdminCount = $platformUsers
@@ -69,12 +75,24 @@ class PlatformUser extends Authenticatable implements FilamentUser
                 throw new LogicException('The final active super administrator cannot be deactivated.');
             }
 
+            $platformUser->setRememberToken(Str::random(60));
             $platformUser->forceFill(['is_active' => false])->save();
+            app(PlatformSessionAuthentication::class)->revokePersistedSessions(
+                $platformUser->getKey(),
+                $connectionName,
+            );
 
-            return $platformUser->getAttributes();
+            return [
+                'attributes' => $platformUser->getAttributes(),
+                'revoked' => true,
+            ];
         });
 
-        $this->setRawAttributes($attributes, true);
+        $this->setRawAttributes($result['attributes'], true);
+
+        if ($result['revoked']) {
+            app(PlatformSessionAuthentication::class)->forgetCurrentAuthentication($this->getKey());
+        }
     }
 
     public function delete(): ?bool
@@ -83,15 +101,17 @@ class PlatformUser extends Authenticatable implements FilamentUser
             return parent::delete();
         }
 
-        return $this->getConnection()->transaction(function (): ?bool {
-            $platformUsers = static::query()
+        $connectionName = $this->getConnectionName() ?? 'central';
+
+        return $this->getConnection()->transaction(function () use ($connectionName): ?bool {
+            $platformUsers = static::on($connectionName)
                 ->where('role', self::ROLE_SUPER_ADMIN)
                 ->orWhere($this->getKeyName(), $this->getKey())
                 ->orderBy($this->getKeyName())
                 ->lockForUpdate()
                 ->get();
             $platformUser = $platformUsers->firstWhere($this->getKeyName(), $this->getKey());
-            $platformUser ??= static::query()->lockForUpdate()->findOrFail($this->getKey());
+            $platformUser ??= static::on($connectionName)->lockForUpdate()->findOrFail($this->getKey());
 
             $activeSuperAdminCount = $platformUsers
                 ->filter(static fn (self $user): bool => $user->role === self::ROLE_SUPER_ADMIN && $user->is_active)
