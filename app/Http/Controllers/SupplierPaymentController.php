@@ -7,6 +7,7 @@ use App\Http\Requests\SupplierPaymentRequest;
 use App\Models\Supplier;
 use App\Models\SupplierPayment;
 use App\Models\Supply;
+use App\Tenancy\TenantStoragePath;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -19,19 +20,23 @@ class SupplierPaymentController extends Controller
         Supplier $supplier,
         Supply $supply,
         RecordSupplierPayment $recordPayment,
+        TenantStoragePath $storagePaths,
     ): RedirectResponse {
         $this->ensureSupplierOwnsSupply($supplier, $supply);
         $data = $request->safe()->except('receipt_image');
 
         if ($request->hasFile('receipt_image')) {
-            $data['receipt_image_path'] = $request->file('receipt_image')->store('supplier-payment-receipts');
+            $data['receipt_image_path'] = $storagePaths->store(
+                $request->file('receipt_image'),
+                'supplier-payment-receipts',
+            );
         }
 
         try {
             $recordPayment($supply, $request->user(), $data);
         } catch (Throwable $exception) {
             if (isset($data['receipt_image_path'])) {
-                Storage::disk('local')->delete($data['receipt_image_path']);
+                $storagePaths->delete($data['receipt_image_path'], 'supplier-payment-receipts');
             }
 
             throw $exception;
@@ -40,14 +45,22 @@ class SupplierPaymentController extends Controller
         return to_route('suppliers.supplies.show', [$supplier, $supply])->with('status', 'Payment recorded.');
     }
 
-    public function receipt(Supplier $supplier, Supply $supply, SupplierPayment $payment): StreamedResponse
-    {
+    public function receipt(
+        Supplier $supplier,
+        Supply $supply,
+        SupplierPayment $payment,
+        TenantStoragePath $storagePaths,
+    ): StreamedResponse {
         $this->ensureSupplierOwnsSupply($supplier, $supply);
         abort_unless($payment->supply_id === $supply->id, 404);
-        abort_if(blank($payment->receipt_image_path) || ! Storage::disk('local')->exists($payment->receipt_image_path), 404);
+        $path = $storagePaths->readablePath(
+            $payment->receipt_image_path,
+            'supplier-payment-receipts',
+        );
+        abort_if($path === null, 404);
 
         return Storage::disk('local')->response(
-            $payment->receipt_image_path,
+            $path,
             headers: ['X-Content-Type-Options' => 'nosniff'],
         );
     }
