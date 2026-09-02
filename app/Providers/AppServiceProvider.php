@@ -5,6 +5,7 @@ namespace App\Providers;
 use App\Http\Middleware\EnsureFilamentActionMatchesTenant;
 use App\Http\Middleware\EnsureLivewireUploadMatchesTenant;
 use App\Http\Middleware\InitializeTenancy;
+use App\Models\Central\PlatformUser;
 use App\Models\Expense;
 use App\Models\Inspection;
 use App\Models\Item;
@@ -169,7 +170,9 @@ class AppServiceProvider extends ServiceProvider
                 $application->make('hash'),
                 $config['model'],
             ))->withQuery(
-                static fn (Builder $query): Builder => $query->where('is_active', true),
+                static fn (Builder $query): Builder => $query
+                    ->where('is_active', true)
+                    ->where('role', PlatformUser::ROLE_SUPER_ADMIN),
             ),
         );
 

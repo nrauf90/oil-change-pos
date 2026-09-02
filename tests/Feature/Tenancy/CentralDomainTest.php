@@ -2497,6 +2497,7 @@ class CentralDomainTest extends TestCase
 
     public function test_support_audit_history_prevents_platform_user_deletion(): void
     {
+        PlatformUser::factory()->create();
         $platformUser = PlatformUser::factory()->create();
         $shop = Shop::factory()->create();
         $session = ShopAccessSession::start($platformUser, $shop);

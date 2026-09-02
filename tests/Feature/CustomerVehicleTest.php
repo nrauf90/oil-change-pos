@@ -109,7 +109,12 @@ class CustomerVehicleTest extends TestCase
 
     public function test_profile_search_starts_at_three_characters_and_returns_all_matches(): void
     {
-        CustomerVehicle::factory()->count(11)->create(['customer_name' => 'Target Customer']);
+        CustomerVehicle::factory()->count(11)->create([
+            'customer_name' => 'Target Customer',
+            'phone' => '03000000000',
+            'vehicle_model' => 'Unrelated vehicle',
+            'vehicle_plate' => null,
+        ]);
         CustomerVehicle::factory()->create(['customer_name' => 'Sana Malik', 'vehicle_plate' => 'LEB-4477']);
         $user = User::factory()->manager()->create();
 
