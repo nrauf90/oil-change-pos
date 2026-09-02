@@ -1,12 +1,17 @@
 <?php
 
+use App\Http\Middleware\EnforceReadOnlySupportAccess;
 use App\Http\Middleware\EnsureFilamentActionMatchesTenant;
 use App\Http\Middleware\EnsureModuleIsEnabled;
 use App\Http\Middleware\EnsureShopIsActive;
+use App\Http\Middleware\InitializeSupportAccess;
 use App\Http\Middleware\InitializeTenancy;
 use App\Http\Middleware\TenantThrottleRequests;
 use App\Tenancy\TenantPackageRouteRegistrar;
+use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
+use Filament\Http\Middleware\AuthenticateSession as FilamentAuthenticateSession;
 use Filament\Http\Middleware\SetUpPanel;
+use Illuminate\Auth\Middleware\Authenticate;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -38,6 +43,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'module' => EnsureModuleIsEnabled::class,
             'shop.active' => EnsureShopIsActive::class,
             'tenant' => InitializeTenancy::class,
+            'support.access' => InitializeSupportAccess::class,
+            'support.readonly' => EnforceReadOnlySupportAccess::class,
             'throttle' => TenantThrottleRequests::class,
         ]);
         $middleware->appendToPriorityList(StartSession::class, EnsureShopIsActive::class);
@@ -45,6 +52,16 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->appendToPriorityList(InitializeTenancy::class, EnsureFilamentActionMatchesTenant::class);
         $middleware->appendToPriorityList(EnsureFilamentActionMatchesTenant::class, SubstituteBindings::class);
         $middleware->appendToPriorityList(InitializeTenancy::class, SetUpPanel::class);
+        $middleware->prependToPriorityList(EnsureShopIsActive::class, InitializeSupportAccess::class);
+        $middleware->prependToPriorityList([
+            EnsureFilamentActionMatchesTenant::class,
+            SetUpPanel::class,
+            PermissionMiddleware::class,
+            FilamentAuthenticateSession::class,
+            FilamentAuthenticate::class,
+            Authenticate::class,
+            SubstituteBindings::class,
+        ], EnforceReadOnlySupportAccess::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

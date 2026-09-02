@@ -3,10 +3,12 @@
 namespace Tests\Feature\Tenancy;
 
 use App\Enums\ShopStatus;
+use App\Http\Middleware\EnforceReadOnlySupportAccess;
 use App\Http\Middleware\EnsureFilamentActionMatchesTenant;
 use App\Http\Middleware\EnsureLivewireUploadMatchesTenant;
 use App\Http\Middleware\EnsureModuleIsEnabled;
 use App\Http\Middleware\EnsureShopIsActive;
+use App\Http\Middleware\InitializeSupportAccess;
 use App\Http\Middleware\InitializeTenancy;
 use App\Http\Middleware\TenantThrottleRequests;
 use App\Models\Central\Shop;
@@ -601,13 +603,25 @@ class TenantResolutionTest extends TestCase
         $filamentMiddleware = $this->routeMiddleware('filament.admin.pages.admin-dashboard');
 
         $this->assertMiddlewarePrecedes($webMiddleware, StartSession::class, EnsureShopIsActive::class);
+        $this->assertMiddlewarePrecedes($webMiddleware, StartSession::class, InitializeSupportAccess::class);
+        $this->assertMiddlewarePrecedes($webMiddleware, InitializeSupportAccess::class, EnsureShopIsActive::class);
         $this->assertMiddlewarePrecedes($webMiddleware, EnsureShopIsActive::class, InitializeTenancy::class);
+        $this->assertMiddlewarePrecedes($webMiddleware, InitializeTenancy::class, EnforceReadOnlySupportAccess::class);
+        $this->assertMiddlewarePrecedes($webMiddleware, EnforceReadOnlySupportAccess::class, Authenticate::class);
+        $this->assertMiddlewarePrecedes($webMiddleware, EnforceReadOnlySupportAccess::class, SubstituteBindings::class);
         $this->assertMiddlewarePrecedes($webMiddleware, InitializeTenancy::class, Authenticate::class);
         $this->assertMiddlewarePrecedes($webMiddleware, InitializeTenancy::class, TenantThrottleRequests::class);
         $this->assertMiddlewarePrecedes($webMiddleware, InitializeTenancy::class, SubstituteBindings::class);
         $this->assertMiddlewarePrecedes($webMiddleware, InitializeTenancy::class, EnsureModuleIsEnabled::class);
         $this->assertMiddlewarePrecedes($webMiddleware, InitializeTenancy::class, PermissionMiddleware::class);
+        $this->assertMiddlewarePrecedes($filamentMiddleware, StartSession::class, InitializeSupportAccess::class);
+        $this->assertMiddlewarePrecedes($filamentMiddleware, InitializeSupportAccess::class, EnsureShopIsActive::class);
         $this->assertMiddlewarePrecedes($filamentMiddleware, EnsureShopIsActive::class, InitializeTenancy::class);
+        $this->assertMiddlewarePrecedes($filamentMiddleware, InitializeTenancy::class, EnforceReadOnlySupportAccess::class);
+        $this->assertMiddlewarePrecedes($filamentMiddleware, EnforceReadOnlySupportAccess::class, SetUpPanel::class);
+        $this->assertMiddlewarePrecedes($filamentMiddleware, EnforceReadOnlySupportAccess::class, FilamentAuthenticate::class);
+        $this->assertMiddlewarePrecedes($filamentMiddleware, EnforceReadOnlySupportAccess::class, FilamentAuthenticateSession::class);
+        $this->assertMiddlewarePrecedes($filamentMiddleware, EnforceReadOnlySupportAccess::class, SubstituteBindings::class);
         $this->assertMiddlewarePrecedes($filamentMiddleware, InitializeTenancy::class, SetUpPanel::class);
         $this->assertMiddlewarePrecedes($filamentMiddleware, InitializeTenancy::class, FilamentAuthenticate::class);
         $this->assertMiddlewarePrecedes($filamentMiddleware, InitializeTenancy::class, FilamentAuthenticateSession::class);
@@ -615,6 +629,21 @@ class TenantResolutionTest extends TestCase
 
         foreach (['filament.exports.download', 'filament.imports.failed-rows.download'] as $routeName) {
             $actionMiddleware = $this->routeMiddleware($routeName);
+            $this->assertMiddlewarePrecedes(
+                $actionMiddleware,
+                InitializeSupportAccess::class,
+                InitializeTenancy::class,
+            );
+            $this->assertMiddlewarePrecedes(
+                $actionMiddleware,
+                InitializeTenancy::class,
+                EnforceReadOnlySupportAccess::class,
+            );
+            $this->assertMiddlewarePrecedes(
+                $actionMiddleware,
+                EnforceReadOnlySupportAccess::class,
+                EnsureFilamentActionMatchesTenant::class,
+            );
             $this->assertMiddlewarePrecedes(
                 $actionMiddleware,
                 InitializeTenancy::class,

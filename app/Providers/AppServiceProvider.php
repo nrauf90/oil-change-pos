@@ -2,8 +2,10 @@
 
 namespace App\Providers;
 
+use App\Http\Middleware\EnforceReadOnlySupportAccess;
 use App\Http\Middleware\EnsureFilamentActionMatchesTenant;
 use App\Http\Middleware\EnsureLivewireUploadMatchesTenant;
+use App\Http\Middleware\InitializeSupportAccess;
 use App\Http\Middleware\InitializeTenancy;
 use App\Models\Central\PlatformUser;
 use App\Models\Expense;
@@ -34,6 +36,7 @@ use App\Tenancy\Provisioning\LaravelMySqlServerConnectionFactory;
 use App\Tenancy\Provisioning\MySqlServerConnectionFactory;
 use App\Tenancy\Provisioning\NullTenantProvisioningHook;
 use App\Tenancy\Provisioning\TenantProvisioningHook;
+use App\Tenancy\SupportAccessContext;
 use App\Tenancy\SystemDatabaseHostResolver;
 use App\Tenancy\TenantConnectionAttestationHook;
 use App\Tenancy\TenantConnectionConfigurationFactory;
@@ -104,6 +107,10 @@ class AppServiceProvider extends ServiceProvider
             TenantContext::class,
             static fn (): TenantContext => new TenantContext($runtimeState),
         );
+        $this->app->scoped(
+            SupportAccessContext::class,
+            static fn (): SupportAccessContext => new SupportAccessContext,
+        );
         $this->app->singleton(
             TenantPermissionCache::class,
             static fn (Application $application): TenantPermissionCache => new TenantPermissionCache(
@@ -143,22 +150,33 @@ class AppServiceProvider extends ServiceProvider
 
         Livewire::setUpdateRoute(
             static fn (array|string $handle, string $path): RoutingRoute => Route::post($path, $handle)
-                ->middleware(['web', InitializeTenancy::class.':optional'])
+                ->middleware([
+                    'web',
+                    InitializeSupportAccess::class,
+                    InitializeTenancy::class.':optional',
+                    EnforceReadOnlySupportAccess::class,
+                ])
                 ->name('livewire.update'),
         );
         FileUploadController::$defaultMiddleware = [
             'web',
+            InitializeSupportAccess::class,
             InitializeTenancy::class.':optional',
+            EnforceReadOnlySupportAccess::class,
             EnsureLivewireUploadMatchesTenant::class,
         ];
         FilePreviewController::$middleware = [
             'web',
+            InitializeSupportAccess::class,
             InitializeTenancy::class.':optional',
+            EnforceReadOnlySupportAccess::class,
             EnsureLivewireUploadMatchesTenant::class,
         ];
         $this->app->make(Router::class)->middlewareGroup('filament.actions', [
             'web',
+            InitializeSupportAccess::class,
             InitializeTenancy::class.':optional',
+            EnforceReadOnlySupportAccess::class,
             EnsureFilamentActionMatchesTenant::class,
         ]);
 

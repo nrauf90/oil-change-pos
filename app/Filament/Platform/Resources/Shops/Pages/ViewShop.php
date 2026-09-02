@@ -15,8 +15,10 @@ use App\Models\Central\Shop;
 use App\Models\Central\ShopFeature;
 use App\Modules\Module;
 use App\Modules\ModuleRegistry;
+use App\Tenancy\SupportAccessManager;
 use Filament\Actions\Action;
 use Filament\Forms\Components\CheckboxList;
+use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Icons\Heroicon;
@@ -71,11 +73,44 @@ class ViewShop extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
+            self::supportAccessAction(),
             self::manageFeaturesAction(),
             ShopsTable::suspendAction(),
             ShopsTable::reactivateAction(),
             ShopsTable::retryProvisioningAction(),
         ];
+    }
+
+    private static function supportAccessAction(): Action
+    {
+        return Action::make('supportAccess')
+            ->label('View shop')
+            ->icon(Heroicon::OutlinedEye)
+            ->color('info')
+            ->visible(static fn (Shop $record): bool => $record->status === ShopStatus::Active)
+            ->authorize(static fn (Shop $record): bool => ShopResource::canView($record))
+            ->modalHeading(static fn (Shop $record): string => "View {$record->name} in support mode")
+            ->modalDescription('Opens the shop with read-only access and records an audit session.')
+            ->modalSubmitActionLabel('Start read-only view')
+            ->schema([
+                Textarea::make('reason')
+                    ->label('Reason')
+                    ->maxLength(1000)
+                    ->rows(3),
+            ])
+            ->action(static function (Shop $record, array $data, ViewShop $livewire): void {
+                $platformUser = Auth::guard('platform')->user();
+
+                if (! $platformUser instanceof PlatformUser) {
+                    throw new AuthorizationException('Active platform administrator authentication is required.');
+                }
+
+                $reason = $data['reason'] ?? null;
+                $reason = is_string($reason) && trim($reason) !== '' ? trim($reason) : null;
+                $manager = resolve(SupportAccessManager::class);
+                $manager->start($platformUser, $record, $reason);
+                $livewire->redirect($manager->tenantEntryUrl($record), navigate: false);
+            });
     }
 
     private static function manageFeaturesAction(): Action
