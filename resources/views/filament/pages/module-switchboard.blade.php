@@ -21,6 +21,8 @@
 
                                 @if ($module['core'])
                                     <x-filament::badge color="gray" size="sm">Core</x-filament::badge>
+                                @elseif (! $module['platformEnabled'])
+                                    <x-filament::badge color="warning" size="sm">Platform off</x-filament::badge>
                                 @elseif ($module['enabled'])
                                     <x-filament::badge color="success" size="sm">On</x-filament::badge>
                                 @else
@@ -33,18 +35,30 @@
                     </div>
 
                     @unless ($module['core'])
-                        <x-filament::button
-                            size="sm"
-                            :color="$module['enabled'] ? 'danger' : 'success'"
-                            :outlined="$module['enabled']"
-                            :disabled="$module['enabled'] && filled($module['blockedBy'])"
-                            wire:click="toggle('{{ $module['key'] }}')"
-                            wire:loading.attr="disabled"
-                        >
-                            {{ $module['enabled'] ? 'Switch off' : 'Switch on' }}
-                        </x-filament::button>
+                        @if (! $module['platformEnabled'])
+                            <x-filament::button size="sm" color="gray" disabled>
+                                Unavailable
+                            </x-filament::button>
+                        @else
+                            <x-filament::button
+                                size="sm"
+                                :color="$module['enabled'] ? 'danger' : 'success'"
+                                :outlined="$module['enabled']"
+                                :disabled="$module['enabled'] && filled($module['blockedBy'])"
+                                wire:click="toggle('{{ $module['key'] }}')"
+                                wire:loading.attr="disabled"
+                            >
+                                {{ $module['enabled'] ? 'Switch off' : 'Switch on' }}
+                            </x-filament::button>
+                        @endif
                     @endunless
                 </div>
+
+                @if (! $module['platformEnabled'])
+                    <p class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900 dark:bg-amber-400/10 dark:text-amber-200">
+                        Disabled by the platform. Your saved module preference and tenant data are preserved.
+                    </p>
+                @endif
 
                 @if (filled($module['dependsOn']))
                     <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
