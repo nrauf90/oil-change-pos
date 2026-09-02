@@ -10,6 +10,7 @@ use App\Enums\ShopLifecycleEvent;
 use App\Enums\ShopStatus;
 use App\Exceptions\TenantProvisioningException;
 use App\Models\Central\Shop;
+use App\Models\Central\ShopFeature;
 use App\Models\Central\ShopOwner;
 use App\Models\Item;
 use App\Models\ModuleSetting;
@@ -18,6 +19,7 @@ use App\Models\Role;
 use App\Models\User;
 use App\Models\VehicleMake;
 use App\Models\VehicleModel;
+use App\Modules\Module;
 use App\Modules\ModuleRegistry;
 use App\Tenancy\Provisioning\DatabaseProvisioner;
 use App\Tenancy\Provisioning\NullTenantProvisioningHook;
@@ -124,6 +126,23 @@ class ShopProvisioningTest extends TestCase
             'module_key' => 'scripts',
             'enabled' => true,
         ], 'central');
+        $expectedFeatureStates = app(ModuleRegistry::class)
+            ->all()
+            ->reject(static fn (Module $module): bool => $module->isCore())
+            ->mapWithKeys(static fn (Module $module): array => [
+                $module->key() => in_array($module->key(), ['scripts', 'workshop'], true),
+            ])
+            ->sortKeys()
+            ->all();
+        $storedFeatureStates = $shop->features()
+            ->get()
+            ->mapWithKeys(static fn (ShopFeature $feature): array => [
+                $feature->module_key => $feature->enabled,
+            ])
+            ->sortKeys()
+            ->all();
+
+        $this->assertSame($expectedFeatureStates, $storedFeatureStates);
         $this->assertDatabaseHas('shop_health_snapshots', [
             'shop_id' => $shop->getKey(),
             'migration_status' => 'current',
@@ -144,9 +163,14 @@ class ShopProvisioningTest extends TestCase
 
         app(TenantConnectionManager::class)->within($shop->fresh(), function () use ($shop, $password): void {
             $owner = User::query()->where('username', 'north-owner')->firstOrFail();
+            $modules = app(ModuleRegistry::class);
 
             $this->assertTrue(Hash::check($password, $owner->password));
             $this->assertSame(RoleEnum::Admin, $owner->role());
+            $this->assertTrue($modules->enabled('scripts'));
+            $this->assertTrue($modules->enabled('workshop'));
+            $this->assertFalse($modules->enabled('reports'));
+            $this->assertFalse($modules->enabled('expenses'));
             $this->assertSame(1, User::query()->count());
             $this->assertSame(count(PermissionEnum::cases()), Permission::query()->count());
             $this->assertSame(count(RoleEnum::cases()), Role::query()->count());

@@ -10,6 +10,8 @@ use App\Filament\Platform\Resources\Shops\Pages\ViewShop;
 use App\Filament\Platform\Resources\Shops\Schemas\ShopForm;
 use App\Filament\Platform\Resources\Shops\Tables\ShopsTable;
 use App\Models\Central\Shop;
+use App\Modules\Module;
+use App\Modules\ModuleRegistry;
 use BackedEnum;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
@@ -173,11 +175,25 @@ class ShopResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
-            ->with(['owner', 'healthSnapshot'])
-            ->withCount([
-                'features as enabled_features_count' => static fn (Builder $query): Builder => $query
-                    ->where('enabled', true),
-            ]);
+            ->with(['owner', 'healthSnapshot', 'features']);
+    }
+
+    public static function enabledFeatureCount(Shop $shop): int
+    {
+        $features = $shop->relationLoaded('features')
+            ? $shop->features
+            : $shop->features()->get();
+        $storedStates = $features
+            ->pluck('enabled', 'module_key')
+            ->map(static fn (mixed $enabled): bool => (bool) $enabled)
+            ->all();
+
+        return resolve(ModuleRegistry::class)
+            ->all()
+            ->reject(static fn (Module $module): bool => $module->isCore())
+            ->filter(static fn (Module $module): bool => $storedStates[$module->key()]
+                ?? $module->enabledByDefault())
+            ->count();
     }
 
     public static function canViewAny(): bool

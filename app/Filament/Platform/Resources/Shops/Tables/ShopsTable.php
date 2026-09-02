@@ -51,6 +51,7 @@ class ShopsTable
 
                 TextColumn::make('enabled_features_count')
                     ->label('Features')
+                    ->state(static fn (Shop $record): int => ShopResource::enabledFeatureCount($record))
                     ->formatStateUsing(static fn (int $state): string => "{$state} enabled")
                     ->visibleFrom('xl'),
 

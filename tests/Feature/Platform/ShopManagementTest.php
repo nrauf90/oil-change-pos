@@ -10,6 +10,8 @@ use App\Filament\Platform\Resources\Shops\Pages\ViewShop;
 use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 use App\Models\Central\ShopOwner;
+use App\Modules\Module;
+use App\Modules\ModuleRegistry;
 use App\Tenancy\TenantContext;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
@@ -116,6 +118,28 @@ class ShopManagementTest extends PlatformTestCase
             ->assertDontSee($privateDatabase)
             ->assertDontSee($privateUsername)
             ->assertDontSee($privatePassword);
+    }
+
+    public function test_shop_list_counts_effective_features_when_legacy_rows_are_missing(): void
+    {
+        $platformUser = PlatformUser::factory()->create();
+        $shop = Shop::factory()->create([
+            'name' => 'Legacy Feature Workshop',
+            'status' => ShopStatus::Active,
+        ]);
+        $shop->features()->create([
+            'module_key' => 'scripts',
+            'enabled' => false,
+        ]);
+        $expectedCount = resolve(ModuleRegistry::class)
+            ->all()
+            ->reject(static fn (Module $module): bool => $module->isCore())
+            ->filter(static fn (Module $module): bool => $module->key() !== 'scripts')
+            ->count();
+
+        Livewire::actingAs($platformUser, 'platform')
+            ->test(ListShops::class)
+            ->assertTableColumnStateSet('enabled_features_count', $expectedCount, $shop);
     }
 
     public function test_platform_administrator_can_suspend_and_reactivate_a_shop(): void

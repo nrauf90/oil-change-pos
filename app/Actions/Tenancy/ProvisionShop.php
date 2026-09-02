@@ -131,11 +131,17 @@ final readonly class ProvisionShop
                     'is_active' => true,
                 ]);
 
-                foreach ($data->initialFeatureKeys as $featureKey) {
+                $selectedFeatureKeys = array_fill_keys($data->initialFeatureKeys, true);
+
+                foreach ($this->moduleRegistry->all() as $module) {
+                    if ($module->isCore()) {
+                        continue;
+                    }
+
                     ShopFeature::query()->create([
                         'shop_id' => $shop->getKey(),
-                        'module_key' => $featureKey,
-                        'enabled' => true,
+                        'module_key' => $module->key(),
+                        'enabled' => isset($selectedFeatureKeys[$module->key()]),
                     ]);
                 }
 
