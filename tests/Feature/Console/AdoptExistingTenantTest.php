@@ -183,8 +183,11 @@ class AdoptExistingTenantTest extends TestCase
         $this->assertSame($beforeColumns, $source->getSchemaBuilder()->getColumnListing('items'));
         $this->assertSame($beforeItem, (array) $source->table('items')->where('name', 'Preserved filter')->first());
         $this->assertSame($beforeUser, (array) $source->table('users')->where('username', 'legacy-admin')->first());
+        $expectedMigrations = [...$beforeMigrations, self::MARKER_MIGRATION];
+        sort($expectedMigrations);
+
         $this->assertSame(
-            [...$beforeMigrations, self::MARKER_MIGRATION],
+            $expectedMigrations,
             $source->table('migrations')->orderBy('migration')->pluck('migration')->all(),
         );
         $this->assertSame(1, $source->table('tenant_installations')->count());

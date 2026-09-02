@@ -15,22 +15,17 @@ cp .env.example .env          # if .env does not exist yet
 php artisan key:generate
 
 touch database/database.sqlite
-php artisan migrate --seed
+php artisan migrate --database=central --path=database/migrations/central
+php artisan platform:make-super-admin --name="Platform Administrator" --email="admin@example.test"
+# The command securely prompts for and confirms the password.
 
 npm run build                 # or `npm run dev` while working on the UI
 php artisan serve
 ```
 
-Open <http://localhost:8000>. The seeder creates one account per role:
-
-| Username   | Password   | Role                        |
-|------------|------------|-----------------------------|
-| `owner`    | `password` | Admin / Owner               |
-| `counter`  | `password` | Manager / Front-Desk Cashier|
-| `mechanic` | `password` | Technician / Mechanic       |
-
-**Change these before putting the terminal on a network.** Also set `APP_ENV=production` and
-`APP_DEBUG=false` in `.env` on a real till.
+Fresh SaaS setup creates no default accounts or passwords. The
+`platform:make-super-admin` command creates the first platform super administrator. Set
+`APP_ENV=production` and `APP_DEBUG=false` in `.env` before exposing the application.
 
 ## The two front ends
 
