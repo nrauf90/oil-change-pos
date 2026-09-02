@@ -339,11 +339,11 @@ class MeasuredStockTest extends TestCase
 
         $this->get(route('sales.show', $sale))
             ->assertOk()
-            ->assertSee('ZIC X7 10W-40')
-            ->assertDontSee('3.5')
-            ->assertDontSee('3.500')
-            ->assertDontSee('litre', false)
-            ->assertDontSee('Litres');
+            ->assertSeeText('ZIC X7 10W-40')
+            ->assertDontSeeText('3.5')
+            ->assertDontSeeText('3.500')
+            ->assertDontSeeText('litre')
+            ->assertDontSeeText('Litres');
     }
 
     public function test_the_dispensed_amount_never_appears_on_the_pdf(): void
