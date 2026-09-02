@@ -670,7 +670,7 @@ class SupportAccessTest extends PlatformTestCase
     public function test_every_unsafe_tenant_method_is_blocked_before_model_binding_or_mutation(string $method): void
     {
         $platformUser = PlatformUser::factory()->create();
-        $shop = $this->createActiveTenant('mutation-'.$method);
+        $shop = $this->createActiveTenant('mutation-'.strtolower($method));
         $item = resolve(TenantConnectionManager::class)->within(
             $shop,
             static fn (): Item => Item::factory()->create(['name' => 'Immutable Support Item']),
