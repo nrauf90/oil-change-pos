@@ -140,6 +140,14 @@ class CrossTenantIsolationTest extends TestCase
             $this->tenantItemState($this->shopA, $itemAId),
         );
         $this->assertNull($this->tenantItemState($this->shopB, $itemBId));
+
+        $this->logoutFrom($this->shopB);
+        $this->loginTo($this->shopA);
+        $this->get($this->tenantUrl($this->shopA, "/items/{$itemAId}/edit"))
+            ->assertOk()
+            ->assertSee('Tenant A collision filter')
+            ->assertDontSee('Tenant B collision filter updated');
+        $this->assertTenantStateIsRevoked();
     }
 
     /**
@@ -293,6 +301,39 @@ class CrossTenantIsolationTest extends TestCase
             ['Tenant B collision staff updated', 'manager', 2],
             $this->tenantUserState($this->shopB, $userBId),
         );
+
+        $this->logoutFrom($this->shopB);
+        $this->loginTo($this->shopA);
+        $editResponse = $this->get($this->tenantUrl($this->shopA, "/admin/users/{$userAId}/edit"));
+        $this->assertSame(
+            200,
+            $editResponse->getStatusCode(),
+            'Tenant A edit redirected to '.$editResponse->headers->get('Location'),
+        );
+        $editResponse
+            ->assertSee('Tenant A collision staff')
+            ->assertDontSee('Tenant B collision staff updated');
+        $snapshot = $this->extractLivewireSnapshot($editResponse->getContent(), 'Pages\\EditUser');
+        $this->assertTenantStateIsRevoked();
+
+        $updateResponse = $this->postLivewireUpdate($this->shopA, $snapshot, [
+            'data.name' => 'Tenant A collision staff updated',
+        ], 'save');
+        $this->assertSame(
+            200,
+            $updateResponse->getStatusCode(),
+            'Tenant A Livewire update redirected to '.$updateResponse->headers->get('Location'),
+        );
+        $this->assertTenantStateIsRevoked();
+
+        $this->assertSame(
+            ['Tenant A collision staff updated', 'manager', 2],
+            $this->tenantUserState($this->shopA, $userAId),
+        );
+        $this->assertSame(
+            ['Tenant B collision staff updated', 'manager', 2],
+            $this->tenantUserState($this->shopB, $userBId),
+        );
     }
 
     /**
@@ -383,6 +424,13 @@ class CrossTenantIsolationTest extends TestCase
             'password' => 'password',
         ])->assertRedirect();
         $this->assertTenantStateIsRevoked();
+    }
+
+    private function logoutFrom(Shop $shop): void
+    {
+        $this->post($this->tenantUrl($shop, '/logout'))->assertRedirect();
+        $this->assertTenantStateIsRevoked();
+        $this->flushSession();
     }
 
     private function tenantUrl(Shop $shop, string $path): string

@@ -88,11 +88,31 @@ class TenantExportIsolationTest extends TestCase
         $this->assertSame($saleA['line_id'], $saleB['line_id']);
         $this->loginTo($this->shopB);
 
-        $this->get($this->tenantUrl($this->shopB, "/sales/{$saleB['sale_id']}/pdf"))
+        $pdfB = $this->get($this->tenantUrl($this->shopB, "/sales/{$saleB['sale_id']}/pdf"))
             ->assertOk()
             ->assertDownload('TENANT-B-EXPORT.pdf')
             ->assertHeader('content-type', 'application/pdf');
         $this->assertTenantStateIsRevoked();
+        $pdfBText = $this->extractPdfText($pdfB->getContent());
+        $this->assertStringContainsString('TENANT-B-EXPORT', $pdfBText);
+        $this->assertStringContainsString('TENANT-B-EXPORT customer', $pdfBText);
+        $this->assertStringContainsString('Tenant B export line', $pdfBText);
+        $this->assertStringNotContainsString('TENANT-A-EXPORT', $pdfBText);
+        $this->assertStringNotContainsString('Tenant A export line', $pdfBText);
+
+        $this->logoutFrom($this->shopB);
+        $this->loginTo($this->shopA);
+        $pdfA = $this->get($this->tenantUrl($this->shopA, "/sales/{$saleA['sale_id']}/pdf"))
+            ->assertOk()
+            ->assertDownload('TENANT-A-EXPORT.pdf')
+            ->assertHeader('content-type', 'application/pdf');
+        $this->assertTenantStateIsRevoked();
+        $pdfAText = $this->extractPdfText($pdfA->getContent());
+        $this->assertStringContainsString('TENANT-A-EXPORT', $pdfAText);
+        $this->assertStringContainsString('TENANT-A-EXPORT customer', $pdfAText);
+        $this->assertStringContainsString('Tenant A export line', $pdfAText);
+        $this->assertStringNotContainsString('TENANT-B-EXPORT', $pdfAText);
+        $this->assertStringNotContainsString('Tenant B export line', $pdfAText);
 
         $this->assertSame(
             ['TENANT-A-EXPORT', 'Tenant A export line'],
@@ -151,6 +171,13 @@ class TenantExportIsolationTest extends TestCase
         $this->assertTenantStateIsRevoked();
     }
 
+    private function logoutFrom(Shop $shop): void
+    {
+        $this->post($this->tenantUrl($shop, '/logout'))->assertRedirect();
+        $this->assertTenantStateIsRevoked();
+        $this->flushSession();
+    }
+
     private function tenantUrl(Shop $shop, string $path): string
     {
         return "https://{$shop->slug}.pos.example.test/".ltrim($path, '/');
@@ -171,6 +198,20 @@ class TenantExportIsolationTest extends TestCase
         $this->assertFalse(app(TenantContext::class)->initialized());
         $this->assertFalse(config()->has('database.connections.tenant'));
         $this->assertArrayNotHasKey('tenant', DB::getConnections());
+    }
+
+    private function extractPdfText(string $pdf): string
+    {
+        preg_match_all('/stream\r?\n(.*?)\r?\nendstream/s', $pdf, $streams);
+        $text = [];
+
+        foreach ($streams[1] as $stream) {
+            $inflated = @gzuncompress($stream);
+            $content = $inflated === false ? $stream : $inflated;
+            $text[] = str_replace("\0", '', $content);
+        }
+
+        return implode("\n", $text);
     }
 
     private function newTemporaryDirectory(string $prefix): string
