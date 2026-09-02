@@ -13,6 +13,7 @@ final readonly class TenantDatabaseAttestor
     public function __construct(
         private ConfigRepository $config,
         private TenantSqliteAttestationLock $sqliteAttestationLock,
+        private TenantSqliteWitnessConnection $sqliteWitnessConnection,
     ) {}
 
     /** @param array<string, mixed> $expectedConfiguration */
@@ -166,6 +167,7 @@ final readonly class TenantDatabaseAttestor
         #[\SensitiveParameter]
         NormalizedDatabaseTarget $target,
     ): void {
+        $this->attestSqliteConnection($pdo, $target);
         $nonce = bin2hex(random_bytes(32));
         $statement = $pdo->prepare('UPDATE tenant_installations SET connection_nonce = ? WHERE id = ?');
         $statement->execute([$nonce, 1]);
@@ -174,10 +176,9 @@ final readonly class TenantDatabaseAttestor
         resolve(TenantConnectionAttestationHook::class)->afterSqliteNonceWritten($pdo, $target);
 
         try {
-            clearstatcache(true, $target->database);
-            $witness = new PDO('sqlite:'.$target->database, options: [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            ]);
+            $this->attestSqliteConnection($pdo, $target);
+            $witness = $this->sqliteWitnessConnection->open($target);
+            $this->attestSqliteConnection($witness, $target);
             $observedNonce = $witness
                 ->query('SELECT connection_nonce FROM tenant_installations WHERE id = 1')
                 ?->fetchColumn();
@@ -185,6 +186,9 @@ final readonly class TenantDatabaseAttestor
             if (! is_string($observedNonce) || ! hash_equals($nonce, $observedNonce)) {
                 throw new TenantDatabaseAttestationFailed;
             }
+
+            $this->attestSqliteConnection($pdo, $target);
+            $this->attestSqliteConnection($witness, $target);
         } finally {
             $witness = null;
             $clearNonce = $pdo->prepare('UPDATE tenant_installations SET connection_nonce = NULL WHERE id = ?');

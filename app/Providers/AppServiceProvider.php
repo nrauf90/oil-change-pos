@@ -21,6 +21,7 @@ use App\Observers\SupplyObserver;
 use App\Observers\UserObserver;
 use App\Tenancy\DatabaseHostResolver;
 use App\Tenancy\NullTenantConnectionAttestationHook;
+use App\Tenancy\PdoTenantSqliteWitnessConnection;
 use App\Tenancy\SystemDatabaseHostResolver;
 use App\Tenancy\TenantConnectionAttestationHook;
 use App\Tenancy\TenantConnectionManager;
@@ -28,6 +29,7 @@ use App\Tenancy\TenantContext;
 use App\Tenancy\TenantDatabaseAttestor;
 use App\Tenancy\TenantRuntimeState;
 use App\Tenancy\TenantSqliteAttestationLock;
+use App\Tenancy\TenantSqliteWitnessConnection;
 use Illuminate\Auth\EloquentUserProvider;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Eloquent\Builder;
@@ -51,6 +53,10 @@ class AppServiceProvider extends ServiceProvider
             TenantConnectionAttestationHook::class,
             NullTenantConnectionAttestationHook::class,
         );
+        $this->app->bind(
+            TenantSqliteWitnessConnection::class,
+            PdoTenantSqliteWitnessConnection::class,
+        );
         $this->app->singleton(
             TenantContext::class,
             static fn (): TenantContext => new TenantContext($runtimeState),
@@ -69,6 +75,7 @@ class AppServiceProvider extends ServiceProvider
                     new TenantSqliteAttestationLock(
                         (string) $application->make('config')->get('database.tenant_attestation_lock_path'),
                     ),
+                    $application->make(TenantSqliteWitnessConnection::class),
                 ),
                 moduleRegistry: $application->make(ModuleRegistry::class),
             ),

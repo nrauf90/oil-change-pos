@@ -40,6 +40,7 @@ use App\Tenancy\NormalizedDatabaseTarget;
 use App\Tenancy\TenantConnectionAttestationHook;
 use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
+use App\Tenancy\TenantSqliteWitnessConnection;
 use App\Tenancy\ValidatedTenantConnection;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Artisan;
@@ -588,6 +589,84 @@ class TenantConnectionIsolationTest extends TestCase
         $this->manager->connect($this->shopA);
     }
 
+    public function test_sqlite_nonce_witness_rejects_a_copied_marker_on_an_unregistered_file(): void
+    {
+        $replacement = $this->tenantRoot.DIRECTORY_SEPARATOR.'copied-marker-witness.sqlite';
+
+        if (File::copy((string) $this->shopA->database_name, $replacement) === false) {
+            throw new RuntimeException('Unable to copy the tenant database marker.');
+        }
+
+        app()->instance(
+            TenantConnectionAttestationHook::class,
+            new class($replacement) implements TenantConnectionAttestationHook
+            {
+                public function __construct(private readonly string $replacement) {}
+
+                public function beforeOpen(
+                    #[\SensitiveParameter]
+                    NormalizedDatabaseTarget $target,
+                ): void {}
+
+                public function afterOpen(
+                    PDO $pdo,
+                    #[\SensitiveParameter]
+                    NormalizedDatabaseTarget $target,
+                ): void {}
+
+                public function afterSqliteNonceWritten(
+                    PDO $pdo,
+                    #[\SensitiveParameter]
+                    NormalizedDatabaseTarget $target,
+                ): void {
+                    $nonce = $pdo
+                        ->query('SELECT connection_nonce FROM tenant_installations WHERE id = 1')
+                        ?->fetchColumn();
+
+                    if (! is_string($nonce)) {
+                        throw new RuntimeException('The registered tenant nonce was not written.');
+                    }
+
+                    $replacement = new PDO('sqlite:'.$this->replacement, options: [
+                        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    ]);
+                    $statement = $replacement->prepare(
+                        'UPDATE tenant_installations SET connection_nonce = ? WHERE id = ?',
+                    );
+                    $statement->execute([$nonce, 1]);
+                }
+            },
+        );
+        app()->instance(
+            TenantSqliteWitnessConnection::class,
+            new class($replacement) implements TenantSqliteWitnessConnection
+            {
+                public function __construct(private readonly string $replacement) {}
+
+                public function open(
+                    #[\SensitiveParameter]
+                    NormalizedDatabaseTarget $target,
+                ): PDO {
+                    return new PDO('sqlite:'.$this->replacement, options: [
+                        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    ]);
+                }
+            },
+        );
+        $this->app->forgetInstance(TenantConnectionManager::class);
+        $this->manager = app(TenantConnectionManager::class);
+
+        try {
+            $this->manager->connect($this->shopA);
+            $this->fail('A copied-marker witness on an unregistered SQLite file was accepted.');
+        } catch (TenantDatabaseAttestationFailed) {
+            $this->addToAssertionCount(1);
+        }
+
+        $this->assertFalse(app(TenantContext::class)->initialized());
+        $this->assertFalse(config()->has('database.connections.tenant'));
+    }
+
     public function test_sqlite_nonce_challenges_are_serialized_across_workers(): void
     {
         $database = (string) $this->shopA->database_name;
@@ -1082,6 +1161,136 @@ PHP;
         $this->assertSame($payment->getKey(), Expense::query()->sole()->supplier_payment_id);
         $this->assertFalse(DB::connection('sqlite')->getSchemaBuilder()->hasTable('supplier_payments'));
         $this->assertFalse(DB::connection('sqlite')->getSchemaBuilder()->hasTable('expenses'));
+    }
+
+    public function test_supplier_payment_transaction_rolls_back_tenant_writes_after_an_expense_insert_fails(): void
+    {
+        $this->manager->connect($this->shopA);
+        $user = User::factory()->create();
+        $supply = Supply::factory()->create(['total_amount' => '1000.00']);
+        $activityLogCount = ActivityLog::query()->count();
+        $eventName = 'eloquent.created: '.Expense::class;
+        Event::listen($eventName, static function (): never {
+            throw new RuntimeException('Forced supplier payment transaction failure.');
+        });
+
+        try {
+            (new RecordSupplierPayment)($supply, $user, [
+                'amount' => '250.00',
+                'method' => 'cash',
+                'paid_at' => now(),
+                'reference_number' => 'ROLLBACK-PAYMENT',
+            ]);
+            $this->fail('The forced supplier payment transaction failure was ignored.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Forced supplier payment transaction failure.', $exception->getMessage());
+        } finally {
+            Event::forget($eventName);
+        }
+
+        $this->assertSame(0, SupplierPayment::query()->count());
+        $this->assertSame(0, Expense::query()->count());
+        $this->assertSame($activityLogCount, ActivityLog::query()->count());
+    }
+
+    public function test_quick_item_transaction_rolls_back_tenant_write_after_the_item_insert_fails(): void
+    {
+        $this->manager->connect($this->shopA);
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $activityLogCount = ActivityLog::query()->count();
+        $request = $this->validatedFormRequest(QuickItemRequest::class, [
+            'name' => 'Rolled back quick repair',
+            'type' => ItemType::Repair->value,
+        ], $user);
+        $eventName = 'eloquent.created: '.Item::class;
+        Event::listen($eventName, static function (): never {
+            throw new RuntimeException('Forced quick item transaction failure.');
+        });
+
+        try {
+            app(QuickItemController::class)->store($request);
+            $this->fail('The forced quick item transaction failure was ignored.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Forced quick item transaction failure.', $exception->getMessage());
+        } finally {
+            Event::forget($eventName);
+        }
+
+        $this->assertSame(0, Item::query()->count());
+        $this->assertSame($activityLogCount, ActivityLog::query()->count());
+    }
+
+    public function test_inspection_creation_transaction_rolls_back_after_a_point_insert_fails(): void
+    {
+        $this->manager->connect($this->shopA);
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $activityLogCount = ActivityLog::query()->count();
+        $request = $this->validatedFormRequest(InspectionRequest::class, [
+            'vehicle_plate' => 'ROLL-101',
+            'vehicle_model' => 'Rollback vehicle',
+            'mileage' => 1000,
+            'points' => ['engine_oil' => ['status' => 'ok']],
+        ], $user);
+        $eventName = 'eloquent.created: '.InspectionItem::class;
+        Event::listen($eventName, static function (): never {
+            throw new RuntimeException('Forced inspection creation transaction failure.');
+        });
+
+        try {
+            app(InspectionController::class)->store($request);
+            $this->fail('The forced inspection creation transaction failure was ignored.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Forced inspection creation transaction failure.', $exception->getMessage());
+        } finally {
+            Event::forget($eventName);
+        }
+
+        $this->assertSame(0, Inspection::query()->count());
+        $this->assertSame(0, InspectionItem::query()->count());
+        $this->assertSame($activityLogCount, ActivityLog::query()->count());
+    }
+
+    public function test_inspection_update_transaction_restores_the_original_sheet_after_a_point_insert_fails(): void
+    {
+        $this->manager->connect($this->shopA);
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $inspection = Inspection::factory()->create([
+            'vehicle_plate' => 'ROLL-201',
+            'vehicle_model' => 'Original vehicle',
+            'mileage' => 2000,
+        ]);
+        $inspection->syncPoints(['engine_oil' => ['status' => 'ok']]);
+        $request = $this->validatedFormRequest(InspectionRequest::class, [
+            'vehicle_plate' => 'ROLL-202',
+            'vehicle_model' => 'Changed vehicle',
+            'mileage' => 3000,
+            'points' => ['battery' => ['status' => 'urgent']],
+        ], $user, method: 'PUT');
+        $eventName = 'eloquent.created: '.InspectionItem::class;
+        Event::listen($eventName, static function (): never {
+            throw new RuntimeException('Forced inspection update transaction failure.');
+        });
+
+        try {
+            app(InspectionController::class)->update($request, $inspection);
+            $this->fail('The forced inspection update transaction failure was ignored.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Forced inspection update transaction failure.', $exception->getMessage());
+        } finally {
+            Event::forget($eventName);
+        }
+
+        $inspection = $inspection->fresh();
+
+        $this->assertInstanceOf(Inspection::class, $inspection);
+        $this->assertSame('ROLL-201', $inspection->vehicle_plate);
+        $this->assertSame('Original vehicle', $inspection->vehicle_model);
+        $this->assertSame(2000, $inspection->mileage);
+        $this->assertSame('engine_oil', $inspection->points()->sole()->point->value);
+        $this->assertSame('ok', $inspection->points()->sole()->status->value);
     }
 
     public function test_quick_item_and_inspection_write_transactions_use_only_the_active_tenant(): void
