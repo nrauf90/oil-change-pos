@@ -6,16 +6,24 @@ use App\Enums\Permission;
 use App\Enums\Role as RoleEnum;
 use App\Models\Role;
 use App\Models\User;
+use App\Support\TenantSessionAuthentication;
+use App\Tenancy\TenantContext;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
 use LogicException;
 
 final class ManageTenantUsers
 {
+    public function __construct(
+        private readonly TenantSessionAuthentication $sessionAuthentication,
+        private readonly TenantContext $tenantContext,
+    ) {}
+
     /** @param array<string, mixed> $data */
     public function update(User $actor, User $record, array $data, string $roleName): User
     {
@@ -57,9 +65,22 @@ final class ManageTenantUsers
                     : 'This is the last active admin. Promote another staff member to admin before changing this role.');
             }
 
+            $wasActive = $user->is_active;
+
+            if ($wasActive && ! $willBeActive) {
+                $user->setRememberToken(Str::random(60));
+            }
+
             $user->fill(Arr::only($data, ['name', 'username', 'password', 'is_active']));
             $user->save();
             $user->assignSingleRole($role);
+
+            if (! $willBeActive) {
+                $this->sessionAuthentication->revokePersistedSessions(
+                    $this->tenantContext->id(),
+                    $user->getKey(),
+                );
+            }
 
             return $user->load('roles');
         });
@@ -85,6 +106,13 @@ final class ManageTenantUsers
                     'This is the last active admin. Add or activate another admin before deleting this account.',
                 );
             }
+
+            $user->setRememberToken(Str::random(60));
+            $user->saveQuietly();
+            $this->sessionAuthentication->revokePersistedSessions(
+                $this->tenantContext->id(),
+                $user->getKey(),
+            );
 
             return $user->delete() === true;
         });

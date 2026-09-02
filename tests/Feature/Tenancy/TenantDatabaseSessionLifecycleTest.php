@@ -2,11 +2,15 @@
 
 namespace Tests\Feature\Tenancy;
 
+use App\Actions\ManageTenantUsers;
+use App\Enums\Role;
 use App\Http\Middleware\EnsureShopIsActive;
 use App\Http\Middleware\InitializeTenancy;
 use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 use App\Models\User;
+use App\Support\TenantSessionAuthentication;
+use App\Tenancy\SupportAccessManager;
 use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
 use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
@@ -17,6 +21,7 @@ use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Session\SessionManager;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
@@ -112,6 +117,379 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data', []);
         $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_explicit_login_records_the_tenant_authentication_generation(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-login-generation');
+
+        $this->post($this->tenantUrl($shop, '/login'), [
+            'username' => $user->username,
+            'password' => 'secret-password',
+        ])->assertRedirect()->assertSessionHas(
+            TenantSessionAuthentication::GENERATION_SESSION_KEY,
+            hash_hmac('sha256', (string) $user->getRememberToken(), (string) config('app.key')),
+        );
+
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_valid_remember_cookie_records_the_tenant_authentication_generation(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-remember-generation');
+        $webGuard = Auth::guard('web');
+        $recallerName = $webGuard->getRecallerName();
+        $loginResponse = $this->post($this->tenantUrl($shop, '/login'), [
+            'username' => $user->username,
+            'password' => 'secret-password',
+            'remember' => true,
+        ])->assertRedirect();
+        $recaller = $loginResponse->getCookie($recallerName);
+        $this->assertNotNull($recaller);
+        $this->resetResolvedSessionAndGuards();
+        $this->withSession([
+            $webGuard->getName() => null,
+            TenantSessionAuthentication::GENERATION_SESSION_KEY => null,
+            InitializeTenancy::SESSION_SHOP_KEY => $shop->getKey(),
+        ]);
+
+        $response = $this
+            ->withCredentials()
+            ->withCookie($recallerName, $recaller->getValue())
+            ->getJson($this->tenantUrl($shop, '/quick-items'));
+
+        $response
+            ->assertOk()
+            ->assertSessionHas($webGuard->getName(), $user->getKey())
+            ->assertSessionHas(
+                TenantSessionAuthentication::GENERATION_SESSION_KEY,
+                hash_hmac('sha256', (string) $user->getRememberToken(), (string) config('app.key')),
+            );
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_deactivated_authenticated_tenant_user_is_denied_on_the_next_request(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-deactivated-user');
+        $actorId = $this->manager->within(
+            $shop,
+            static fn (): int => (int) User::factory()->admin()->create()->getKey(),
+        );
+        $loginResponse = $this->post($this->tenantUrl($shop, '/login'), [
+            'username' => $user->username,
+            'password' => 'secret-password',
+        ])->assertRedirect();
+        $sessionId = $loginResponse->baseRequest->session()->getId();
+        $this->resetResolvedSessionAndGuards();
+
+        $this->manager->within($shop, static function () use ($actorId, $user): void {
+            resolve(ManageTenantUsers::class)->update(
+                User::query()->findOrFail($actorId),
+                User::query()->findOrFail($user->getKey()),
+                ['is_active' => false],
+                Role::Manager->value,
+            );
+        });
+        $this->resetResolvedSessionAndGuards();
+
+        $response = $this->withCookie((string) config('session.cookie'), $sessionId)
+            ->get($this->tenantUrl($shop, '/quick-items'))
+            ->assertRedirect($this->tenantUrl($shop, '/login'));
+        $response
+            ->assertSessionMissing(Auth::guard('web')->getName())
+            ->assertSessionMissing(TenantSessionAuthentication::GENERATION_SESSION_KEY)
+            ->assertSessionMissing(InitializeTenancy::SESSION_SHOP_KEY);
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_old_tenant_remember_cookie_cannot_authenticate_after_reactivation(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-reactivated-remember');
+        $actorId = $this->manager->within(
+            $shop,
+            static fn (): int => (int) User::factory()->admin()->create()->getKey(),
+        );
+        $webGuard = Auth::guard('web');
+        $recallerName = $webGuard->getRecallerName();
+        $loginResponse = $this->post($this->tenantUrl($shop, '/login'), [
+            'username' => $user->username,
+            'password' => 'secret-password',
+            'remember' => true,
+        ])->assertRedirect();
+        $oldRecaller = $loginResponse->getCookie($recallerName);
+        $this->assertNotNull($oldRecaller);
+        $this->resetResolvedSessionAndGuards();
+
+        $this->manager->within($shop, static function () use ($actorId, $user): void {
+            $action = resolve(ManageTenantUsers::class);
+            $actor = User::query()->findOrFail($actorId);
+            $record = User::query()->findOrFail($user->getKey());
+            $action->update($actor, $record, ['is_active' => false], Role::Manager->value);
+            $action->update($actor, $record, ['is_active' => true], Role::Manager->value);
+        });
+        $this->resetResolvedSessionAndGuards();
+        $this->withSession([
+            Auth::guard('web')->getName() => null,
+            InitializeTenancy::SESSION_SHOP_KEY => $shop->getKey(),
+        ]);
+
+        $this->withCookie($recallerName, $oldRecaller->getValue())
+            ->get($this->tenantUrl($shop, '/quick-items'))
+            ->assertRedirect($this->tenantUrl($shop, '/login'));
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_deactivation_removes_only_matching_tenant_authentication_from_persisted_sessions(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-session-revocation');
+        $actorId = $this->manager->within(
+            $shop,
+            static fn (): int => (int) User::factory()->admin()->create()->getKey(),
+        );
+        $webLoginKey = Auth::guard('web')->getName();
+        $platformLoginKey = Auth::guard('platform')->getName();
+        $matchingSessionId = 'matching-tenant-user-session';
+        $matchingPayload = [
+            '_token' => 'csrf-token',
+            $webLoginKey => $user->getKey(),
+            'auth_generation_web' => 'stale-generation',
+            'password_hash_web' => 'password-hash',
+            InitializeTenancy::SESSION_SHOP_KEY => $shop->getKey(),
+            $platformLoginKey => 'platform-admin-id',
+            'auth_generation_platform' => 'platform-generation',
+            'password_hash_platform' => 'platform-password-hash',
+            SupportAccessManager::SESSION_KEY => [
+                'audit_id' => 'support-audit-id',
+                'shop_id' => $shop->getKey(),
+            ],
+            'tenant.checkout.draft' => ['sale_id' => 91],
+        ];
+        $differentShopPayload = array_replace($matchingPayload, [
+            InitializeTenancy::SESSION_SHOP_KEY => 'different-shop-id',
+        ]);
+        $differentUserPayload = array_replace($matchingPayload, [$webLoginKey => 999]);
+        $malformedUserPayload = array_replace($matchingPayload, [$webLoginKey => ['unexpected']]);
+
+        foreach ([
+            $matchingSessionId => $this->encodeSessionPayload($matchingPayload),
+            'different-shop-session' => $this->encodeSessionPayload($differentShopPayload),
+            'different-user-session' => $this->encodeSessionPayload($differentUserPayload),
+            'malformed-user-session' => $this->encodeSessionPayload($malformedUserPayload),
+            'malformed-session' => 'not-base64',
+        ] as $sessionId => $payload) {
+            DB::connection('central')->table('sessions')->insert([
+                'id' => $sessionId,
+                'user_id' => $user->getKey(),
+                'ip_address' => '127.0.0.1',
+                'user_agent' => 'PHPUnit',
+                'payload' => $payload,
+                'last_activity' => now()->timestamp,
+            ]);
+        }
+
+        $this->manager->within($shop, static function () use ($actorId, $user): void {
+            resolve(ManageTenantUsers::class)->update(
+                User::query()->findOrFail($actorId),
+                User::query()->findOrFail($user->getKey()),
+                ['is_active' => false],
+                Role::Manager->value,
+            );
+        });
+
+        $payload = $this->persistedSessionPayload($matchingSessionId);
+        $this->assertArrayNotHasKey($webLoginKey, $payload);
+        $this->assertArrayNotHasKey('auth_generation_web', $payload);
+        $this->assertArrayNotHasKey('password_hash_web', $payload);
+        $this->assertArrayNotHasKey(InitializeTenancy::SESSION_SHOP_KEY, $payload);
+        $this->assertSame('platform-admin-id', $payload[$platformLoginKey]);
+        $this->assertSame('platform-generation', $payload['auth_generation_platform']);
+        $this->assertSame('platform-password-hash', $payload['password_hash_platform']);
+        $this->assertSame([
+            'audit_id' => 'support-audit-id',
+            'shop_id' => $shop->getKey(),
+        ], $payload[SupportAccessManager::SESSION_KEY]);
+        $this->assertSame(['sale_id' => 91], $payload['tenant.checkout.draft']);
+        $this->assertNull(DB::connection('central')->table('sessions')->where('id', $matchingSessionId)->value('user_id'));
+        $this->assertSame(
+            $this->encodeSessionPayload($differentShopPayload),
+            DB::connection('central')->table('sessions')->where('id', 'different-shop-session')->value('payload'),
+        );
+        $this->assertSame(
+            $this->encodeSessionPayload($differentUserPayload),
+            DB::connection('central')->table('sessions')->where('id', 'different-user-session')->value('payload'),
+        );
+        $this->assertSame(
+            $this->encodeSessionPayload($malformedUserPayload),
+            DB::connection('central')->table('sessions')->where('id', 'malformed-user-session')->value('payload'),
+        );
+        $this->assertSame(
+            'not-base64',
+            DB::connection('central')->table('sessions')->where('id', 'malformed-session')->value('payload'),
+        );
+    }
+
+    public function test_stale_session_write_after_deactivation_cannot_authenticate_after_reactivation(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-stale-session-write');
+        $actorId = $this->manager->within(
+            $shop,
+            static fn (): int => (int) User::factory()->admin()->create()->getKey(),
+        );
+        $loginResponse = $this->post($this->tenantUrl($shop, '/login'), [
+            'username' => $user->username,
+            'password' => 'secret-password',
+        ])->assertRedirect();
+        $sessionId = $loginResponse->baseRequest->session()->getId();
+        $stalePayload = DB::connection('central')
+            ->table('sessions')
+            ->where('id', $sessionId)
+            ->value('payload');
+        $this->assertIsString($stalePayload);
+        $this->resetResolvedSessionAndGuards();
+
+        $this->manager->within($shop, static function () use ($actorId, $user): void {
+            resolve(ManageTenantUsers::class)->update(
+                User::query()->findOrFail($actorId),
+                User::query()->findOrFail($user->getKey()),
+                ['is_active' => false],
+                Role::Manager->value,
+            );
+        });
+
+        DB::connection('central')->table('sessions')->where('id', $sessionId)->update([
+            'payload' => $stalePayload,
+            'user_id' => $user->getKey(),
+        ]);
+
+        $this->manager->within($shop, static function () use ($actorId, $user): void {
+            resolve(ManageTenantUsers::class)->update(
+                User::query()->findOrFail($actorId),
+                User::query()->findOrFail($user->getKey()),
+                ['is_active' => true],
+                Role::Manager->value,
+            );
+        });
+        $this->resetResolvedSessionAndGuards();
+
+        $response = $this->withCookie((string) config('session.cookie'), $sessionId)
+            ->get($this->tenantUrl($shop, '/quick-items'));
+
+        $response
+            ->assertRedirect($this->tenantUrl($shop, '/login'))
+            ->assertSessionMissing(Auth::guard('web')->getName())
+            ->assertSessionMissing(TenantSessionAuthentication::GENERATION_SESSION_KEY);
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_deleting_a_tenant_user_rotates_credentials_and_revokes_matching_sessions(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-deleted-user');
+        $actorId = $this->manager->within(
+            $shop,
+            static fn (): int => (int) User::factory()->admin()->create()->getKey(),
+        );
+        $oldRememberToken = $user->getRememberToken();
+        $tokenAtDelete = null;
+        Event::listen(
+            'eloquent.deleting: '.User::class,
+            static function (User $deletingUser) use ($user, &$tokenAtDelete): void {
+                if ((string) $deletingUser->getKey() === (string) $user->getKey()) {
+                    $tokenAtDelete = $deletingUser->getRememberToken();
+                }
+            },
+        );
+        $webLoginKey = Auth::guard('web')->getName();
+        $platformLoginKey = Auth::guard('platform')->getName();
+        $sessionId = 'deleted-tenant-user-session';
+        DB::connection('central')->table('sessions')->insert([
+            'id' => $sessionId,
+            'user_id' => $user->getKey(),
+            'ip_address' => '127.0.0.1',
+            'user_agent' => 'PHPUnit',
+            'payload' => $this->encodeSessionPayload([
+                '_token' => 'csrf-token',
+                $webLoginKey => $user->getKey(),
+                TenantSessionAuthentication::GENERATION_SESSION_KEY => 'old-generation',
+                'password_hash_web' => 'password-hash',
+                InitializeTenancy::SESSION_SHOP_KEY => $shop->getKey(),
+                $platformLoginKey => 'platform-admin-id',
+                'tenant.checkout.draft' => ['sale_id' => 91],
+            ]),
+            'last_activity' => now()->timestamp,
+        ]);
+
+        $this->manager->within($shop, static function () use ($actorId, $user): void {
+            resolve(ManageTenantUsers::class)->delete(
+                User::query()->findOrFail($actorId),
+                User::query()->findOrFail($user->getKey()),
+            );
+        });
+
+        $this->assertIsString($tokenAtDelete);
+        $this->assertNotSame($oldRememberToken, $tokenAtDelete);
+        $payload = $this->persistedSessionPayload($sessionId);
+        $this->assertArrayNotHasKey($webLoginKey, $payload);
+        $this->assertArrayNotHasKey(TenantSessionAuthentication::GENERATION_SESSION_KEY, $payload);
+        $this->assertArrayNotHasKey('password_hash_web', $payload);
+        $this->assertArrayNotHasKey(InitializeTenancy::SESSION_SHOP_KEY, $payload);
+        $this->assertSame('platform-admin-id', $payload[$platformLoginKey]);
+        $this->assertSame(['sale_id' => 91], $payload['tenant.checkout.draft']);
+        $this->assertNull(DB::connection('central')->table('sessions')->where('id', $sessionId)->value('user_id'));
+        $this->manager->within(
+            $shop,
+            fn (): mixed => $this->assertDatabaseMissing('users', ['id' => $user->getKey()], 'tenant'),
+        );
+    }
+
+    public function test_repeated_deactivation_repairs_orphaned_tenant_authentication_idempotently(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-repeated-deactivation');
+        $actorId = $this->manager->within(
+            $shop,
+            static fn (): int => (int) User::factory()->admin()->create()->getKey(),
+        );
+        $this->manager->within($shop, static function () use ($user): void {
+            User::query()->whereKey($user->getKey())->update(['is_active' => false]);
+        });
+        $webLoginKey = Auth::guard('web')->getName();
+        $platformLoginKey = Auth::guard('platform')->getName();
+        $sessionId = 'already-inactive-tenant-user-session';
+        DB::connection('central')->table('sessions')->insert([
+            'id' => $sessionId,
+            'user_id' => $user->getKey(),
+            'ip_address' => '127.0.0.1',
+            'user_agent' => 'PHPUnit',
+            'payload' => $this->encodeSessionPayload([
+                '_token' => 'csrf-token',
+                $webLoginKey => $user->getKey(),
+                TenantSessionAuthentication::GENERATION_SESSION_KEY => 'old-generation',
+                InitializeTenancy::SESSION_SHOP_KEY => $shop->getKey(),
+                $platformLoginKey => 'platform-admin-id',
+            ]),
+            'last_activity' => now()->timestamp,
+        ]);
+
+        $deactivate = function () use ($shop, $actorId, $user): void {
+            $this->manager->within($shop, static function () use ($actorId, $user): void {
+                resolve(ManageTenantUsers::class)->update(
+                    User::query()->findOrFail($actorId),
+                    User::query()->findOrFail($user->getKey()),
+                    ['is_active' => false],
+                    Role::Manager->value,
+                );
+            });
+        };
+
+        $deactivate();
+        $payloadAfterFirstDeactivation = $this->persistedSessionPayload($sessionId);
+        $this->assertArrayNotHasKey($webLoginKey, $payloadAfterFirstDeactivation);
+        $this->assertArrayNotHasKey(TenantSessionAuthentication::GENERATION_SESSION_KEY, $payloadAfterFirstDeactivation);
+        $this->assertArrayNotHasKey(InitializeTenancy::SESSION_SHOP_KEY, $payloadAfterFirstDeactivation);
+        $this->assertSame('platform-admin-id', $payloadAfterFirstDeactivation[$platformLoginKey]);
+
+        $deactivate();
+
+        $this->assertSame($payloadAfterFirstDeactivation, $this->persistedSessionPayload($sessionId));
     }
 
     public function test_authenticated_post_persists_domain_and_database_session_state(): void
@@ -383,6 +761,25 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
     private function tenantUrl(Shop $shop, string $path): string
     {
         return 'https://pos.example.test/__tenants/'.$shop->slug.'/'.ltrim($path, '/');
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function encodeSessionPayload(array $payload): string
+    {
+        return base64_encode(json_encode($payload, JSON_THROW_ON_ERROR));
+    }
+
+    /** @return array<string, mixed> */
+    private function persistedSessionPayload(string $sessionId): array
+    {
+        $encodedPayload = DB::connection('central')
+            ->table('sessions')
+            ->where('id', $sessionId)
+            ->value('payload');
+
+        $this->assertIsString($encodedPayload);
+
+        return json_decode(base64_decode($encodedPayload, true), true, flags: JSON_THROW_ON_ERROR);
     }
 
     private function resetResolvedSessionAndGuards(): void

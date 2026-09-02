@@ -6,9 +6,12 @@ use App\Actions\Tenancy\LogoutTenantSession;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\InitializeTenancy;
 use App\Http\Requests\LoginRequest;
+use App\Models\User;
+use App\Support\TenantSessionAuthentication;
 use App\Tenancy\TenantContext;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 class LoginController extends Controller
@@ -18,8 +21,10 @@ class LoginController extends Controller
         return view('auth.login');
     }
 
-    public function store(LoginRequest $request): RedirectResponse
-    {
+    public function store(
+        LoginRequest $request,
+        TenantSessionAuthentication $sessionAuthentication,
+    ): RedirectResponse {
         $request->authenticate();
 
         // Kill the pre-login session id so a fixated cookie cannot be reused.
@@ -29,7 +34,13 @@ class LoginController extends Controller
             resolve(TenantContext::class)->id(),
         );
 
-        $request->user()->forceFill(['last_login_at' => now()])->save();
+        $user = $request->user();
+
+        if (! $user instanceof User || ! $sessionAuthentication->recordLogin($user)) {
+            throw ValidationException::withMessages([
+                'username' => trans('auth.failed'),
+            ]);
+        }
 
         // 'home' dispatches on what this member of staff may actually do —
         // sending a technician to the counter screen would 403 them out of the

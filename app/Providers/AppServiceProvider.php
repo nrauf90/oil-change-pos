@@ -203,6 +203,16 @@ class AppServiceProvider extends ServiceProvider
         );
 
         Auth::provider(
+            'active_tenant_eloquent',
+            static fn (Application $application, array $config): EloquentUserProvider => (new EloquentUserProvider(
+                $application->make('hash'),
+                $config['model'],
+            ))->withQuery(
+                static fn (Builder $query): Builder => $query->where('is_active', true),
+            ),
+        );
+
+        Auth::provider(
             'active_platform_eloquent',
             static fn (Application $application, array $config): EloquentUserProvider => (new EloquentUserProvider(
                 $application->make('hash'),

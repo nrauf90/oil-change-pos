@@ -5,6 +5,7 @@ namespace App\Http\Middleware;
 use App\Enums\ShopStatus;
 use App\Http\Responses\ShopUnavailableResponse;
 use App\Models\Central\Shop;
+use App\Support\TenantSessionAuthentication;
 use App\Tenancy\CentralTenantResolver;
 use App\Tenancy\Exceptions\TenantDatabaseAttestationFailed;
 use App\Tenancy\TenantConnectionManager;
@@ -49,6 +50,7 @@ final readonly class InitializeTenancy
         private UrlGenerator $url,
         private ConfigRepository $config,
         private TenantSessionInvalidator $sessionInvalidator,
+        private TenantSessionAuthentication $sessionAuthentication,
     ) {}
 
     /**
@@ -172,6 +174,7 @@ final readonly class InitializeTenancy
     private function runTenantRequest(Request $request, Closure $next): Response
     {
         $this->bindSessionToActiveShop($request);
+        $this->sessionAuthentication->ensureCurrentAuthentication($request);
 
         $configurationKey = 'livewire.temporary_file_upload.directory';
         $previousDirectory = $this->config->get($configurationKey);
