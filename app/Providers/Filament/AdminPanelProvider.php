@@ -4,6 +4,8 @@ namespace App\Providers\Filament;
 
 use App\Enums\Permission;
 use App\Filament\Pages\AdminDashboard;
+use App\Http\Middleware\EnsureShopIsActive;
+use App\Http\Middleware\InitializeTenancy;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -62,12 +64,18 @@ class AdminPanelProvider extends PanelProvider
                 EncryptCookies::class,
                 AddQueuedCookiesToResponse::class,
                 StartSession::class,
+                EnsureShopIsActive::class,
+                InitializeTenancy::class,
                 AuthenticateSession::class,
                 ShareErrorsFromSession::class,
                 PreventRequestForgery::class,
                 SubstituteBindings::class,
                 DisableBladeIconComponents::class,
                 DispatchServingFilamentEvent::class,
+            ])
+            ->persistentMiddleware([
+                EnsureShopIsActive::class,
+                InitializeTenancy::class,
             ])
             ->authMiddleware([
                 Authenticate::class,

@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Tenancy\TenantContext;
 use Illuminate\Auth\Events\Lockout;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Auth;
@@ -70,6 +71,7 @@ class LoginRequest extends FormRequest
     protected function throttleKey(): string
     {
         return Str::transliterate(
+            resolve(TenantContext::class)->id().'|'.
             Str::lower($this->string('username')->toString()).'|'.$this->ip()
         );
     }

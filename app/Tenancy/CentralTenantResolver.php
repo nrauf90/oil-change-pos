@@ -1,0 +1,118 @@
+<?php
+
+namespace App\Tenancy;
+
+use App\Models\Central\Shop;
+use Illuminate\Config\Repository as ConfigRepository;
+use Illuminate\Http\Request;
+
+final readonly class CentralTenantResolver implements TenantResolver
+{
+    public function __construct(private ConfigRepository $config) {}
+
+    public function resolve(Request $request): ?Shop
+    {
+        $baseHost = $this->baseHost();
+        $requestHost = $this->requestHost($request);
+
+        if ($baseHost === null || $requestHost === null) {
+            return null;
+        }
+
+        $hostSlug = $this->hostSlug($requestHost, $baseHost);
+        $routeSlug = $this->routeSlug($request);
+
+        if ($hostSlug !== null && $routeSlug !== null && ! hash_equals($hostSlug, $routeSlug)) {
+            return null;
+        }
+
+        $slug = $hostSlug;
+
+        if ($slug === null && $requestHost === $baseHost) {
+            $slug = $routeSlug;
+        }
+
+        if ($slug === null) {
+            return null;
+        }
+
+        return Shop::query()->where('slug', $slug)->first();
+    }
+
+    private function baseHost(): ?string
+    {
+        $host = parse_url((string) $this->config->get('app.url'), PHP_URL_HOST);
+
+        if (! is_string($host)) {
+            return null;
+        }
+
+        $host = strtolower($host);
+
+        return $this->isValidDnsName($host) ? $host : null;
+    }
+
+    private function requestHost(Request $request): ?string
+    {
+        $authority = $request->server->get('HTTP_HOST');
+
+        if (! is_string($authority)
+            || preg_match('/\A(?<host>[A-Za-z0-9.-]+)(?::(?<port>[0-9]{1,5}))?\z/D', $authority, $matches) !== 1) {
+            return null;
+        }
+
+        if (isset($matches['port'])
+            && ((int) $matches['port'] < 1 || (int) $matches['port'] > 65535)) {
+            return null;
+        }
+
+        $host = strtolower($matches['host']);
+
+        return $this->isValidDnsName($host) ? $host : null;
+    }
+
+    private function hostSlug(string $requestHost, string $baseHost): ?string
+    {
+        $suffix = '.'.$baseHost;
+
+        if (! str_ends_with($requestHost, $suffix)) {
+            return null;
+        }
+
+        $slug = substr($requestHost, 0, -strlen($suffix));
+
+        return $this->isValidSlug($slug) ? $slug : null;
+    }
+
+    private function routeSlug(Request $request): ?string
+    {
+        if (! in_array((string) $this->config->get('app.env'), ['local', 'testing'], true)) {
+            return null;
+        }
+
+        $slug = $request->route('tenant');
+
+        return is_string($slug) && $this->isValidSlug($slug) ? $slug : null;
+    }
+
+    private function isValidSlug(string $slug): bool
+    {
+        return strlen($slug) <= 63
+            && preg_match('/\A[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\z/D', $slug) === 1;
+    }
+
+    private function isValidDnsName(string $host): bool
+    {
+        if ($host === '' || strlen($host) > 253) {
+            return false;
+        }
+
+        foreach (explode('.', $host) as $label) {
+            if (! $this->isValidSlug($label)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}

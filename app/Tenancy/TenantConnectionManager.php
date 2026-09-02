@@ -2,6 +2,7 @@
 
 namespace App\Tenancy;
 
+use App\Enums\ShopStatus;
 use App\Models\Central\Shop;
 use App\Modules\ModuleRegistry;
 use App\Tenancy\Exceptions\TenantDatabaseAttestationFailed;
@@ -58,8 +59,11 @@ final class TenantConnectionManager
         $this->tenantConnectionTemplate = $tenantConnectionTemplate;
     }
 
-    public function connect(#[\SensitiveParameter] Shop $shop): void
-    {
+    public function connect(
+        #[\SensitiveParameter]
+        Shop $shop,
+        bool $requireActiveShop = false,
+    ): void {
         $shopId = $shop->getKey();
 
         if (! $shop->exists || ! is_string($shopId) || $shopId === '') {
@@ -73,6 +77,10 @@ final class TenantConnectionManager
             }
 
             if ($this->hasLiveAttestedConnection($this->activeLease)) {
+                if ($requireActiveShop) {
+                    $this->revalidateActiveShop($shop);
+                }
+
                 return;
             }
         }
@@ -80,11 +88,7 @@ final class TenantConnectionManager
         $this->clearRuntimeState();
 
         try {
-            if ($shop::class !== Shop::class) {
-                throw new TenantDatabaseAttestationFailed;
-            }
-
-            $snapshot = $shop->validatedDatabaseConnection();
+            $snapshot = $this->validatedConnectionSnapshot($shop, $requireActiveShop);
             $this->pendingShop = clone $shop;
             $this->pendingSnapshot = $snapshot;
             $this->config->set(
@@ -116,6 +120,7 @@ final class TenantConnectionManager
         Shop $shop,
         #[\SensitiveParameter]
         Closure $operation,
+        bool $requireActiveShop = false,
     ): mixed {
         if ($this->activeLease !== null) {
             if ($this->activeShop === null
@@ -127,10 +132,14 @@ final class TenantConnectionManager
                 throw new LogicException('The active tenant connection is no longer attested.');
             }
 
+            if ($requireActiveShop) {
+                $this->revalidateActiveShop($shop);
+            }
+
             return $operation();
         }
 
-        $this->connect($shop);
+        $this->connect($shop, $requireActiveShop);
 
         try {
             return $operation();
@@ -189,6 +198,35 @@ final class TenantConnectionManager
         $snapshot = $this->activeShop->validatedDatabaseConnection();
 
         return [$this->activeShop, $snapshot];
+    }
+
+    private function revalidateActiveShop(#[\SensitiveParameter] Shop $shop): void
+    {
+        try {
+            $this->validatedConnectionSnapshot($shop, true);
+        } catch (Throwable) {
+            $this->clearRuntimeState();
+
+            throw new TenantDatabaseAttestationFailed;
+        }
+    }
+
+    private function validatedConnectionSnapshot(
+        #[\SensitiveParameter]
+        Shop $shop,
+        bool $requireActiveShop,
+    ): ValidatedTenantConnection {
+        if ($shop::class !== Shop::class) {
+            throw new TenantDatabaseAttestationFailed;
+        }
+
+        $snapshot = $shop->validatedDatabaseConnection();
+
+        if ($requireActiveShop && $shop->status !== ShopStatus::Active) {
+            throw new TenantDatabaseAttestationFailed;
+        }
+
+        return $snapshot;
     }
 
     private function activate(
