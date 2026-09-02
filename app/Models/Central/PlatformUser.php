@@ -60,24 +60,23 @@ class PlatformUser extends Authenticatable implements FilamentUser
             $platformUser = $platformUsers->firstWhere($this->getKeyName(), $this->getKey());
             $platformUser ??= static::on($connectionName)->lockForUpdate()->findOrFail($this->getKey());
 
-            if (! $platformUser->is_active) {
-                return [
-                    'attributes' => $platformUser->getAttributes(),
-                    'revoked' => false,
-                ];
-            }
+            if ($platformUser->is_active) {
+                $activeSuperAdminCount = $platformUsers
+                    ->filter(static fn (self $user): bool => $user->role === self::ROLE_SUPER_ADMIN && $user->is_active)
+                    ->count();
 
-            $activeSuperAdminCount = $platformUsers
-                ->filter(static fn (self $user): bool => $user->role === self::ROLE_SUPER_ADMIN && $user->is_active)
-                ->count();
-
-            if ($platformUser->role === self::ROLE_SUPER_ADMIN && $activeSuperAdminCount === 1) {
-                throw new LogicException('The final active super administrator cannot be deactivated.');
+                if ($platformUser->role === self::ROLE_SUPER_ADMIN && $activeSuperAdminCount === 1) {
+                    throw new LogicException('The final active super administrator cannot be deactivated.');
+                }
             }
 
             ShopAccessSession::endActiveForPlatformUser($platformUser);
-            $platformUser->setRememberToken(Str::random(60));
-            $platformUser->forceFill(['is_active' => false])->save();
+
+            if ($platformUser->is_active) {
+                $platformUser->setRememberToken(Str::random(60));
+                $platformUser->forceFill(['is_active' => false])->save();
+            }
+
             app(PlatformSessionAuthentication::class)->revokePersistedSessions(
                 $platformUser->getKey(),
                 $connectionName,
@@ -85,15 +84,11 @@ class PlatformUser extends Authenticatable implements FilamentUser
 
             return [
                 'attributes' => $platformUser->getAttributes(),
-                'revoked' => true,
             ];
         });
 
         $this->setRawAttributes($result['attributes'], true);
-
-        if ($result['revoked']) {
-            app(PlatformSessionAuthentication::class)->forgetCurrentAuthentication($this->getKey());
-        }
+        app(PlatformSessionAuthentication::class)->forgetCurrentAuthentication($this->getKey());
     }
 
     public function delete(): ?bool

@@ -170,6 +170,66 @@ class PlatformSessionRevocationTest extends PlatformTestCase
         $this->assertTrue(session()->has($platformGuard->getName()));
     }
 
+    public function test_repeated_deactivation_cleans_orphan_access_from_an_already_inactive_user(): void
+    {
+        $platformUser = PlatformUser::factory()->create();
+        PlatformUser::factory()->create();
+        $shop = Shop::factory()->create();
+        $platformGuard = Auth::guard('platform');
+        $webGuard = Auth::guard('web');
+        $platformGuard->login($platformUser, remember: true);
+        session()->save();
+        $sessionId = session()->getId();
+        $audit = ShopAccessSession::start($platformUser, $shop);
+        session()->put([
+            SupportAccessManager::SESSION_KEY => [
+                'audit_id' => $audit->getKey(),
+                'shop_id' => $shop->getKey(),
+            ],
+            $webGuard->getName() => 731,
+            'tenant.checkout.draft' => ['sale_id' => 91],
+        ]);
+        DB::connection('central')->table('sessions')->where('id', $sessionId)->update([
+            'payload' => $this->encodeSessionPayload(session()->all()),
+            'user_id' => 731,
+        ]);
+        $oldRememberToken = $platformUser->fresh()->getRememberToken();
+        DB::connection('central')
+            ->table('platform_users')
+            ->where('id', $platformUser->getKey())
+            ->update(['is_active' => false]);
+        $platformUser->refresh();
+        $this->travelTo('2026-09-03 11:00:00');
+
+        $platformUser->deactivate();
+
+        $this->assertSame('2026-09-03 11:00:00', $audit->fresh()->ended_at?->format('Y-m-d H:i:s'));
+        $this->assertSame($oldRememberToken, $platformUser->fresh()->getRememberToken());
+        $this->assertGuest('platform');
+        $this->assertFalse(session()->has($platformGuard->getName()));
+        $this->assertFalse(session()->has(SupportAccessManager::SESSION_KEY));
+        $this->assertSame(731, session()->get($webGuard->getName()));
+        $this->assertSame(['sale_id' => 91], session()->get('tenant.checkout.draft'));
+        $payload = $this->persistedSessionPayload($sessionId);
+        $this->assertArrayNotHasKey($platformGuard->getName(), $payload);
+        $this->assertArrayNotHasKey('auth_generation_platform', $payload);
+        $this->assertArrayNotHasKey('password_hash_platform', $payload);
+        $this->assertArrayNotHasKey(SupportAccessManager::SESSION_KEY, $payload);
+        $this->assertSame(731, $payload[$webGuard->getName()]);
+        $this->assertSame(['sale_id' => 91], data_get($payload, 'tenant.checkout.draft'));
+        $endedAt = $audit->fresh()->ended_at;
+        $payloadAfterFirstDeactivation = $payload;
+        $this->travelTo('2026-09-03 11:30:00');
+
+        $platformUser->deactivate();
+
+        $this->assertTrue($audit->fresh()->ended_at?->equalTo($endedAt));
+        $this->assertSame($payloadAfterFirstDeactivation, $this->persistedSessionPayload($sessionId));
+        $this->assertGuest('platform');
+        $this->assertSame(731, session()->get($webGuard->getName()));
+        $this->assertSame(['sale_id' => 91], session()->get('tenant.checkout.draft'));
+    }
+
     public function test_old_platform_session_id_cannot_authenticate_after_reactivation(): void
     {
         $platformUser = PlatformUser::factory()->create();
