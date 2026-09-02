@@ -26,7 +26,9 @@ class RecordShopLifecycleActivity
      *     owner_linked?: bool,
      *     rotation_id?: string,
      *     old_target_fingerprint?: string,
-     *     new_target_fingerprint?: string
+     *     new_target_fingerprint?: string,
+     *     marker_source_fingerprint?: string,
+     *     predecessor_rotation_id?: string
      * } $metadata Unknown keys and values outside the event-specific schema are discarded.
      */
     public function handle(
@@ -98,8 +100,13 @@ class RecordShopLifecycleActivity
                 'database_driver', 'table_count', 'owner_linked',
             ],
             ShopLifecycleEvent::DatabaseEndpointRotationStarted,
-            ShopLifecycleEvent::DatabaseEndpointRotationCompleted => [
-                'rotation_id', 'old_target_fingerprint', 'new_target_fingerprint',
+            ShopLifecycleEvent::DatabaseEndpointRotationCompleted,
+            ShopLifecycleEvent::DatabaseEndpointRotationSuperseded => [
+                'rotation_id',
+                'old_target_fingerprint',
+                'new_target_fingerprint',
+                'marker_source_fingerprint',
+                'predecessor_rotation_id',
             ],
         };
     }
@@ -122,12 +129,13 @@ class RecordShopLifecycleActivity
             'target_fingerprint',
             'old_target_fingerprint',
             'new_target_fingerprint',
+            'marker_source_fingerprint',
         ], true)) {
             return is_string($value)
                 && preg_match('/\A[a-f0-9]{64}\z/', $value) === 1;
         }
 
-        if ($key === 'rotation_id') {
+        if (in_array($key, ['rotation_id', 'predecessor_rotation_id'], true)) {
             return is_string($value)
                 && preg_match(
                     '/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/',

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Platform;
 
+use App\Actions\Tenancy\RecordShopLifecycleActivity;
 use App\Actions\Tenancy\RotateShopDatabaseEndpoint;
 use App\Enums\ShopLifecycleEvent;
 use App\Enums\TenantDatabaseEndpointMarkerState;
@@ -12,10 +13,10 @@ use App\Models\Central\Shop;
 use App\Tenancy\DatabaseHostResolver;
 use App\Tenancy\ReconcileTenantDatabaseEndpointMarker;
 use App\Tenancy\TenantDatabaseEndpointConnectionRunner;
+use App\Tenancy\TenantDatabaseEndpointMarkerObservation;
 use App\Tenancy\TenantDatabaseEndpointMarkerReconciler;
 use App\Tenancy\ValidatedTenantConnection;
 use Closure;
-use Filament\Actions\Action;
 use Filament\Facades\Filament;
 use Illuminate\Database\Connection;
 use Illuminate\Database\SQLiteConnection;
@@ -379,19 +380,20 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
                 Shop $shop,
                 ValidatedTenantConnection $candidate,
                 #[\SensitiveParameter]
-                string $oldFingerprint,
-                #[\SensitiveParameter]
-                string $oldMarkerHmac,
+                array $eligibleSourceMarkerHmacs,
                 Closure $afterMarkerVerified,
             ): void {
                 $this->observedShopId = (string) $shop->getKey();
-                $this->observedOldFingerprint = $oldFingerprint;
-                $state = $this->markerFingerprint === $oldFingerprint
-                    && $this->markerHmac === $oldMarkerHmac
+                $this->observedOldFingerprint = $this->markerFingerprint;
+                $state = isset($eligibleSourceMarkerHmacs[$this->markerFingerprint])
+                    && $this->markerHmac === $eligibleSourceMarkerHmacs[$this->markerFingerprint]
                     ? TenantDatabaseEndpointMarkerState::Old
                     : TenantDatabaseEndpointMarkerState::New;
 
-                $afterMarkerVerified($state);
+                $afterMarkerVerified(new TenantDatabaseEndpointMarkerObservation(
+                    $state,
+                    $this->markerFingerprint,
+                ));
 
                 $this->markerFingerprint = $candidate->target()->fingerprint;
                 $this->markerHmac = $candidate->expectedMarkerHmac();
@@ -404,6 +406,7 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
             $actor,
             $shop,
             'confirmed-rotation-shop',
+            $this->rotationPreviewToken($actor, $shop),
         );
 
         $persistedShop = $shop->fresh();
@@ -461,13 +464,16 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         $shop->markActive();
         $oldFingerprint = (string) $shop->database_target_fingerprint;
         $oldClaims = $shop->databaseTargetClaims()->pluck('fingerprint')->all();
+        $actor = PlatformUser::factory()->create();
         $this->resolveDatabaseHostTo('8.8.8.8');
+        $previewToken = $this->rotationPreviewToken($actor, $shop);
 
         try {
             app(RotateShopDatabaseEndpoint::class)->handle(
-                PlatformUser::factory()->create(),
+                $actor,
                 $shop,
                 'Confirmation-Shop',
+                $previewToken,
             );
             $this->fail('A rotation without exact deliberate confirmation was accepted.');
         } catch (TenantDatabaseEndpointRotationException $exception) {
@@ -485,6 +491,443 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         $this->assertSame(0, $persistedShop->lifecycleActivities()->count());
     }
 
+    public function test_dns_change_after_preview_is_rejected_before_candidate_connection_or_mutation(): void
+    {
+        $this->resolveDatabaseHostTo('1.1.1.1');
+        $shop = Shop::registerForProvisioning(
+            name: 'Preview Bound Shop',
+            slug: 'preview-bound-shop',
+            databaseDriver: 'mysql',
+            databaseName: 'preview_bound_shop',
+            databaseHost: 'preview-bound.example.test',
+            databaseUsername: 'preview-bound-user',
+            databasePassword: 'preview-bound-password',
+        );
+        $shop->markActive();
+        $actor = PlatformUser::factory()->create();
+        $oldFingerprint = (string) $shop->database_target_fingerprint;
+        $oldClaims = $shop->databaseTargetClaims()->pluck('fingerprint')->all();
+        $this->bindProductionMarkerReconciler(
+            (string) $shop->getKey(),
+            $oldFingerprint,
+            $shop->databaseAttestationHmac(),
+        );
+        $runner = app(TenantDatabaseEndpointConnectionRunner::class);
+        $this->assertInstanceOf(EndpointRotationConnectionRunnerDouble::class, $runner);
+        $this->resolveDatabaseHostTo('8.8.8.8');
+
+        $preview = app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop);
+
+        $this->assertArrayHasKey('preview_token', $preview);
+        $this->assertIsString($preview['preview_token']);
+        $this->assertNotSame('', $preview['preview_token']);
+        $previewToken = $preview['preview_token'];
+        $this->resolveDatabaseHostTo('9.9.9.9');
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $shop,
+                $shop->slug,
+                $previewToken,
+            );
+            $this->fail('A database endpoint that changed after preview was opened.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_PREVIEW_STALE', $exception->errorCode);
+            $this->assertSame(
+                'The database endpoint changed after preview. Reopen the rotation and confirm the new target.',
+                $exception->getMessage(),
+            );
+            $this->assertStringNotContainsString('8.8.8.8', $exception->getMessage());
+            $this->assertStringNotContainsString('9.9.9.9', $exception->getMessage());
+            $this->assertStringNotContainsString('preview-bound', $exception->getMessage());
+            $this->assertStringNotContainsString($previewToken, $exception->getMessage());
+        }
+
+        $persistedShop = $shop->fresh();
+
+        $this->assertSame(0, $runner->calls);
+        $this->assertSame($oldFingerprint, $persistedShop->database_target_fingerprint);
+        $this->assertSame($oldClaims, $persistedShop->databaseTargetClaims()->pluck('fingerprint')->all());
+        $this->assertSame(0, $persistedShop->lifecycleActivities()->count());
+    }
+
+    public function test_tampered_preview_token_is_rejected_before_candidate_connection(): void
+    {
+        [$shop, $actor, $runner, $oldFingerprint, $oldClaims] = $this->previewBoundScenario(
+            'tampered-preview-token',
+        );
+        $this->resolveDatabaseHostTo('8.8.8.8');
+        $previewToken = $this->rotationPreviewToken($actor, $shop);
+        $lastCharacter = substr($previewToken, -1);
+        $tamperedToken = substr($previewToken, 0, -1).($lastCharacter === 'a' ? 'b' : 'a');
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $shop,
+                $shop->slug,
+                $tamperedToken,
+            );
+            $this->fail('A tampered endpoint preview token was accepted.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_PREVIEW_INVALID', $exception->errorCode);
+            $this->assertSame(
+                'The database endpoint preview is invalid. Reopen the rotation and try again.',
+                $exception->getMessage(),
+            );
+            $this->assertStringNotContainsString($previewToken, $exception->getMessage());
+            $this->assertStringNotContainsString('tampered-preview-token', $exception->getMessage());
+        }
+
+        $this->assertRotationStateUnchanged($shop, $runner, $oldFingerprint, $oldClaims);
+    }
+
+    public function test_expired_preview_token_is_rejected_before_candidate_connection(): void
+    {
+        $this->travelTo('2026-09-03 10:00:00');
+        [$shop, $actor, $runner, $oldFingerprint, $oldClaims] = $this->previewBoundScenario(
+            'expired-preview-token',
+        );
+        $this->resolveDatabaseHostTo('8.8.8.8');
+        $previewToken = $this->rotationPreviewToken($actor, $shop);
+        $this->travel(301)->seconds();
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $shop,
+                $shop->slug,
+                $previewToken,
+            );
+            $this->fail('An expired endpoint preview token was accepted.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_PREVIEW_EXPIRED', $exception->errorCode);
+            $this->assertSame(
+                'The database endpoint preview expired. Reopen the rotation and confirm again.',
+                $exception->getMessage(),
+            );
+            $this->assertStringNotContainsString($previewToken, $exception->getMessage());
+        }
+
+        $this->assertRotationStateUnchanged($shop, $runner, $oldFingerprint, $oldClaims);
+    }
+
+    public function test_preview_token_is_bound_to_the_actor(): void
+    {
+        [$shop, $actor, $runner, $oldFingerprint, $oldClaims] = $this->previewBoundScenario(
+            'session-bound-preview-token',
+        );
+        $this->resolveDatabaseHostTo('8.8.8.8');
+        $previewToken = $this->rotationPreviewToken($actor, $shop);
+        $otherActor = PlatformUser::factory()->create();
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $otherActor,
+                $shop,
+                $shop->slug,
+                $previewToken,
+            );
+            $this->fail('An endpoint preview token crossed its actor and session boundary.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_PREVIEW_INVALID', $exception->errorCode);
+            $this->assertStringNotContainsString($previewToken, $exception->getMessage());
+            $this->assertStringNotContainsString((string) $actor->getKey(), $exception->getMessage());
+            $this->assertStringNotContainsString((string) $otherActor->getKey(), $exception->getMessage());
+        }
+
+        $this->assertRotationStateUnchanged($shop, $runner, $oldFingerprint, $oldClaims);
+    }
+
+    public function test_preview_token_is_bound_to_the_session(): void
+    {
+        [$shop, $actor, $runner, $oldFingerprint, $oldClaims] = $this->previewBoundScenario(
+            'session-only-bound-preview-token',
+        );
+        $this->resolveDatabaseHostTo('8.8.8.8');
+        $previewToken = $this->rotationPreviewToken($actor, $shop);
+        session()->regenerate(true);
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $shop,
+                $shop->slug,
+                $previewToken,
+            );
+            $this->fail('An endpoint preview token crossed its session boundary.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_PREVIEW_INVALID', $exception->errorCode);
+            $this->assertStringNotContainsString($previewToken, $exception->getMessage());
+            $this->assertStringNotContainsString((string) $actor->getKey(), $exception->getMessage());
+        }
+
+        $this->assertRotationStateUnchanged($shop, $runner, $oldFingerprint, $oldClaims);
+    }
+
+    public function test_preview_token_is_bound_to_the_shop(): void
+    {
+        [$sourceShop, $actor] = $this->previewBoundScenario('source-preview-token');
+        $this->resolveDatabaseHostTo('8.8.8.8');
+        $previewToken = $this->rotationPreviewToken($actor, $sourceShop);
+        [$otherShop, , $runner, $oldFingerprint, $oldClaims] = $this->previewBoundScenario(
+            'other-preview-token',
+        );
+        $this->resolveDatabaseHostTo('9.9.9.9');
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $otherShop,
+                $otherShop->slug,
+                $previewToken,
+            );
+            $this->fail('An endpoint preview token was accepted for another shop.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_PREVIEW_INVALID', $exception->errorCode);
+            $this->assertStringNotContainsString($previewToken, $exception->getMessage());
+            $this->assertStringNotContainsString((string) $sourceShop->getKey(), $exception->getMessage());
+            $this->assertStringNotContainsString((string) $otherShop->getKey(), $exception->getMessage());
+        }
+
+        $this->assertRotationStateUnchanged($otherShop, $runner, $oldFingerprint, $oldClaims);
+    }
+
+    public function test_stale_preview_token_cannot_be_replayed_after_dns_returns_to_the_previewed_target(): void
+    {
+        [$shop, $actor, $runner, $oldFingerprint, $oldClaims] = $this->previewBoundScenario(
+            'single-use-preview-token',
+        );
+        $this->resolveDatabaseHostTo('8.8.8.8');
+        $previewToken = $this->rotationPreviewToken($actor, $shop);
+        $this->resolveDatabaseHostTo('9.9.9.9');
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $shop,
+                $shop->slug,
+                $previewToken,
+            );
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_PREVIEW_STALE', $exception->errorCode);
+        }
+
+        $this->resolveDatabaseHostTo('8.8.8.8');
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $shop,
+                $shop->slug,
+                $previewToken,
+            );
+            $this->fail('A consumed endpoint preview token was replayed.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_PREVIEW_INVALID', $exception->errorCode);
+            $this->assertSame(
+                'The database endpoint preview is invalid. Reopen the rotation and try again.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertRotationStateUnchanged($shop, $runner, $oldFingerprint, $oldClaims);
+    }
+
+    public function test_dns_drift_supersedes_a_pending_rotation_when_the_marker_is_still_old_and_retries_from_that_marker(): void
+    {
+        [$shop, $actor, $marker, $fingerprintA] = $this->rotationScenario(
+            'old-marker-drift-recovery',
+        );
+        $marker->failAfterCentral = true;
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $shop,
+                $shop->slug,
+                $this->rotationPreviewToken($actor, $shop),
+            );
+            $this->fail('The first simulated interruption did not fail.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_RECONCILIATION_FAILED', $exception->errorCode);
+        }
+
+        $fingerprintB = (string) $shop->fresh()->database_target_fingerprint;
+        $rotationOne = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationStarted)
+            ->sole();
+        $marker->failAfterCentral = false;
+        $this->resolveDatabaseHostTo('9.9.9.9');
+        $previewC = app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop);
+        $fingerprintC = $previewC['new_target']['fingerprint'];
+        $marker->failAfterCentral = true;
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $shop,
+                $shop->slug,
+                $previewC['preview_token'],
+            );
+            $this->fail('The superseding central transition did not interrupt.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_RECONCILIATION_FAILED', $exception->errorCode);
+            $this->assertStringNotContainsString('9.9.9.9', $exception->getMessage());
+        }
+
+        $rotationTwo = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationStarted)
+            ->where('metadata->rotation_id', '!=', $rotationOne->metadata['rotation_id'])
+            ->sole();
+        $superseded = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationSuperseded)
+            ->sole();
+
+        $this->assertSame($fingerprintC, $shop->fresh()->database_target_fingerprint);
+        $this->assertSame($fingerprintA, $marker->markerFingerprint);
+        $this->assertSame($rotationOne->metadata, $superseded->metadata);
+        $this->assertSame($fingerprintB, $rotationTwo->metadata['old_target_fingerprint']);
+        $this->assertSame($fingerprintC, $rotationTwo->metadata['new_target_fingerprint']);
+        $this->assertSame($fingerprintA, $rotationTwo->metadata['marker_source_fingerprint']);
+        $this->assertSame(
+            $rotationOne->metadata['rotation_id'],
+            $rotationTwo->metadata['predecessor_rotation_id'],
+        );
+        $this->assertSame($actor->getKey(), $superseded->platform_user_id);
+        $this->assertSame($actor->getKey(), $rotationTwo->platform_user_id);
+
+        $marker->failAfterCentral = false;
+        $marker->failAfterMarker = true;
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $shop,
+                $shop->slug,
+                $this->rotationPreviewToken($actor, $shop),
+            );
+            $this->fail('The retried marker transition did not interrupt.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_RECONCILIATION_FAILED', $exception->errorCode);
+        }
+
+        $this->assertSame($fingerprintC, $marker->markerFingerprint);
+        $this->assertSame(0, $this->rotationEventCount(
+            $shop,
+            ShopLifecycleEvent::DatabaseEndpointRotationCompleted->value,
+        ));
+
+        $marker->failAfterMarker = false;
+        app(RotateShopDatabaseEndpoint::class)->handle(
+            $actor,
+            $shop,
+            $shop->slug,
+            $this->rotationPreviewToken($actor, $shop),
+        );
+
+        $completion = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationCompleted)
+            ->sole();
+
+        $this->assertSame($rotationTwo->metadata, $completion->metadata);
+        $this->assertSame(2, $this->rotationEventCount(
+            $shop,
+            ShopLifecycleEvent::DatabaseEndpointRotationStarted->value,
+        ));
+        $this->assertSame(1, $this->rotationEventCount(
+            $shop,
+            ShopLifecycleEvent::DatabaseEndpointRotationSuperseded->value,
+        ));
+    }
+
+    public function test_dns_drift_completes_a_pending_rotation_when_the_marker_is_new_then_starts_from_that_marker(): void
+    {
+        [$shop, $actor, $marker, $fingerprintA] = $this->rotationScenario(
+            'new-marker-drift-recovery',
+        );
+        $marker->failAfterMarker = true;
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $shop,
+                $shop->slug,
+                $this->rotationPreviewToken($actor, $shop),
+            );
+            $this->fail('The first marker interruption did not fail.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_RECONCILIATION_FAILED', $exception->errorCode);
+        }
+
+        $fingerprintB = (string) $shop->fresh()->database_target_fingerprint;
+        $rotationOne = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationStarted)
+            ->sole();
+
+        $this->assertNotSame($fingerprintA, $fingerprintB);
+        $this->assertSame($fingerprintB, $marker->markerFingerprint);
+
+        $marker->failAfterMarker = false;
+        $this->resolveDatabaseHostTo('9.9.9.9');
+        $previewC = app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop);
+        $fingerprintC = $previewC['new_target']['fingerprint'];
+        $marker->failAfterCentral = true;
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $shop,
+                $shop->slug,
+                $previewC['preview_token'],
+            );
+            $this->fail('The second central transition did not interrupt.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_RECONCILIATION_FAILED', $exception->errorCode);
+        }
+
+        $rotationTwo = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationStarted)
+            ->where('metadata->rotation_id', '!=', $rotationOne->metadata['rotation_id'])
+            ->sole();
+        $firstCompletion = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationCompleted)
+            ->where('metadata->rotation_id', $rotationOne->metadata['rotation_id'])
+            ->sole();
+
+        $this->assertSame($rotationOne->metadata, $firstCompletion->metadata);
+        $this->assertSame($fingerprintC, $shop->fresh()->database_target_fingerprint);
+        $this->assertSame($fingerprintB, $marker->markerFingerprint);
+        $this->assertSame($fingerprintB, $rotationTwo->metadata['old_target_fingerprint']);
+        $this->assertSame($fingerprintC, $rotationTwo->metadata['new_target_fingerprint']);
+        $this->assertSame($fingerprintB, $rotationTwo->metadata['marker_source_fingerprint']);
+        $this->assertSame(
+            $rotationOne->metadata['rotation_id'],
+            $rotationTwo->metadata['predecessor_rotation_id'],
+        );
+
+        $marker->failAfterCentral = false;
+        app(RotateShopDatabaseEndpoint::class)->handle(
+            $actor,
+            $shop,
+            $shop->slug,
+            $this->rotationPreviewToken($actor, $shop),
+        );
+
+        $secondCompletion = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationCompleted)
+            ->where('metadata->rotation_id', $rotationTwo->metadata['rotation_id'])
+            ->sole();
+
+        $this->assertSame($rotationTwo->metadata, $secondCompletion->metadata);
+        $this->assertSame($fingerprintC, $marker->markerFingerprint);
+        $this->assertSame(0, $this->rotationEventCount(
+            $shop,
+            ShopLifecycleEvent::DatabaseEndpointRotationSuperseded->value,
+        ));
+    }
+
     public function test_retry_recovers_old_marker_after_central_rotation_without_duplicate_start(): void
     {
         [$shop, $actor, $marker, $oldFingerprint] = $this->rotationScenario(
@@ -493,7 +936,7 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         $marker->failAfterCentral = true;
 
         try {
-            app(RotateShopDatabaseEndpoint::class)->handle($actor, $shop, $shop->slug);
+            $this->confirmedRotation($actor, $shop);
             $this->fail('The simulated interruption after central rotation did not fail.');
         } catch (TenantDatabaseEndpointRotationException $exception) {
             $this->assertSame('ROTATION_RECONCILIATION_FAILED', $exception->errorCode);
@@ -508,7 +951,7 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         $this->assertSame(0, $this->rotationEventCount($shop, 'tenant.database_endpoint_rotation_completed'));
 
         $marker->failAfterCentral = false;
-        $result = app(RotateShopDatabaseEndpoint::class)->handle($actor, $shop, $shop->slug);
+        $result = $this->confirmedRotation($actor, $shop);
 
         $this->assertTrue($result['pending']);
         $this->assertSame($newFingerprint, $marker->markerFingerprint);
@@ -532,7 +975,7 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         $marker->failAfterMarker = true;
 
         try {
-            app(RotateShopDatabaseEndpoint::class)->handle($actor, $shop, $shop->slug);
+            $this->confirmedRotation($actor, $shop);
             $this->fail('The simulated interruption after marker rotation did not fail.');
         } catch (TenantDatabaseEndpointRotationException $exception) {
             $this->assertSame('ROTATION_RECONCILIATION_FAILED', $exception->errorCode);
@@ -546,7 +989,7 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         $this->assertSame(0, $this->rotationEventCount($shop, 'tenant.database_endpoint_rotation_completed'));
 
         $marker->failAfterMarker = false;
-        $result = app(RotateShopDatabaseEndpoint::class)->handle($actor, $shop, $shop->slug);
+        $result = $this->confirmedRotation($actor, $shop);
 
         $this->assertTrue($result['pending']);
         $this->assertSame($newFingerprint, $marker->markerFingerprint);
@@ -565,7 +1008,7 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         $oldFingerprint = (string) $shop->database_target_fingerprint;
 
         try {
-            app(RotateShopDatabaseEndpoint::class)->handle($actor, $shop, $shop->slug);
+            $this->confirmedRotation($actor, $shop);
             $this->fail('A concurrent database endpoint rotation was not serialized.');
         } catch (TenantDatabaseEndpointRotationException $exception) {
             $this->assertSame('ROTATION_BUSY', $exception->errorCode);
@@ -613,30 +1056,20 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         ]);
         app()->instance(
             TenantDatabaseEndpointConnectionRunner::class,
-            new class($connection) implements TenantDatabaseEndpointConnectionRunner
-            {
-                public function __construct(private readonly Connection $connection) {}
-
-                public function run(
-                    ValidatedTenantConnection $candidate,
-                    Closure $operation,
-                ): mixed {
-                    return $this->connection->transaction(
-                        fn (): mixed => $operation($this->connection),
-                    );
-                }
-            },
+            new EndpointRotationConnectionRunnerDouble($connection),
         );
         app()->bind(
             TenantDatabaseEndpointMarkerReconciler::class,
             ReconcileTenantDatabaseEndpointMarker::class,
         );
+        $actor = PlatformUser::factory()->create();
         $this->resolveDatabaseHostTo('8.8.8.8');
 
         $result = app(RotateShopDatabaseEndpoint::class)->handle(
-            PlatformUser::factory()->create(),
+            $actor,
             $shop,
             $shop->slug,
+            $this->rotationPreviewToken($actor, $shop),
         );
 
         $marker = $connection->table('tenant_installations')->where('id', 1)->first();
@@ -660,18 +1093,20 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
             ->test(ViewShop::class, ['record' => $shop->getKey()])
             ->assertActionVisible('rotateDatabaseEndpoint')
             ->assertActionHasLabel('rotateDatabaseEndpoint', 'Rotate database endpoint')
-            ->assertActionExists(
-                'rotateDatabaseEndpoint',
-                static function (Action $action) use ($oldFingerprint): bool {
-                    $summary = (string) $action->getModalDescription();
+            ->mountAction('rotateDatabaseEndpoint')
+            ->assertSchemaStateSet(function (array $state) use ($oldFingerprint): array {
+                $this->assertIsString($state['preview_summary'] ?? null);
+                $this->assertStringContainsString($oldFingerprint, $state['preview_summary']);
+                $this->assertStringContainsString('8.8.8.8', $state['preview_summary']);
+                $this->assertIsString($state['preview_token'] ?? null);
+                $this->assertNotSame('', $state['preview_token']);
 
-                    return str_contains($summary, $oldFingerprint)
-                        && str_contains($summary, '8.8.8.8');
-                },
-            )
-            ->callAction('rotateDatabaseEndpoint', [
+                return [];
+            })
+            ->fillForm([
                 'confirmation' => $shop->slug,
             ])
+            ->callMountedAction()
             ->assertHasNoActionErrors()
             ->assertNotified('Database endpoint rotated');
 
@@ -700,13 +1135,15 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
             $oldFingerprint,
             $shop->databaseAttestationHmac(),
         );
+        $actor = PlatformUser::factory()->create();
         $this->resolveDatabaseHostTo('8.8.8.8');
 
         try {
             app(RotateShopDatabaseEndpoint::class)->handle(
-                PlatformUser::factory()->create(),
+                $actor,
                 $shop,
                 $shop->slug,
+                $this->rotationPreviewToken($actor, $shop),
             );
             $this->fail('A marker owned by another shop was rotated.');
         } catch (TenantDatabaseEndpointRotationException $exception) {
@@ -741,13 +1178,15 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         );
         $shop->markActive();
         $oldFingerprint = (string) $shop->database_target_fingerprint;
+        $actor = PlatformUser::factory()->create();
         $this->resolveDatabaseHostTo('8.8.8.8');
 
         try {
             app(RotateShopDatabaseEndpoint::class)->handle(
-                PlatformUser::factory()->create(),
+                $actor,
                 $shop,
                 $shop->slug,
+                $this->rotationPreviewToken($actor, $shop),
             );
             $this->fail('A production rotation opened without authenticated TLS.');
         } catch (TenantDatabaseEndpointRotationException $exception) {
@@ -770,7 +1209,7 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         $marker->failAfterCentral = true;
 
         try {
-            app(RotateShopDatabaseEndpoint::class)->handle($actor, $shop, $shop->slug);
+            $this->confirmedRotation($actor, $shop);
         } catch (TenantDatabaseEndpointRotationException) {
         }
 
@@ -790,7 +1229,7 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         $centralFingerprint = (string) $shop->fresh()->database_target_fingerprint;
 
         try {
-            app(RotateShopDatabaseEndpoint::class)->handle($actor, $shop, $shop->slug);
+            $this->confirmedRotation($actor, $shop);
             $this->fail('A tampered pending-start tuple was used for recovery.');
         } catch (TenantDatabaseEndpointRotationException $exception) {
             $this->assertSame('ROTATION_STATE_CONFLICT', $exception->errorCode);
@@ -802,6 +1241,75 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
 
         $this->assertSame($centralFingerprint, $shop->fresh()->database_target_fingerprint);
         $this->assertSame(0, $this->rotationEventCount($shop, 'tenant.database_endpoint_rotation_completed'));
+    }
+
+    public function test_orphaned_superseded_rotation_audit_is_rejected(): void
+    {
+        [$shop, $actor, $marker] = $this->rotationScenario('orphaned-supersession');
+        $marker->failAfterCentral = true;
+
+        try {
+            $this->confirmedRotation($actor, $shop);
+        } catch (TenantDatabaseEndpointRotationException) {
+        }
+
+        $started = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationStarted)
+            ->sole();
+        resolve(RecordShopLifecycleActivity::class)->handle(
+            $shop,
+            ShopLifecycleEvent::DatabaseEndpointRotationSuperseded,
+            $actor,
+            $started->metadata,
+        );
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop);
+            $this->fail('An orphaned supersession audit was accepted.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_STATE_CONFLICT', $exception->errorCode);
+        }
+    }
+
+    public function test_supersession_terminal_must_precede_its_successor_start(): void
+    {
+        [$shop, $actor, $marker] = $this->rotationScenario('late-supersession-terminal');
+        $marker->failAfterCentral = true;
+
+        try {
+            $this->confirmedRotation($actor, $shop);
+        } catch (TenantDatabaseEndpointRotationException) {
+        }
+
+        $marker->failAfterCentral = false;
+        $this->resolveDatabaseHostTo('9.9.9.9');
+        $preview = app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop);
+        $marker->failAfterCentral = true;
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->handle(
+                $actor,
+                $shop,
+                $shop->slug,
+                $preview['preview_token'],
+            );
+        } catch (TenantDatabaseEndpointRotationException) {
+        }
+
+        $superseded = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::DatabaseEndpointRotationSuperseded)
+            ->sole();
+        DB::connection('central')
+            ->table('shop_lifecycle_activities')
+            ->where('id', $superseded->getKey())
+            ->update(['id' => 'ffffffff-ffff-8fff-bfff-ffffffffffff']);
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop);
+            $this->fail('A successor recorded before its predecessor terminal was accepted.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_STATE_CONFLICT', $exception->errorCode);
+        }
     }
 
     public function test_actor_is_reauthorized_after_candidate_marker_verification(): void
@@ -817,7 +1325,7 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         };
 
         try {
-            app(RotateShopDatabaseEndpoint::class)->handle($actor, $shop, $shop->slug);
+            $this->confirmedRotation($actor, $shop);
             $this->fail('A deactivated actor completed an endpoint rotation.');
         } catch (TenantDatabaseEndpointRotationException $exception) {
             $this->assertSame('ROTATION_UNAUTHORIZED', $exception->errorCode);
@@ -899,6 +1407,73 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         return $shop->lifecycleActivities()->where('event', $event)->count();
     }
 
+    /**
+     * @return array{Shop, PlatformUser, EndpointRotationConnectionRunnerDouble, string, list<string>}
+     */
+    private function previewBoundScenario(string $slug): array
+    {
+        $this->resolveDatabaseHostTo('1.1.1.1');
+        $shop = Shop::registerForProvisioning(
+            name: 'Preview Token Shop',
+            slug: $slug,
+            databaseDriver: 'mysql',
+            databaseName: str_replace('-', '_', $slug),
+            databaseHost: $slug.'.example.test',
+            databaseUsername: $slug.'-user',
+            databasePassword: $slug.'-password',
+        );
+        $shop->markActive();
+        $actor = PlatformUser::factory()->create();
+        $oldFingerprint = (string) $shop->database_target_fingerprint;
+        $oldClaims = $shop->databaseTargetClaims()->pluck('fingerprint')->all();
+        $this->bindProductionMarkerReconciler(
+            (string) $shop->getKey(),
+            $oldFingerprint,
+            $shop->databaseAttestationHmac(),
+        );
+        $runner = app(TenantDatabaseEndpointConnectionRunner::class);
+        $this->assertInstanceOf(EndpointRotationConnectionRunnerDouble::class, $runner);
+
+        return [$shop, $actor, $runner, $oldFingerprint, $oldClaims];
+    }
+
+    private function rotationPreviewToken(PlatformUser $actor, Shop $shop): string
+    {
+        $preview = app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop);
+
+        $this->assertArrayHasKey('preview_token', $preview);
+        $this->assertIsString($preview['preview_token']);
+        $this->assertNotSame('', $preview['preview_token']);
+
+        return $preview['preview_token'];
+    }
+
+    /** @return array<string, mixed> */
+    private function confirmedRotation(PlatformUser $actor, Shop $shop): array
+    {
+        return app(RotateShopDatabaseEndpoint::class)->handle(
+            $actor,
+            $shop,
+            $shop->slug,
+            $this->rotationPreviewToken($actor, $shop),
+        );
+    }
+
+    /** @param list<string> $oldClaims */
+    private function assertRotationStateUnchanged(
+        Shop $shop,
+        EndpointRotationConnectionRunnerDouble $runner,
+        string $oldFingerprint,
+        array $oldClaims,
+    ): void {
+        $persistedShop = $shop->fresh();
+
+        $this->assertSame(0, $runner->calls);
+        $this->assertSame($oldFingerprint, $persistedShop->database_target_fingerprint);
+        $this->assertSame($oldClaims, $persistedShop->databaseTargetClaims()->pluck('fingerprint')->all());
+        $this->assertSame(0, $persistedShop->lifecycleActivities()->count());
+    }
+
     private function bindProductionMarkerReconciler(
         string $markerShopId,
         string $fingerprint,
@@ -924,19 +1499,7 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         ]);
         app()->instance(
             TenantDatabaseEndpointConnectionRunner::class,
-            new class($connection) implements TenantDatabaseEndpointConnectionRunner
-            {
-                public function __construct(private readonly Connection $connection) {}
-
-                public function run(
-                    ValidatedTenantConnection $candidate,
-                    Closure $operation,
-                ): mixed {
-                    return $this->connection->transaction(
-                        fn (): mixed => $operation($this->connection),
-                    );
-                }
-            },
+            new EndpointRotationConnectionRunnerDouble($connection),
         );
         app()->bind(
             TenantDatabaseEndpointMarkerReconciler::class,
@@ -944,6 +1507,24 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         );
 
         return $connection;
+    }
+}
+
+final class EndpointRotationConnectionRunnerDouble implements TenantDatabaseEndpointConnectionRunner
+{
+    public int $calls = 0;
+
+    public function __construct(private readonly Connection $connection) {}
+
+    public function run(
+        ValidatedTenantConnection $candidate,
+        Closure $operation,
+    ): mixed {
+        $this->calls++;
+
+        return $this->connection->transaction(
+            fn (): mixed => $operation($this->connection),
+        );
     }
 }
 
@@ -964,13 +1545,13 @@ final class EndpointRotationMarkerDouble implements TenantDatabaseEndpointMarker
         Shop $shop,
         ValidatedTenantConnection $candidate,
         #[\SensitiveParameter]
-        string $oldFingerprint,
-        #[\SensitiveParameter]
-        string $oldMarkerHmac,
+        array $eligibleSourceMarkerHmacs,
         Closure $afterMarkerVerified,
     ): void {
-        if (hash_equals($oldFingerprint, $this->markerFingerprint)
-            && hash_equals($oldMarkerHmac, $this->markerHmac)) {
+        $sourceMarkerHmac = $eligibleSourceMarkerHmacs[$this->markerFingerprint] ?? null;
+
+        if (is_string($sourceMarkerHmac)
+            && hash_equals($sourceMarkerHmac, $this->markerHmac)) {
             $state = TenantDatabaseEndpointMarkerState::Old;
         } elseif (hash_equals($candidate->target()->fingerprint, $this->markerFingerprint)
             && hash_equals($candidate->expectedMarkerHmac(), $this->markerHmac)) {
@@ -983,7 +1564,10 @@ final class EndpointRotationMarkerDouble implements TenantDatabaseEndpointMarker
             ($this->beforeCallback)();
         }
 
-        $afterMarkerVerified($state);
+        $afterMarkerVerified(new TenantDatabaseEndpointMarkerObservation(
+            $state,
+            $this->markerFingerprint,
+        ));
 
         if ($this->failAfterCentral) {
             throw new RuntimeException('Simulated interruption after central commit.');

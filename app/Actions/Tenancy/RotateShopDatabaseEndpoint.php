@@ -10,10 +10,12 @@ use App\Exceptions\TenantDatabaseTargetConflict;
 use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 use App\Models\Central\ShopDatabaseTargetClaim;
+use App\Tenancy\DatabaseEndpointRotationPreviewTokens;
 use App\Tenancy\DatabaseHostResolver;
 use App\Tenancy\DatabaseTargetConfiguration;
 use App\Tenancy\NormalizedDatabaseTarget;
 use App\Tenancy\PublicIpAddressClassifier;
+use App\Tenancy\TenantDatabaseEndpointMarkerObservation;
 use App\Tenancy\TenantDatabaseEndpointMarkerReconciler;
 use App\Tenancy\ValidatedTenantConnection;
 use Closure;
@@ -32,6 +34,7 @@ final readonly class RotateShopDatabaseEndpoint
         private DatabaseHostResolver $hostResolver,
         private CacheManager $cache,
         private PublicIpAddressClassifier $addressClassifier,
+        private DatabaseEndpointRotationPreviewTokens $previewTokens,
     ) {}
 
     /**
@@ -52,13 +55,27 @@ final readonly class RotateShopDatabaseEndpoint
      *         port: int,
      *         fingerprint: string,
      *         endpoints: list<array{host: string, address: string, port: int}>
-     *     }
+     *     },
+     *     preview_token: string
      * }
      */
     public function preview(PlatformUser $actor, Shop $shop): array
     {
         try {
-            return $this->rotationPlan($actor, $shop)['preview'];
+            $plan = $this->rotationPlan($actor, $shop);
+            $prepared = $this->previewTokens->issue(
+                actor: $plan['actor'],
+                shop: $plan['shop'],
+                currentTargetFingerprint: (string) $plan['shop']->database_target_fingerprint,
+                currentClaimFingerprints: $plan['current_claim_fingerprints'],
+                pendingRotation: $plan['pending_rotation'],
+                candidate: $plan['target'],
+            );
+
+            return [
+                ...$plan['preview'],
+                'preview_token' => $prepared->token,
+            ];
         } catch (TenantDatabaseEndpointRotationException $exception) {
             throw $exception;
         } catch (TenantDatabaseTargetConflict) {
@@ -79,10 +96,13 @@ final readonly class RotateShopDatabaseEndpoint
      *     actor: PlatformUser,
      *     shop: Shop,
      *     target: NormalizedDatabaseTarget,
+     *     current_claim_fingerprints: list<string>,
      *     pending_rotation: null|array{
      *         rotation_id: string,
      *         old_target_fingerprint: string,
-     *         new_target_fingerprint: string
+     *         new_target_fingerprint: string,
+     *         marker_source_fingerprint?: string,
+     *         predecessor_rotation_id?: string
      *     },
      *     preview: array<string, mixed>
      * }
@@ -136,7 +156,7 @@ final readonly class RotateShopDatabaseEndpoint
             );
         }
 
-        $pendingRotation = $this->pendingRotation($shop, $target);
+        $pendingRotation = $this->pendingRotation($shop);
 
         if ($pendingRotation === null
             && hash_equals((string) $shop->database_target_fingerprint, $target->fingerprint)) {
@@ -165,6 +185,7 @@ final readonly class RotateShopDatabaseEndpoint
             'actor' => $actor,
             'shop' => $shop,
             'target' => $target,
+            'current_claim_fingerprints' => $claims,
             'pending_rotation' => $pendingRotation,
             'preview' => [
                 'pending' => $pendingRotation !== null,
@@ -173,9 +194,8 @@ final readonly class RotateShopDatabaseEndpoint
                     'database' => (string) $shop->database_name,
                     'hosts' => $hosts,
                     'port' => $target->effectivePort,
-                    'fingerprint' => $pendingRotation['old_target_fingerprint']
-                        ?? (string) $shop->database_target_fingerprint,
-                    'endpoint_claim_fingerprints' => $pendingRotation === null ? $claims : [],
+                    'fingerprint' => (string) $shop->database_target_fingerprint,
+                    'endpoint_claim_fingerprints' => $claims,
                 ],
                 'new_target' => [
                     'driver' => 'mysql',
@@ -195,11 +215,18 @@ final readonly class RotateShopDatabaseEndpoint
         Shop $shop,
         #[\SensitiveParameter]
         string $confirmation,
+        #[\SensitiveParameter]
+        string $previewToken,
     ): array {
         try {
             return $this->withRotationLock(
                 $shop,
-                fn (): array => $this->handleLocked($actor, $shop, $confirmation),
+                fn (): array => $this->handleLocked(
+                    $actor,
+                    $shop,
+                    $confirmation,
+                    $previewToken,
+                ),
             );
         } catch (TenantDatabaseEndpointRotationException $exception) {
             throw $exception;
@@ -222,6 +249,8 @@ final readonly class RotateShopDatabaseEndpoint
         Shop $shop,
         #[\SensitiveParameter]
         string $confirmation,
+        #[\SensitiveParameter]
+        string $previewToken,
     ): array {
         $plan = $this->rotationPlan($actor, $shop);
         $freshShop = $plan['shop'];
@@ -233,142 +262,63 @@ final readonly class RotateShopDatabaseEndpoint
             );
         }
 
-        $oldFingerprint = $plan['preview']['old_target']['fingerprint'];
-        $oldClaimFingerprints = $plan['preview']['old_target']['endpoint_claim_fingerprints'];
+        $this->previewTokens->consume(
+            actor: $plan['actor'],
+            shop: $freshShop,
+            token: $previewToken,
+            currentTargetFingerprint: (string) $freshShop->database_target_fingerprint,
+            currentClaimFingerprints: $plan['current_claim_fingerprints'],
+            pendingRotation: $plan['pending_rotation'],
+            candidate: $plan['target'],
+        );
+
+        $currentFingerprint = (string) $freshShop->database_target_fingerprint;
+        $currentClaimFingerprints = $plan['current_claim_fingerprints'];
         $target = $plan['target'];
-        $candidate = $this->candidateConnection($freshShop, $target);
         $pendingRotation = $plan['pending_rotation'];
-        $rotationId = $pendingRotation['rotation_id'] ?? (string) Str::uuid();
-        $metadata = [
-            'rotation_id' => $rotationId,
-            'old_target_fingerprint' => $oldFingerprint,
-            'new_target_fingerprint' => $target->fingerprint,
-        ];
+        $eligibleSourceMarkerHmacs = $this->eligibleSourceMarkerHmacs(
+            $freshShop,
+            $pendingRotation,
+        );
+        $candidate = $this->candidateConnection($freshShop, $target);
+        $activeRotationMetadata = null;
 
         try {
             resolve(TenantDatabaseEndpointMarkerReconciler::class)->reconcile(
                 $freshShop,
                 $candidate,
-                $oldFingerprint,
-                $freshShop->databaseAttestationHmacForFingerprint($oldFingerprint),
-                function (TenantDatabaseEndpointMarkerState $markerState) use (
+                $eligibleSourceMarkerHmacs,
+                function (TenantDatabaseEndpointMarkerObservation $observation) use (
+                    &$activeRotationMetadata,
                     $freshShop,
                     $plan,
-                    $oldFingerprint,
-                    $oldClaimFingerprints,
+                    $currentFingerprint,
+                    $currentClaimFingerprints,
                     $target,
-                    $metadata,
                     $pendingRotation,
                 ): void {
-                    if ($pendingRotation === null
-                        && $markerState !== TenantDatabaseEndpointMarkerState::Old) {
-                        throw TenantDatabaseEndpointRotationException::safe(
-                            'ROTATION_STATE_CONFLICT',
-                            'The database endpoint rotation state requires operator review.',
-                        );
-                    }
-
-                    DB::connection('central')->transaction(function () use (
-                        $freshShop,
-                        $plan,
-                        $oldFingerprint,
-                        $oldClaimFingerprints,
-                        $target,
-                        $metadata,
-                        $pendingRotation,
-                    ): void {
-                        $lockedActor = $this->lockedAuthorizedActor((string) $plan['actor']->getKey());
-                        $lockedShop = Shop::on('central')
-                            ->whereKey($freshShop->getKey())
-                            ->lockForUpdate()
-                            ->first();
-
-                        if (! $lockedShop instanceof Shop) {
-                            throw TenantDatabaseEndpointRotationException::safe(
-                                'ROTATION_STATE_CHANGED',
-                                'The registered database endpoint changed before rotation completed.',
-                            );
-                        }
-
-                        if ($pendingRotation !== null) {
-                            $persistedPending = $this->pendingRotation($lockedShop, $target);
-
-                            if ($persistedPending !== $pendingRotation) {
-                                throw TenantDatabaseEndpointRotationException::safe(
-                                    'ROTATION_STATE_CHANGED',
-                                    'The registered database endpoint changed before rotation completed.',
-                                );
-                            }
-
-                            return;
-                        }
-
-                        if (! hash_equals(
-                            $oldFingerprint,
-                            (string) $lockedShop->database_target_fingerprint,
-                        )) {
-                            throw TenantDatabaseEndpointRotationException::safe(
-                                'ROTATION_STATE_CHANGED',
-                                'The registered database endpoint changed before rotation completed.',
-                            );
-                        }
-
-                        $lockedShop->rotateDatabaseEndpoint(
-                            $target,
-                            $oldFingerprint,
-                            $oldClaimFingerprints,
-                        );
-                        resolve(RecordShopLifecycleActivity::class)->handle(
-                            $lockedShop,
-                            ShopLifecycleEvent::DatabaseEndpointRotationStarted,
-                            $lockedActor,
-                            $metadata,
-                        );
-                    });
+                    $activeRotationMetadata = $this->prepareCentralTransition(
+                        actorId: (string) $plan['actor']->getKey(),
+                        shopId: (string) $freshShop->getKey(),
+                        currentFingerprint: $currentFingerprint,
+                        currentClaimFingerprints: $currentClaimFingerprints,
+                        target: $target,
+                        pendingRotation: $pendingRotation,
+                        observation: $observation,
+                    );
                 },
             );
 
-            DB::connection('central')->transaction(function () use (
-                $freshShop,
-                $plan,
-                $target,
-                $metadata,
-            ): void {
-                $lockedActor = $this->lockedAuthorizedActor((string) $plan['actor']->getKey());
-                $lockedShop = Shop::on('central')
-                    ->whereKey($freshShop->getKey())
-                    ->lockForUpdate()
-                    ->first();
+            if (! is_array($activeRotationMetadata)) {
+                throw $this->rotationStateConflict();
+            }
 
-                if (! $lockedShop instanceof Shop
-                    || ! hash_equals(
-                        $target->fingerprint,
-                        (string) $lockedShop->database_target_fingerprint,
-                    )) {
-                    throw TenantDatabaseEndpointRotationException::safe(
-                        'ROTATION_STATE_CHANGED',
-                        'The registered database endpoint changed before rotation completed.',
-                    );
-                }
-
-                $persistedPending = $this->pendingRotation($lockedShop, $target);
-
-                if (! is_array($persistedPending)
-                    || ! hash_equals($metadata['rotation_id'], $persistedPending['rotation_id'])
-                    || $persistedPending !== $metadata) {
-                    throw TenantDatabaseEndpointRotationException::safe(
-                        'ROTATION_STATE_CHANGED',
-                        'The registered database endpoint changed before rotation completed.',
-                    );
-                }
-
-                resolve(RecordShopLifecycleActivity::class)->handle(
-                    $lockedShop,
-                    ShopLifecycleEvent::DatabaseEndpointRotationCompleted,
-                    $lockedActor,
-                    $metadata,
-                );
-            });
+            $this->completeRotation(
+                actorId: (string) $plan['actor']->getKey(),
+                shopId: (string) $freshShop->getKey(),
+                targetFingerprint: $target->fingerprint,
+                metadata: $activeRotationMetadata,
+            );
         } catch (TenantDatabaseEndpointRotationException $exception) {
             throw $exception;
         } catch (TenantDatabaseTargetConflict) {
@@ -387,68 +337,337 @@ final readonly class RotateShopDatabaseEndpoint
     }
 
     /**
+     * @param  list<string>  $currentClaimFingerprints
+     * @param  null|array{
+     *     rotation_id: string,
+     *     old_target_fingerprint: string,
+     *     new_target_fingerprint: string,
+     *     marker_source_fingerprint?: string,
+     *     predecessor_rotation_id?: string
+     * }  $pendingRotation
+     * @return array<string, string>
+     */
+    private function prepareCentralTransition(
+        string $actorId,
+        string $shopId,
+        string $currentFingerprint,
+        array $currentClaimFingerprints,
+        NormalizedDatabaseTarget $target,
+        ?array $pendingRotation,
+        TenantDatabaseEndpointMarkerObservation $observation,
+    ): array {
+        return DB::connection('central')->transaction(function () use (
+            $actorId,
+            $shopId,
+            $currentFingerprint,
+            $currentClaimFingerprints,
+            $target,
+            $pendingRotation,
+            $observation,
+        ): array {
+            $lockedActor = $this->lockedAuthorizedActor($actorId);
+            $lockedShop = Shop::on('central')
+                ->whereKey($shopId)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $lockedShop instanceof Shop
+                || ! hash_equals(
+                    $currentFingerprint,
+                    (string) $lockedShop->database_target_fingerprint,
+                )
+                || $this->pendingRotation($lockedShop) !== $pendingRotation) {
+                throw TenantDatabaseEndpointRotationException::safe(
+                    'ROTATION_STATE_CHANGED',
+                    'The registered database endpoint changed before rotation completed.',
+                );
+            }
+
+            if ($pendingRotation === null) {
+                if ($observation->state !== TenantDatabaseEndpointMarkerState::Old
+                    || ! hash_equals($currentFingerprint, $observation->fingerprint)) {
+                    throw $this->rotationStateConflict();
+                }
+
+                $metadata = $this->rotationMetadata(
+                    oldFingerprint: $currentFingerprint,
+                    newFingerprint: $target->fingerprint,
+                    markerSourceFingerprint: $observation->fingerprint,
+                );
+                $lockedShop->rotateDatabaseEndpoint(
+                    $target,
+                    $currentFingerprint,
+                    $currentClaimFingerprints,
+                );
+                resolve(RecordShopLifecycleActivity::class)->handle(
+                    $lockedShop,
+                    ShopLifecycleEvent::DatabaseEndpointRotationStarted,
+                    $lockedActor,
+                    $metadata,
+                );
+
+                return $metadata;
+            }
+
+            $markerSourceFingerprint = $this->markerSourceFingerprint($pendingRotation);
+
+            if (! in_array(
+                $observation->fingerprint,
+                [$markerSourceFingerprint, $pendingRotation['new_target_fingerprint']],
+                true,
+            )) {
+                throw $this->rotationStateConflict();
+            }
+
+            if (hash_equals($pendingRotation['new_target_fingerprint'], $target->fingerprint)) {
+                return $pendingRotation;
+            }
+
+            $terminalEvent = hash_equals(
+                $pendingRotation['new_target_fingerprint'],
+                $observation->fingerprint,
+            )
+                ? ShopLifecycleEvent::DatabaseEndpointRotationCompleted
+                : ShopLifecycleEvent::DatabaseEndpointRotationSuperseded;
+            resolve(RecordShopLifecycleActivity::class)->handle(
+                $lockedShop,
+                $terminalEvent,
+                $lockedActor,
+                $pendingRotation,
+            );
+            $metadata = $this->rotationMetadata(
+                oldFingerprint: $currentFingerprint,
+                newFingerprint: $target->fingerprint,
+                markerSourceFingerprint: $observation->fingerprint,
+                predecessorRotationId: $pendingRotation['rotation_id'],
+            );
+            $lockedShop->rotateDatabaseEndpoint(
+                $target,
+                $currentFingerprint,
+                $currentClaimFingerprints,
+            );
+            resolve(RecordShopLifecycleActivity::class)->handle(
+                $lockedShop,
+                ShopLifecycleEvent::DatabaseEndpointRotationStarted,
+                $lockedActor,
+                $metadata,
+            );
+
+            return $metadata;
+        });
+    }
+
+    /**
+     * @param array{
+     *     rotation_id: string,
+     *     old_target_fingerprint: string,
+     *     new_target_fingerprint: string,
+     *     marker_source_fingerprint?: string,
+     *     predecessor_rotation_id?: string
+     * } $metadata
+     */
+    private function completeRotation(
+        string $actorId,
+        string $shopId,
+        string $targetFingerprint,
+        array $metadata,
+    ): void {
+        DB::connection('central')->transaction(function () use (
+            $actorId,
+            $shopId,
+            $targetFingerprint,
+            $metadata,
+        ): void {
+            $lockedActor = $this->lockedAuthorizedActor($actorId);
+            $lockedShop = Shop::on('central')
+                ->whereKey($shopId)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $lockedShop instanceof Shop
+                || ! hash_equals(
+                    $targetFingerprint,
+                    (string) $lockedShop->database_target_fingerprint,
+                )
+                || $this->pendingRotation($lockedShop) !== $metadata) {
+                throw TenantDatabaseEndpointRotationException::safe(
+                    'ROTATION_STATE_CHANGED',
+                    'The registered database endpoint changed before rotation completed.',
+                );
+            }
+
+            resolve(RecordShopLifecycleActivity::class)->handle(
+                $lockedShop,
+                ShopLifecycleEvent::DatabaseEndpointRotationCompleted,
+                $lockedActor,
+                $metadata,
+            );
+        });
+    }
+
+    /**
+     * @param  null|array{
+     *     rotation_id: string,
+     *     old_target_fingerprint: string,
+     *     new_target_fingerprint: string,
+     *     marker_source_fingerprint?: string,
+     *     predecessor_rotation_id?: string
+     * }  $pendingRotation
+     * @return array<string, string>
+     */
+    private function eligibleSourceMarkerHmacs(Shop $shop, ?array $pendingRotation): array
+    {
+        $fingerprints = $pendingRotation === null
+            ? [(string) $shop->database_target_fingerprint]
+            : [
+                $this->markerSourceFingerprint($pendingRotation),
+                $pendingRotation['new_target_fingerprint'],
+            ];
+        $markerHmacs = [];
+
+        foreach (array_unique($fingerprints) as $fingerprint) {
+            $markerHmacs[$fingerprint] = $shop->databaseAttestationHmacForFingerprint($fingerprint);
+        }
+
+        return $markerHmacs;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function rotationMetadata(
+        string $oldFingerprint,
+        string $newFingerprint,
+        string $markerSourceFingerprint,
+        ?string $predecessorRotationId = null,
+    ): array {
+        $metadata = [
+            'rotation_id' => (string) Str::uuid(),
+            'old_target_fingerprint' => $oldFingerprint,
+            'new_target_fingerprint' => $newFingerprint,
+            'marker_source_fingerprint' => $markerSourceFingerprint,
+        ];
+
+        if ($predecessorRotationId !== null) {
+            $metadata['predecessor_rotation_id'] = $predecessorRotationId;
+        }
+
+        return $metadata;
+    }
+
+    /**
      * @return null|array{
      *     rotation_id: string,
      *     old_target_fingerprint: string,
-     *     new_target_fingerprint: string
+     *     new_target_fingerprint: string,
+     *     marker_source_fingerprint?: string,
+     *     predecessor_rotation_id?: string
      * }
      */
-    private function pendingRotation(Shop $shop, NormalizedDatabaseTarget $target): ?array
+    private function pendingRotation(Shop $shop): ?array
     {
         $activities = $shop->lifecycleActivities()
             ->whereIn('event', [
                 ShopLifecycleEvent::DatabaseEndpointRotationStarted->value,
                 ShopLifecycleEvent::DatabaseEndpointRotationCompleted->value,
+                ShopLifecycleEvent::DatabaseEndpointRotationSuperseded->value,
             ])
-            ->get(['event', 'metadata']);
+            ->orderBy('id')
+            ->get(['id', 'event', 'metadata']);
         $started = [];
-        $completed = [];
+        $startedActivityIds = [];
+        $terminals = [];
 
-        foreach ($activities as $activity) {
+        foreach ($activities as $activityIndex => $activity) {
             $metadata = $activity->metadata;
 
             if (! is_array($metadata) || ! $this->isExactRotationMetadata($metadata)) {
-                throw TenantDatabaseEndpointRotationException::safe(
-                    'ROTATION_STATE_CONFLICT',
-                    'The database endpoint rotation state requires operator review.',
-                );
+                throw $this->rotationStateConflict();
             }
 
             $rotationId = $metadata['rotation_id'];
-            $records = $activity->event === ShopLifecycleEvent::DatabaseEndpointRotationStarted
-                ? $started
-                : $completed;
-
-            if (array_key_exists($rotationId, $records)) {
-                throw TenantDatabaseEndpointRotationException::safe(
-                    'ROTATION_STATE_CONFLICT',
-                    'The database endpoint rotation state requires operator review.',
-                );
-            }
 
             if ($activity->event === ShopLifecycleEvent::DatabaseEndpointRotationStarted) {
+                if (array_key_exists($rotationId, $started)) {
+                    throw $this->rotationStateConflict();
+                }
+
                 $started[$rotationId] = $metadata;
+                $startedActivityIds[$rotationId] = $activityIndex;
             } else {
-                $completed[$rotationId] = $metadata;
+                if (array_key_exists($rotationId, $terminals)) {
+                    throw $this->rotationStateConflict();
+                }
+
+                $terminals[$rotationId] = [
+                    'event' => $activity->event,
+                    'activity_index' => $activityIndex,
+                    'metadata' => $metadata,
+                ];
             }
         }
 
-        foreach ($completed as $rotationId => $metadata) {
-            if (! isset($started[$rotationId]) || $started[$rotationId] !== $metadata) {
-                throw TenantDatabaseEndpointRotationException::safe(
-                    'ROTATION_STATE_CONFLICT',
-                    'The database endpoint rotation state requires operator review.',
-                );
+        foreach ($terminals as $rotationId => $terminal) {
+            if (! isset($started[$rotationId])
+                || $started[$rotationId] !== $terminal['metadata']
+                || ($startedActivityIds[$rotationId] ?? PHP_INT_MAX)
+                    >= $terminal['activity_index']) {
+                throw $this->rotationStateConflict();
             }
         }
 
-        $pending = array_diff_key($started, $completed);
+        $successors = [];
+
+        foreach ($started as $rotationId => $metadata) {
+            $predecessorRotationId = $metadata['predecessor_rotation_id'] ?? null;
+
+            if ($predecessorRotationId === null) {
+                continue;
+            }
+
+            $predecessor = $started[$predecessorRotationId] ?? null;
+            $predecessorTerminal = $terminals[$predecessorRotationId] ?? null;
+
+            if (! is_array($predecessor)
+                || ! is_array($predecessorTerminal)
+                || ($startedActivityIds[$predecessorRotationId] ?? PHP_INT_MAX)
+                    >= ($startedActivityIds[$rotationId] ?? 0)
+                || ($predecessorTerminal['activity_index'] ?? PHP_INT_MAX)
+                    >= ($startedActivityIds[$rotationId] ?? 0)
+                || isset($successors[$predecessorRotationId])
+                || ! hash_equals(
+                    $predecessor['new_target_fingerprint'],
+                    $metadata['old_target_fingerprint'],
+                )) {
+                throw $this->rotationStateConflict();
+            }
+
+            $expectedMarkerSource = $predecessorTerminal['event']
+                === ShopLifecycleEvent::DatabaseEndpointRotationCompleted
+                    ? $predecessor['new_target_fingerprint']
+                    : $this->markerSourceFingerprint($predecessor);
+
+            if (! hash_equals(
+                $expectedMarkerSource,
+                $this->markerSourceFingerprint($metadata),
+            )) {
+                throw $this->rotationStateConflict();
+            }
+
+            $successors[$predecessorRotationId] = $rotationId;
+        }
+
+        foreach ($terminals as $rotationId => $terminal) {
+            if ($terminal['event'] === ShopLifecycleEvent::DatabaseEndpointRotationSuperseded
+                && ! isset($successors[$rotationId])) {
+                throw $this->rotationStateConflict();
+            }
+        }
+
+        $pending = array_diff_key($started, $terminals);
 
         if (count($pending) > 1) {
-            throw TenantDatabaseEndpointRotationException::safe(
-                'ROTATION_STATE_CONFLICT',
-                'The database endpoint rotation state requires operator review.',
-            );
+            throw $this->rotationStateConflict();
         }
 
         $metadata = array_values($pending)[0] ?? null;
@@ -457,15 +676,11 @@ final readonly class RotateShopDatabaseEndpoint
             return null;
         }
 
-        if (! hash_equals($metadata['new_target_fingerprint'], $target->fingerprint)
-            || ! hash_equals(
-                $metadata['new_target_fingerprint'],
-                (string) $shop->database_target_fingerprint,
-            )) {
-            throw TenantDatabaseEndpointRotationException::safe(
-                'ROTATION_STATE_CONFLICT',
-                'The database endpoint rotation state requires operator review.',
-            );
+        if (! hash_equals(
+            $metadata['new_target_fingerprint'],
+            (string) $shop->database_target_fingerprint,
+        )) {
+            throw $this->rotationStateConflict();
         }
 
         return $metadata;
@@ -477,27 +692,79 @@ final readonly class RotateShopDatabaseEndpoint
         $keys = array_keys($metadata);
         sort($keys, SORT_STRING);
 
-        if ($keys !== [
+        $legacyKeys = [
             'new_target_fingerprint',
             'old_target_fingerprint',
             'rotation_id',
-        ]) {
+        ];
+        $currentKeys = [
+            'marker_source_fingerprint',
+            'new_target_fingerprint',
+            'old_target_fingerprint',
+            'rotation_id',
+        ];
+        $successorKeys = [
+            'marker_source_fingerprint',
+            'new_target_fingerprint',
+            'old_target_fingerprint',
+            'predecessor_rotation_id',
+            'rotation_id',
+        ];
+
+        if (! in_array($keys, [$legacyKeys, $currentKeys, $successorKeys], true)) {
             return false;
         }
 
-        return is_string($metadata['rotation_id'])
-            && preg_match(
-                '/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/',
-                $metadata['rotation_id'],
-            ) === 1
+        $markerSourceFingerprint = $this->markerSourceFingerprint($metadata);
+        $predecessorRotationId = $metadata['predecessor_rotation_id'] ?? null;
+
+        return $this->isUuid($metadata['rotation_id'])
             && is_string($metadata['old_target_fingerprint'])
             && preg_match('/\A[a-f0-9]{64}\z/', $metadata['old_target_fingerprint']) === 1
             && is_string($metadata['new_target_fingerprint'])
             && preg_match('/\A[a-f0-9]{64}\z/', $metadata['new_target_fingerprint']) === 1
+            && preg_match('/\A[a-f0-9]{64}\z/', $markerSourceFingerprint) === 1
+            && ($predecessorRotationId === null || $this->isUuid($predecessorRotationId))
+            && ($predecessorRotationId === null
+                || ! hash_equals($metadata['rotation_id'], $predecessorRotationId))
+            && ($predecessorRotationId !== null
+                || hash_equals($metadata['old_target_fingerprint'], $markerSourceFingerprint))
             && ! hash_equals(
                 $metadata['old_target_fingerprint'],
                 $metadata['new_target_fingerprint'],
-            );
+            )
+            && ! hash_equals($markerSourceFingerprint, $metadata['new_target_fingerprint']);
+    }
+
+    /**
+     * @param array{
+     *     rotation_id: string,
+     *     old_target_fingerprint: string,
+     *     new_target_fingerprint: string,
+     *     marker_source_fingerprint?: string,
+     *     predecessor_rotation_id?: string
+     * } $metadata
+     */
+    private function markerSourceFingerprint(array $metadata): string
+    {
+        return $metadata['marker_source_fingerprint'] ?? $metadata['old_target_fingerprint'];
+    }
+
+    private function isUuid(mixed $value): bool
+    {
+        return is_string($value)
+            && preg_match(
+                '/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/',
+                $value,
+            ) === 1;
+    }
+
+    private function rotationStateConflict(): TenantDatabaseEndpointRotationException
+    {
+        return TenantDatabaseEndpointRotationException::safe(
+            'ROTATION_STATE_CONFLICT',
+            'The database endpoint rotation state requires operator review.',
+        );
     }
 
     /**

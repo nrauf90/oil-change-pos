@@ -18,9 +18,7 @@ final readonly class ReconcileTenantDatabaseEndpointMarker implements TenantData
         Shop $shop,
         ValidatedTenantConnection $candidate,
         #[\SensitiveParameter]
-        string $oldFingerprint,
-        #[\SensitiveParameter]
-        string $oldMarkerHmac,
+        array $eligibleSourceMarkerHmacs,
         Closure $afterMarkerVerified,
     ): void {
         $this->connections->run(
@@ -28,8 +26,7 @@ final readonly class ReconcileTenantDatabaseEndpointMarker implements TenantData
             function (Connection $connection) use (
                 $shop,
                 $candidate,
-                $oldFingerprint,
-                $oldMarkerHmac,
+                $eligibleSourceMarkerHmacs,
                 $afterMarkerVerified,
             ): void {
                 $marker = $this->lockedMarker($connection);
@@ -40,24 +37,39 @@ final readonly class ReconcileTenantDatabaseEndpointMarker implements TenantData
                     throw $this->markerConflict();
                 }
 
-                if (hash_equals($oldFingerprint, $marker['target_fingerprint'])
-                    && hash_equals($oldMarkerHmac, $marker['attestation_hmac'])) {
-                    $state = TenantDatabaseEndpointMarkerState::Old;
-                } elseif (hash_equals($newFingerprint, $marker['target_fingerprint'])
+                if (hash_equals($newFingerprint, $marker['target_fingerprint'])
                     && hash_equals($newMarkerHmac, $marker['attestation_hmac'])) {
                     $state = TenantDatabaseEndpointMarkerState::New;
                 } else {
-                    throw $this->markerConflict();
+                    $state = TenantDatabaseEndpointMarkerState::Old;
+                    $sourceMarkerHmac = $eligibleSourceMarkerHmacs[$marker['target_fingerprint']]
+                        ?? null;
+
+                    if (! is_string($sourceMarkerHmac)
+                        || ! hash_equals($sourceMarkerHmac, $marker['attestation_hmac'])) {
+                        throw $this->markerConflict();
+                    }
                 }
 
-                $afterMarkerVerified($state);
+                $observation = new TenantDatabaseEndpointMarkerObservation(
+                    $state,
+                    $marker['target_fingerprint'],
+                );
+                $afterMarkerVerified($observation);
 
                 if ($state === TenantDatabaseEndpointMarkerState::Old) {
+                    $sourceMarkerHmac = $eligibleSourceMarkerHmacs[$observation->fingerprint]
+                        ?? null;
+
+                    if (! is_string($sourceMarkerHmac)) {
+                        throw $this->markerConflict();
+                    }
+
                     $updated = $connection->table('tenant_installations')
                         ->where('id', 1)
                         ->where('shop_id', $shop->getKey())
-                        ->where('target_fingerprint', $oldFingerprint)
-                        ->where('attestation_hmac', $oldMarkerHmac)
+                        ->where('target_fingerprint', $observation->fingerprint)
+                        ->where('attestation_hmac', $sourceMarkerHmac)
                         ->whereNull('connection_nonce')
                         ->update([
                             'target_fingerprint' => $newFingerprint,
