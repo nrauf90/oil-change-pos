@@ -9,6 +9,7 @@ use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
 use App\Modules\ModuleRegistry;
+use App\Tenancy\Provisioning\TenantProvisioningLease;
 use Illuminate\Support\Facades\DB;
 use Spatie\Permission\PermissionRegistrar;
 
@@ -19,12 +20,16 @@ final readonly class SyncTenantAuthorization
         private ModuleRegistry $moduleRegistry,
     ) {}
 
-    public function handle(User $owner): void
-    {
-        DB::connection('tenant')->transaction(function () use ($owner): void {
+    public function handle(
+        User $owner,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
+    ): void {
+        DB::connection('tenant')->transaction(function () use ($owner, $lease): void {
             $this->permissionRegistrar->forgetCachedPermissions();
 
             foreach (PermissionEnum::cases() as $permission) {
+                $lease->heartbeat();
                 Permission::query()->firstOrCreate([
                     'name' => $permission->value,
                     'guard_name' => 'web',
@@ -32,20 +37,24 @@ final readonly class SyncTenantAuthorization
             }
 
             foreach (RoleEnum::cases() as $role) {
+                $lease->heartbeat();
                 $roleModel = Role::query()->firstOrCreate([
                     'name' => $role->value,
                     'guard_name' => 'web',
                 ]);
+                $lease->heartbeat();
                 $roleModel->syncPermissions($role->permissionNames());
             }
 
             foreach ($this->moduleRegistry->all() as $module) {
+                $lease->heartbeat();
                 ModuleSetting::query()->firstOrCreate(
                     ['key' => $module->key()],
                     ['enabled' => $module->isCore() || $module->enabledByDefault()],
                 );
             }
 
+            $lease->heartbeat();
             $owner->assignRoleEnum(RoleEnum::Admin);
             $this->moduleRegistry->flush();
             $this->permissionRegistrar->forgetCachedPermissions();

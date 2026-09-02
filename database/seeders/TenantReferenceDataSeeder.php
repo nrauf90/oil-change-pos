@@ -7,22 +7,28 @@ use App\Enums\UnitOfMeasure;
 use App\Models\Item;
 use App\Models\VehicleMake;
 use App\Models\VehicleModel;
+use App\Tenancy\Provisioning\TenantProvisioningLease;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Arr;
 
 class TenantReferenceDataSeeder extends Seeder
 {
-    public function run(): void
-    {
-        $this->catalogue();
-        $this->referenceVehicles();
+    public function run(
+        #[\SensitiveParameter]
+        ?TenantProvisioningLease $lease = null,
+    ): void {
+        $this->catalogue($lease);
+        $this->referenceVehicles($lease);
     }
 
-    private function catalogue(): void
-    {
+    private function catalogue(
+        #[\SensitiveParameter]
+        ?TenantProvisioningLease $lease,
+    ): void {
         $items = [...$this->oils(), ...$this->parts(), ...$this->repairs()];
 
         foreach ($items as $item) {
+            $lease?->heartbeat();
             Item::firstOrCreate(
                 ['name' => $item['name']],
                 [...Arr::except($item, ['name']), 'is_active' => true],
@@ -118,8 +124,10 @@ class TenantReferenceDataSeeder extends Seeder
         return $rows;
     }
 
-    private function referenceVehicles(): void
-    {
+    private function referenceVehicles(
+        #[\SensitiveParameter]
+        ?TenantProvisioningLease $lease,
+    ): void {
         $makes = [
             'Daihatsu' => ['Cuore', 'Hijet', 'Mira'],
             'FAW' => ['V2', 'XPV'],
@@ -133,9 +141,11 @@ class TenantReferenceDataSeeder extends Seeder
         ];
 
         foreach ($makes as $makeName => $modelNames) {
+            $lease?->heartbeat();
             $make = VehicleMake::firstOrCreate(['name' => $makeName]);
 
             foreach ($modelNames as $modelName) {
+                $lease?->heartbeat();
                 VehicleModel::firstOrCreate([
                     'vehicle_make_id' => $make->id,
                     'name' => $modelName,

@@ -15,6 +15,7 @@ use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Events\MigrationEnded;
+use Illuminate\Database\Events\MigrationStarted;
 use Illuminate\Database\Migrations\Migrator;
 use Illuminate\Events\Dispatcher;
 use Illuminate\Support\Str;
@@ -49,6 +50,8 @@ final class TenantInstallationBootstrapper
         #[\SensitiveParameter]
         Shop $shop,
         TenantInstallationReason $reason,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
     ): void {
         if ($this->tenantContext->initialized()) {
             throw TenantProvisioningException::safe(
@@ -81,6 +84,7 @@ final class TenantInstallationBootstrapper
         $connectionName = 'tenant_installer_'.str_replace('-', '', (string) Str::uuid());
 
         try {
+            $lease->heartbeat();
             $this->config->set(
                 'database.connections.'.$connectionName,
                 $this->configurationFactory->make($snapshot),
@@ -94,6 +98,7 @@ final class TenantInstallationBootstrapper
                 $persistedShop,
                 $snapshot,
                 $reason,
+                $lease,
             );
         } catch (TenantProvisioningInterrupted $exception) {
             throw $exception;
@@ -139,14 +144,25 @@ final class TenantInstallationBootstrapper
         #[\SensitiveParameter]
         ValidatedTenantConnection $snapshot,
         TenantInstallationReason $reason,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
     ): void {
         $events = new Dispatcher;
-        $events->listen(MigrationEnded::class, function (MigrationEnded $event) use ($shop): void {
+        $events->listen(MigrationStarted::class, function (MigrationStarted $event) use ($lease): void {
+            if ($event->name === self::MARKER_MIGRATION && $event->method === 'up') {
+                $lease->heartbeat();
+            }
+        });
+        $events->listen(MigrationEnded::class, function (MigrationEnded $event) use (
+            $shop,
+            $lease,
+        ): void {
             if ($event->name === self::MARKER_MIGRATION && $event->method === 'up') {
                 $this->hook->reached(
                     TenantProvisioningCheckpoint::AfterMarkerTableDdlBeforeLog,
                     $shop,
                 );
+                $lease->heartbeat();
             }
         });
         $migrator = new Migrator(
@@ -163,6 +179,7 @@ final class TenantInstallationBootstrapper
             $shop,
             $snapshot,
             $reason,
+            $lease,
         ): void {
             $schema = $connection->getSchemaBuilder();
             $repositoryExists = $migrator->repositoryExists();
@@ -218,6 +235,7 @@ final class TenantInstallationBootstrapper
                     );
                 }
 
+                $lease->heartbeat();
                 $migrator->getRepository()->createRepository();
             }
 
@@ -228,6 +246,7 @@ final class TenantInstallationBootstrapper
                 ]);
                 $this->assertExactMarkerSchema($connection);
             } elseif ($migrationRows === 0) {
+                $lease->heartbeat();
                 $migrator->getRepository()->log(
                     self::MARKER_MIGRATION,
                     $migrator->getRepository()->getNextBatchNumber(),
@@ -239,11 +258,13 @@ final class TenantInstallationBootstrapper
                     TenantProvisioningCheckpoint::AfterMarkerMigrationLoggedBeforeRow,
                     $shop,
                 );
-                $this->insertMarkerRow($connection, $shop, $snapshot);
+                $lease->heartbeat();
+                $this->insertMarkerRow($connection, $shop, $snapshot, $lease);
                 $this->hook->reached(
                     TenantProvisioningCheckpoint::AfterMarkerRowBeforeManagerConnection,
                     $shop,
                 );
+                $lease->heartbeat();
             }
 
             [$markerMatches] = $this->inspectMarkerRow($connection, $shop, $snapshot);
@@ -332,8 +353,11 @@ final class TenantInstallationBootstrapper
         Shop $shop,
         #[\SensitiveParameter]
         ValidatedTenantConnection $snapshot,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
     ): void {
-        $connection->transaction(function () use ($connection, $shop, $snapshot): void {
+        $connection->transaction(function () use ($connection, $shop, $snapshot, $lease): void {
+            $lease->heartbeat();
             $connection->table('tenant_installations')->insert([
                 'id' => 1,
                 'shop_id' => $shop->getKey(),

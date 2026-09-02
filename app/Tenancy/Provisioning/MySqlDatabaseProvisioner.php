@@ -20,8 +20,12 @@ final readonly class MySqlDatabaseProvisioner implements DatabaseProvisioner
         private TenantProvisioningHook $hook,
     ) {}
 
-    public function provision(#[\SensitiveParameter] Shop $shop): void
-    {
+    public function provision(
+        #[\SensitiveParameter]
+        Shop $shop,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
+    ): void {
         $attemptFingerprint = (string) $shop->database_target_fingerprint;
         [$freshShop, $snapshot] = $this->reloadProvisioningShop($shop, $attemptFingerprint);
         $database = $snapshot->target()->database;
@@ -58,6 +62,8 @@ final readonly class MySqlDatabaseProvisioner implements DatabaseProvisioner
                     );
                 }
 
+                $lease->heartbeat();
+
                 try {
                     $server->createDatabase($database);
                 } catch (TenantProvisioningInterrupted $exception) {
@@ -73,11 +79,12 @@ final readonly class MySqlDatabaseProvisioner implements DatabaseProvisioner
                     TenantProvisioningCheckpoint::AfterPhysicalCreateBeforeAuthorization,
                     $freshShop,
                 );
-                $this->publishCreationAuthorization($freshShop, $attemptFingerprint);
+                $this->publishCreationAuthorization($freshShop, $attemptFingerprint, $lease);
                 $this->hook->reached(
                     TenantProvisioningCheckpoint::AfterAuthorization,
                     $freshShop->fresh(),
                 );
+                $lease->heartbeat();
             }
         } finally {
             try {
@@ -87,7 +94,7 @@ final readonly class MySqlDatabaseProvisioner implements DatabaseProvisioner
         }
 
         if ($targetAlreadyExists) {
-            $this->resumeExistingTarget($freshShop, $targetMayBeAmbiguous);
+            $this->resumeExistingTarget($freshShop, $lease, $targetMayBeAmbiguous);
 
             return;
         }
@@ -95,6 +102,7 @@ final readonly class MySqlDatabaseProvisioner implements DatabaseProvisioner
         $this->bootstrapper->ensureInstalled(
             Shop::query()->findOrFail($shop->getKey()),
             TenantInstallationReason::ExclusiveCreate,
+            $lease,
         );
     }
 
@@ -167,10 +175,16 @@ final readonly class MySqlDatabaseProvisioner implements DatabaseProvisioner
     private function resumeExistingTarget(
         #[\SensitiveParameter]
         Shop $shop,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
         bool $targetMayBeAmbiguous = false,
     ): void {
         try {
-            $this->bootstrapper->ensureInstalled($shop, TenantInstallationReason::ExclusiveCreate);
+            $this->bootstrapper->ensureInstalled(
+                $shop,
+                TenantInstallationReason::ExclusiveCreate,
+                $lease,
+            );
         } catch (TenantProvisioningException $exception) {
             if ($exception->errorCode === 'TARGET_ALREADY_EXISTS'
                 && ($targetMayBeAmbiguous
@@ -192,8 +206,14 @@ final readonly class MySqlDatabaseProvisioner implements DatabaseProvisioner
         #[\SensitiveParameter]
         Shop $shop,
         string $attemptFingerprint,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
     ): void {
-        DB::connection('central')->transaction(function () use ($shop, $attemptFingerprint): void {
+        DB::connection('central')->transaction(function () use (
+            $shop,
+            $attemptFingerprint,
+            $lease,
+        ): void {
             $lockedShop = Shop::query()
                 ->whereKey($shop->getKey())
                 ->lockForUpdate()
@@ -209,7 +229,9 @@ final readonly class MySqlDatabaseProvisioner implements DatabaseProvisioner
                 );
             }
 
+            $lease->heartbeat();
             $lockedShop->validatedDatabaseConnection();
+            $lease->heartbeat();
             $this->lifecycleActivity->handle(
                 $lockedShop,
                 ShopLifecycleEvent::TenantInstallationAuthorized,

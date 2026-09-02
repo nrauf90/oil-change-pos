@@ -12,6 +12,7 @@ use App\Tenancy\Provisioning\MySqlServerConnectionFactory;
 use App\Tenancy\Provisioning\TenantProvisioningCheckpoint;
 use App\Tenancy\Provisioning\TenantProvisioningHook;
 use App\Tenancy\Provisioning\TenantProvisioningInterrupted;
+use App\Tenancy\Provisioning\TenantProvisioningLease;
 use App\Tenancy\TenantConnectionConfigurationFactory;
 use App\Tenancy\ValidatedTenantConnection;
 use Illuminate\Database\Connection;
@@ -111,7 +112,7 @@ class MySqlDatabaseProvisionerTest extends TestCase
         });
 
         try {
-            app(MySqlDatabaseProvisioner::class)->provision($shop);
+            app(MySqlDatabaseProvisioner::class)->provision($shop, $this->lease());
             $this->fail('The hook should stop before any selected-schema connection.');
         } catch (TenantProvisioningInterrupted) {
         }
@@ -243,5 +244,13 @@ class MySqlDatabaseProvisionerTest extends TestCase
         $this->assertSame('localhost', $configuration['host']);
         $this->assertSame([1001 => 'trusted-ca', 1002 => true], $configuration['options']);
         $this->assertArrayNotHasKey('url', $configuration);
+    }
+
+    private function lease(): TenantProvisioningLease
+    {
+        return new class implements TenantProvisioningLease
+        {
+            public function heartbeat(): void {}
+        };
     }
 }

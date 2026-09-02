@@ -19,8 +19,12 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
         private TenantProvisioningHook $hook,
     ) {}
 
-    public function provision(#[\SensitiveParameter] Shop $shop): void
-    {
+    public function provision(
+        #[\SensitiveParameter]
+        Shop $shop,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
+    ): void {
         $attemptFingerprint = (string) $shop->database_target_fingerprint;
         $freshShop = $this->reloadAttemptShop($shop, $attemptFingerprint);
         $database = (string) $freshShop->database_name;
@@ -28,6 +32,7 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
         if (is_file($database)) {
             $this->resumeExistingTarget(
                 $this->reloadExistingProvisioningShop($freshShop, $attemptFingerprint),
+                $lease,
             );
 
             return;
@@ -43,6 +48,7 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
             );
         }
 
+        $lease->heartbeat();
         $handle = @fopen($database, 'x+b');
 
         if (! is_resource($handle)) {
@@ -51,6 +57,7 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
             if (is_file($database)) {
                 $this->resumeExistingTarget(
                     $this->reloadExistingProvisioningShop($freshShop, $attemptFingerprint),
+                    $lease,
                 );
 
                 return;
@@ -69,11 +76,17 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
                 TenantProvisioningCheckpoint::AfterPhysicalCreateBeforeAuthorization,
                 $freshShop,
             );
-            $this->publishCreationAuthorization($freshShop, $attemptFingerprint, $identity);
+            $this->publishCreationAuthorization(
+                $freshShop,
+                $attemptFingerprint,
+                $identity,
+                $lease,
+            );
             $this->hook->reached(
                 TenantProvisioningCheckpoint::AfterAuthorization,
                 $freshShop->fresh(),
             );
+            $lease->heartbeat();
         } catch (TenantProvisioningInterrupted $exception) {
             throw $exception;
         } catch (TenantProvisioningException $exception) {
@@ -91,6 +104,7 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
         $this->bootstrapper->ensureInstalled(
             Shop::query()->findOrFail($shop->getKey()),
             TenantInstallationReason::ExclusiveCreate,
+            $lease,
         );
     }
 
@@ -169,8 +183,12 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
         return $this->reloadProvisioningShop($freshShop, $attemptFingerprint);
     }
 
-    private function resumeExistingTarget(#[\SensitiveParameter] Shop $shop): void
-    {
+    private function resumeExistingTarget(
+        #[\SensitiveParameter]
+        Shop $shop,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
+    ): void {
         $fingerprint = (string) $shop->database_target_fingerprint;
         $locatorFingerprint = $shop->database_target_locator_fingerprint;
 
@@ -182,7 +200,11 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
             );
         }
 
-        $this->bootstrapper->ensureInstalled($shop, TenantInstallationReason::ExclusiveCreate);
+        $this->bootstrapper->ensureInstalled(
+            $shop,
+            TenantInstallationReason::ExclusiveCreate,
+            $lease,
+        );
     }
 
     private function publishCreationAuthorization(
@@ -191,8 +213,15 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
         string $attemptFingerprint,
         #[\SensitiveParameter]
         SqliteDatabaseIdentitySnapshot $identity,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
     ): void {
-        DB::connection('central')->transaction(function () use ($shop, $attemptFingerprint, $identity): void {
+        DB::connection('central')->transaction(function () use (
+            $shop,
+            $attemptFingerprint,
+            $identity,
+            $lease,
+        ): void {
             $lockedShop = Shop::query()
                 ->whereKey($shop->getKey())
                 ->lockForUpdate()
@@ -208,12 +237,14 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
                 );
             }
 
+            $lease->heartbeat();
             $lockedShop->materializeSqliteDatabaseIdentityAfterCreation($identity);
             $materializedShop = Shop::query()
                 ->whereKey($shop->getKey())
                 ->lockForUpdate()
                 ->firstOrFail();
 
+            $lease->heartbeat();
             $this->lifecycleActivity->handle(
                 $materializedShop,
                 ShopLifecycleEvent::TenantInstallationAuthorized,

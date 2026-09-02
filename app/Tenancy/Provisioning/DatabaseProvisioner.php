@@ -6,5 +6,10 @@ use App\Models\Central\Shop;
 
 interface DatabaseProvisioner
 {
-    public function provision(#[\SensitiveParameter] Shop $shop): void;
+    public function provision(
+        #[\SensitiveParameter]
+        Shop $shop,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
+    ): void;
 }

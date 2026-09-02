@@ -25,6 +25,8 @@ return [
         storage_path('framework/tenant-attestation-locks'),
     ),
 
+    'tenant_provisioning_lock_seconds' => env('TENANT_PROVISIONING_LOCK_SECONDS', 900),
+
     'tenant_mysql_remote_provisioning_enabled' => env(
         'TENANT_MYSQL_REMOTE_PROVISIONING_ENABLED',
         false,

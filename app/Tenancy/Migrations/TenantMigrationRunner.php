@@ -5,8 +5,10 @@ namespace App\Tenancy\Migrations;
 use App\Exceptions\TenantProvisioningException;
 use App\Tenancy\Provisioning\TenantProvisioningCheckpoint;
 use App\Tenancy\Provisioning\TenantProvisioningHook;
+use App\Tenancy\Provisioning\TenantProvisioningLease;
 use App\Tenancy\TenantContext;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Events\MigrationEnded;
 use Illuminate\Database\Events\MigrationStarted;
 use Illuminate\Database\Migrations\Migrator;
 use Illuminate\Events\Dispatcher;
@@ -22,8 +24,10 @@ final readonly class TenantMigrationRunner
         private TenantProvisioningHook $hook,
     ) {}
 
-    public function runConnected(): TenantMigrationResult
-    {
+    public function runConnected(
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
+    ): TenantMigrationResult {
         if (! $this->tenantContext->initialized()) {
             throw TenantProvisioningException::safe(
                 'migration',
@@ -33,12 +37,19 @@ final readonly class TenantMigrationRunner
         }
 
         $events = new Dispatcher;
-        $events->listen(MigrationStarted::class, function (MigrationStarted $event): void {
+        $events->listen(MigrationStarted::class, function (MigrationStarted $event) use ($lease): void {
             if ($event->method === 'up') {
+                $lease->heartbeat();
                 $this->hook->reached(
                     TenantProvisioningCheckpoint::BeforeTenantMigrationRun,
                     $this->tenantContext->shop(),
                 );
+                $lease->heartbeat();
+            }
+        });
+        $events->listen(MigrationEnded::class, function (MigrationEnded $event) use ($lease): void {
+            if ($event->method === 'up') {
+                $lease->heartbeat();
             }
         });
         $migrator = new Migrator(
@@ -50,7 +61,10 @@ final readonly class TenantMigrationRunner
         $migrator->setOutput(new NullOutput);
 
         try {
-            return $migrator->usingConnection('tenant', function () use ($migrator): TenantMigrationResult {
+            return $migrator->usingConnection('tenant', function () use (
+                $migrator,
+                $lease,
+            ): TenantMigrationResult {
                 if (! $migrator->repositoryExists()) {
                     throw TenantProvisioningException::safe(
                         'migration',
@@ -62,10 +76,12 @@ final readonly class TenantMigrationRunner
                 $repository = $migrator->getRepository();
                 $batch = $repository->getNextBatchNumber();
                 $startedAt = hrtime(true);
+                $lease->heartbeat();
                 $paths = $migrator->run(
                     [database_path('migrations/tenant')],
                     ['pretend' => false, 'step' => false],
                 );
+                $lease->heartbeat();
 
                 return new TenantMigrationResult(
                     migrations: array_map(

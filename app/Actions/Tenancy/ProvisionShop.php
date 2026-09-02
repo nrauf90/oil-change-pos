@@ -19,6 +19,7 @@ use App\Tenancy\Provisioning\TenantOwnerProvisioner;
 use App\Tenancy\Provisioning\TenantProvisioningCheckpoint;
 use App\Tenancy\Provisioning\TenantProvisioningHook;
 use App\Tenancy\Provisioning\TenantProvisioningInterrupted;
+use App\Tenancy\Provisioning\TenantProvisioningLease;
 use App\Tenancy\Provisioning\TenantProvisioningLock;
 use App\Tenancy\TenantConnectionManager;
 use Closure;
@@ -51,7 +52,12 @@ final readonly class ProvisionShop
 
         return $this->provisioningLock->run(
             $shop,
-            fn (): Shop => $this->runAttempt($shop, $data->temporaryOwnerPassword, 1),
+            fn (#[\SensitiveParameter] TenantProvisioningLease $lease): Shop => $this->runAttempt(
+                $shop,
+                $data->temporaryOwnerPassword,
+                1,
+                $lease,
+            ),
         );
     }
 
@@ -65,14 +71,22 @@ final readonly class ProvisionShop
 
         return $this->provisioningLock->run(
             $shop,
-            function () use ($shop, $temporaryPassword, $attemptFingerprint): Shop {
-                [$freshShop, $attempt] = $this->prepareRetry($shop, $attemptFingerprint);
+            function (#[\SensitiveParameter] TenantProvisioningLease $lease) use (
+                $shop,
+                $temporaryPassword,
+                $attemptFingerprint,
+            ): Shop {
+                [$freshShop, $attempt] = $this->prepareRetry(
+                    $shop,
+                    $attemptFingerprint,
+                    $lease,
+                );
 
                 if ($freshShop->status === ShopStatus::Active) {
                     return $freshShop;
                 }
 
-                return $this->runAttempt($freshShop, $temporaryPassword, $attempt);
+                return $this->runAttempt($freshShop, $temporaryPassword, $attempt, $lease);
             },
         );
     }
@@ -165,8 +179,16 @@ final readonly class ProvisionShop
         Shop $shop,
         #[\SensitiveParameter]
         string $attemptFingerprint,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
     ): array {
-        return DB::connection('central')->transaction(function () use ($shop, $attemptFingerprint): array {
+        $lease->heartbeat();
+
+        return DB::connection('central')->transaction(function () use (
+            $shop,
+            $attemptFingerprint,
+            $lease,
+        ): array {
             $freshShop = Shop::query()
                 ->whereKey($shop->getKey())
                 ->lockForUpdate()
@@ -213,6 +235,7 @@ final readonly class ProvisionShop
             }
 
             if ($freshShop->status === ShopStatus::Failed) {
+                $lease->heartbeat();
                 $freshShop->retryProvisioning();
             } elseif ($freshShop->status !== ShopStatus::Provisioning) {
                 throw TenantProvisioningException::safe(
@@ -225,6 +248,7 @@ final readonly class ProvisionShop
             $attempt = $freshShop->lifecycleActivities()
                 ->where('event', ShopLifecycleEvent::ProvisioningStarted->value)
                 ->count() + 1;
+            $lease->heartbeat();
             $this->recordLifecycleActivity->handle(
                 $freshShop,
                 ShopLifecycleEvent::ProvisioningStarted,
@@ -244,14 +268,17 @@ final readonly class ProvisionShop
         #[\SensitiveParameter]
         ?string $temporaryPassword,
         int $attempt,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
     ): Shop {
         try {
             $freshShop = $this->freshProvisioningShop($shop);
+            $lease->heartbeat();
             $this->safely(
                 'database',
                 'DATABASE_PROVISION_FAILED',
                 'The tenant database could not be provisioned. Review the application log code and retry.',
-                fn (): mixed => $this->databaseProvisioner->provision($freshShop),
+                fn (): mixed => $this->databaseProvisioner->provision($freshShop, $lease),
             );
             $freshShop = $this->freshProvisioningShop($freshShop);
             $centralOwner = $freshShop->owner()->first();
@@ -265,28 +292,35 @@ final readonly class ProvisionShop
             }
 
             /** @var TenantMigrationResult $migrationResult */
+            $lease->heartbeat();
             $migrationResult = $this->safely(
                 'connection',
                 'TENANT_CONNECTION_FAILED',
                 'The tenant connection could not be attested. Review the application log code and retry.',
                 fn (): mixed => $this->connectionManager->within(
                     $freshShop,
-                    function () use ($centralOwner, $temporaryPassword): TenantMigrationResult {
-                        $migrationResult = $this->migrationRunner->runConnected();
+                    function () use (
+                        $centralOwner,
+                        $temporaryPassword,
+                        $lease,
+                    ): TenantMigrationResult {
+                        $migrationResult = $this->migrationRunner->runConnected($lease);
                         $this->hook->reached(
                             TenantProvisioningCheckpoint::AfterTenantMigrations,
                             Shop::query()->whereKey($centralOwner->shop_id)->firstOrFail(),
                         );
+                        $lease->heartbeat();
 
                         DB::connection('tenant')->transaction(function () use (
                             $centralOwner,
                             $temporaryPassword,
+                            $lease,
                         ): void {
                             $owner = $this->safely(
                                 'owner',
                                 'OWNER_PROVISION_FAILED',
                                 'The tenant owner could not be provisioned. Review the application log code and retry.',
-                                function () use ($centralOwner, $temporaryPassword): mixed {
+                                function () use ($centralOwner, $temporaryPassword, $lease): mixed {
                                     $this->hook->reached(
                                         TenantProvisioningCheckpoint::BeforeOwnerProvision,
                                         Shop::query()->whereKey($centralOwner->shop_id)->firstOrFail(),
@@ -295,6 +329,7 @@ final readonly class ProvisionShop
                                     return $this->ownerProvisioner->ensureOwner(
                                         $centralOwner,
                                         $temporaryPassword,
+                                        $lease,
                                     );
                                 },
                             );
@@ -302,13 +337,13 @@ final readonly class ProvisionShop
                                 'authorization',
                                 'AUTHORIZATION_SYNC_FAILED',
                                 'Tenant authorization could not be reconciled. Review the application log code and retry.',
-                                function () use ($centralOwner, $owner): mixed {
+                                function () use ($centralOwner, $owner, $lease): mixed {
                                     $this->hook->reached(
                                         TenantProvisioningCheckpoint::BeforeAuthorizationSync,
                                         Shop::query()->whereKey($centralOwner->shop_id)->firstOrFail(),
                                     );
 
-                                    $this->syncTenantAuthorization->handle($owner);
+                                    $this->syncTenantAuthorization->handle($owner, $lease);
 
                                     return null;
                                 },
@@ -319,13 +354,14 @@ final readonly class ProvisionShop
                             'seed',
                             'TENANT_SEED_FAILED',
                             'Tenant reference data could not be installed. Review the application log code and retry.',
-                            function () use ($centralOwner): mixed {
+                            function () use ($centralOwner, $lease): mixed {
                                 $this->hook->reached(
                                     TenantProvisioningCheckpoint::BeforeReferenceSeed,
                                     Shop::query()->whereKey($centralOwner->shop_id)->firstOrFail(),
                                 );
 
-                                $this->referenceDataSeeder->run();
+                                $lease->heartbeat();
+                                $this->referenceDataSeeder->run($lease);
 
                                 return null;
                             },
@@ -341,11 +377,15 @@ final readonly class ProvisionShop
                 $freshShop->fresh(),
             );
 
-            return $this->activate($freshShop, $migrationResult, $attempt);
+            return $this->activate($freshShop, $migrationResult, $attempt, $lease);
         } catch (TenantProvisioningInterrupted $exception) {
             throw $exception;
         } catch (TenantProvisioningException $exception) {
-            $this->recordFailure($shop, $attempt, $exception);
+            if ($exception->errorCode === 'PROVISIONING_LOCK_LOST') {
+                throw $exception;
+            }
+
+            $this->recordFailure($shop, $attempt, $exception, $lease);
 
             throw $exception;
         } catch (Throwable) {
@@ -354,7 +394,7 @@ final readonly class ProvisionShop
                 'PROVISIONING_FAILED',
                 'Tenant provisioning failed. Review the application log code and retry.',
             );
-            $this->recordFailure($shop, $attempt, $exception);
+            $this->recordFailure($shop, $attempt, $exception, $lease);
 
             throw $exception;
         } finally {
@@ -398,12 +438,15 @@ final readonly class ProvisionShop
         Shop $shop,
         TenantMigrationResult $migrationResult,
         int $attempt,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
     ): Shop {
         try {
             return DB::connection('central')->transaction(function () use (
                 $shop,
                 $migrationResult,
                 $attempt,
+                $lease,
             ): Shop {
                 $freshShop = Shop::query()
                     ->whereKey($shop->getKey())
@@ -414,6 +457,7 @@ final readonly class ProvisionShop
                     throw new LogicException;
                 }
 
+                $lease->heartbeat();
                 ShopHealthSnapshot::query()->updateOrCreate(
                     ['shop_id' => $freshShop->getKey()],
                     [
@@ -428,6 +472,7 @@ final readonly class ProvisionShop
                     TenantProvisioningCheckpoint::AfterActivationBeforeSuccessAudit,
                     $freshShop,
                 );
+                $lease->heartbeat();
                 $this->recordLifecycleActivity->handle(
                     $freshShop,
                     ShopLifecycleEvent::ProvisioningSucceeded,
@@ -441,6 +486,16 @@ final readonly class ProvisionShop
 
                 return $freshShop->fresh();
             });
+        } catch (TenantProvisioningException $exception) {
+            if ($exception->errorCode === 'PROVISIONING_LOCK_LOST') {
+                throw $exception;
+            }
+
+            throw TenantProvisioningException::safe(
+                'activation',
+                'SHOP_ACTIVATION_FAILED',
+                'The shop could not be activated. Review the application log code and retry.',
+            );
         } catch (Throwable) {
             throw TenantProvisioningException::safe(
                 'activation',
@@ -455,7 +510,10 @@ final readonly class ProvisionShop
         Shop $shop,
         int $attempt,
         TenantProvisioningException $exception,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
     ): void {
+        $lease->heartbeat();
         Log::error('Tenant provisioning failed.', [
             'shop_id' => (string) $shop->getKey(),
             'stage' => $exception->stage,
@@ -463,7 +521,12 @@ final readonly class ProvisionShop
         ]);
 
         try {
-            DB::connection('central')->transaction(function () use ($shop, $attempt, $exception): void {
+            DB::connection('central')->transaction(function () use (
+                $shop,
+                $attempt,
+                $exception,
+                $lease,
+            ): void {
                 $freshShop = Shop::query()
                     ->whereKey($shop->getKey())
                     ->lockForUpdate()
@@ -473,6 +536,7 @@ final readonly class ProvisionShop
                     return;
                 }
 
+                $lease->heartbeat();
                 $freshShop->markProvisioningFailed($exception->getMessage());
                 $this->recordLifecycleActivity->handle(
                     $freshShop,
@@ -484,6 +548,16 @@ final readonly class ProvisionShop
                     ],
                 );
             });
+        } catch (TenantProvisioningException $leaseException) {
+            if ($leaseException->errorCode === 'PROVISIONING_LOCK_LOST') {
+                throw $leaseException;
+            }
+
+            Log::error('Tenant provisioning failure state could not be recorded.', [
+                'shop_id' => (string) $shop->getKey(),
+                'stage' => 'activation',
+                'error_code' => 'FAILURE_STATE_WRITE_FAILED',
+            ]);
         } catch (Throwable) {
             Log::error('Tenant provisioning failure state could not be recorded.', [
                 'shop_id' => (string) $shop->getKey(),

@@ -13,6 +13,8 @@ final readonly class TenantOwnerProvisioner
         ShopOwner $centralOwner,
         #[\SensitiveParameter]
         ?string $temporaryPassword,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
     ): User {
         $owner = User::query()->where('username', $centralOwner->username)->first();
 
@@ -27,6 +29,8 @@ final readonly class TenantOwnerProvisioner
                 'A fresh temporary owner password is required to resume provisioning.',
             );
         }
+
+        $lease->heartbeat();
 
         return User::query()->create([
             'name' => $centralOwner->name,

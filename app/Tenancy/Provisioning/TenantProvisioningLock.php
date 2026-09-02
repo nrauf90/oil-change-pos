@@ -6,14 +6,13 @@ use App\Exceptions\TenantProvisioningException;
 use App\Models\Central\Shop;
 use Closure;
 use Illuminate\Cache\CacheManager;
+use Illuminate\Cache\DatabaseLock;
 use Illuminate\Config\Repository as ConfigRepository;
 use Throwable;
 
 final readonly class TenantProvisioningLock
 {
     private const STORE = 'database';
-
-    private const SECONDS = 900;
 
     public function __construct(
         private CacheManager $cache,
@@ -23,7 +22,7 @@ final readonly class TenantProvisioningLock
     /**
      * @template TResult
      *
-     * @param  Closure(): TResult  $operation
+     * @param  Closure(TenantProvisioningLease): TResult  $operation
      * @return TResult
      */
     public function run(
@@ -33,10 +32,19 @@ final readonly class TenantProvisioningLock
         Closure $operation,
     ): mixed {
         $this->assertCentralStore();
+        $seconds = $this->leaseSeconds();
         $lock = $this->cache->store(self::STORE)->lock(
             'tenant-provision:'.$shop->getKey(),
-            self::SECONDS,
+            $seconds,
         );
+
+        if (! $lock instanceof DatabaseLock) {
+            throw TenantProvisioningException::safe(
+                'database',
+                'PROVISIONING_LOCK_MISCONFIGURED',
+                'Provisioning requires a renewable central database lock.',
+            );
+        }
 
         try {
             if (! $lock->get()) {
@@ -56,14 +64,39 @@ final readonly class TenantProvisioningLock
             );
         }
 
+        $lease = new DatabaseTenantProvisioningLease($lock, $seconds);
+
         try {
-            return $operation();
+            return $operation($lease);
         } finally {
             try {
                 $lock->release();
             } catch (Throwable) {
             }
         }
+    }
+
+    private function leaseSeconds(): int
+    {
+        $configured = $this->config->get('database.tenant_provisioning_lock_seconds', 900);
+
+        if (is_int($configured)) {
+            $seconds = $configured;
+        } elseif (is_string($configured) && ctype_digit($configured)) {
+            $seconds = (int) $configured;
+        } else {
+            $seconds = 0;
+        }
+
+        if ($seconds < 1) {
+            throw TenantProvisioningException::safe(
+                'database',
+                'PROVISIONING_LOCK_MISCONFIGURED',
+                'Provisioning requires a positive central database lock duration.',
+            );
+        }
+
+        return $seconds;
     }
 
     private function assertCentralStore(): void

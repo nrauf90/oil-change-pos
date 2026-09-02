@@ -24,8 +24,10 @@ use App\Tenancy\Provisioning\NullTenantProvisioningHook;
 use App\Tenancy\Provisioning\TenantProvisioningCheckpoint;
 use App\Tenancy\Provisioning\TenantProvisioningHook;
 use App\Tenancy\Provisioning\TenantProvisioningInterrupted;
+use App\Tenancy\Provisioning\TenantProvisioningLease;
 use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Database\Events\ConnectionEstablished;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Cache;
@@ -830,6 +832,148 @@ class ShopProvisioningTest extends TestCase
         $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
     }
 
+    public function test_renewed_lease_keeps_a_second_worker_busy_after_the_original_expiration(): void
+    {
+        config()->set('database.tenant_provisioning_lock_seconds', 300);
+        $database = $this->tenantRoot.DIRECTORY_SEPARATOR.'renewed-lease.sqlite';
+        $this->travelTo('2026-09-02 12:00:00');
+        $hook = new class(fn () => $this->travel(250)->seconds()) implements TenantProvisioningHook
+        {
+            public ?string $secondWorkerErrorCode = null;
+
+            public bool $overlapDetected = false;
+
+            private int $elapsedCheckpoints = 0;
+
+            private bool $secondWorkerRunning = false;
+
+            public function __construct(private readonly \Closure $advanceTime) {}
+
+            public function reached(TenantProvisioningCheckpoint $checkpoint, Shop $shop): void
+            {
+                if ($this->secondWorkerRunning) {
+                    $this->overlapDetected = true;
+
+                    return;
+                }
+
+                if (! in_array($checkpoint, [
+                    TenantProvisioningCheckpoint::AfterPhysicalCreateBeforeAuthorization,
+                    TenantProvisioningCheckpoint::AfterAuthorization,
+                    TenantProvisioningCheckpoint::AfterMarkerTableDdlBeforeLog,
+                    TenantProvisioningCheckpoint::AfterMarkerMigrationLoggedBeforeRow,
+                ], true)) {
+                    return;
+                }
+
+                ($this->advanceTime)();
+                $this->elapsedCheckpoints++;
+
+                if ($this->elapsedCheckpoints !== 4) {
+                    return;
+                }
+
+                $this->secondWorkerRunning = true;
+
+                try {
+                    app(ProvisionShop::class)->retry($shop->fresh(), 'second-worker-password');
+                    $this->secondWorkerErrorCode = 'COMPLETED';
+                } catch (TenantProvisioningException $exception) {
+                    $this->secondWorkerErrorCode = $exception->errorCode;
+                } finally {
+                    $this->secondWorkerRunning = false;
+                }
+            }
+        };
+        $this->app->instance(TenantProvisioningHook::class, $hook);
+
+        try {
+            $shop = app(ProvisionShop::class)->handle($this->provisioningData($database));
+        } finally {
+            $this->travelBack();
+        }
+
+        $this->assertSame('PROVISIONING_BUSY', $hook->secondWorkerErrorCode);
+        $this->assertFalse($hook->overlapDetected);
+        $this->assertSame(ShopStatus::Active, $shop->status);
+        $this->assertSame(1, $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::ProvisioningStarted->value)
+            ->count());
+        $this->assertSame(1, $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::TenantInstallationAuthorized->value)
+            ->count());
+        $this->assertSame(1, $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::ProvisioningSucceeded->value)
+            ->count());
+
+        app(TenantConnectionManager::class)->within($shop, function (): void {
+            $this->assertSame(1, User::query()->where('username', 'test-owner')->count());
+            $this->assertSame(
+                DB::connection('tenant')->table('migrations')->count(),
+                DB::connection('tenant')->table('migrations')->distinct()->count('migration'),
+            );
+        });
+    }
+
+    public function test_lost_lease_stops_before_receipt_tenant_failure_or_activation_writes(): void
+    {
+        config()->set('database.tenant_provisioning_lock_seconds', 300);
+        $database = $this->tenantRoot.DIRECTORY_SEPARATOR.'lost-lease.sqlite';
+        $this->travelTo('2026-09-02 12:00:00');
+        $hook = new class(fn () => $this->travel(901)->seconds()) implements TenantProvisioningHook
+        {
+            public ?Lock $replacementLock = null;
+
+            public function __construct(private readonly \Closure $expireLease) {}
+
+            public function reached(TenantProvisioningCheckpoint $checkpoint, Shop $shop): void
+            {
+                if ($checkpoint !== TenantProvisioningCheckpoint::AfterPhysicalCreateBeforeAuthorization) {
+                    return;
+                }
+
+                ($this->expireLease)();
+                $this->replacementLock = Cache::store('database')->lock(
+                    'tenant-provision:'.$shop->getKey(),
+                    300,
+                );
+
+                if (! $this->replacementLock->get()) {
+                    throw new RuntimeException('The replacement worker could not acquire the expired lease.');
+                }
+            }
+        };
+        $this->app->instance(TenantProvisioningHook::class, $hook);
+        $exception = null;
+
+        try {
+            try {
+                app(ProvisionShop::class)->handle($this->provisioningData($database));
+            } catch (TenantProvisioningException $caught) {
+                $exception = $caught;
+            }
+        } finally {
+            $hook->replacementLock?->release();
+            $this->travelBack();
+        }
+
+        $this->assertInstanceOf(TenantProvisioningException::class, $exception);
+        $this->assertSame('PROVISIONING_LOCK_LOST', $exception->errorCode);
+        $shop = Shop::query()->where('slug', 'test-workshop')->firstOrFail();
+        $this->assertSame(ShopStatus::Provisioning, $shop->status);
+        $this->assertNull($shop->provisioning_failure_message);
+        $this->assertFileExists($database);
+        clearstatcache(true, $database);
+        $this->assertSame(0, filesize($database));
+        $this->assertSame(
+            [ShopLifecycleEvent::ProvisioningStarted],
+            $shop->lifecycleActivities()->oldest('occurred_at')->pluck('event')->all(),
+        );
+        $this->assertDatabaseMissing('shop_health_snapshots', [
+            'shop_id' => $shop->getKey(),
+        ], 'central');
+    }
+
     public function test_stale_retry_never_touches_a_target_changed_before_lock_acquisition(): void
     {
         $oldDatabase = $this->tenantRoot.DIRECTORY_SEPARATOR.'stale-old.sqlite';
@@ -907,8 +1051,11 @@ class ShopProvisioningTest extends TestCase
         {
             public function __construct(private readonly string $driverDetail) {}
 
-            public function provision(#[\SensitiveParameter] Shop $shop): void
-            {
+            public function provision(
+                #[\SensitiveParameter]
+                Shop $shop,
+                TenantProvisioningLease $lease,
+            ): void {
                 throw new RuntimeException($this->driverDetail);
             }
         });

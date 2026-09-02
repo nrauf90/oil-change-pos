@@ -12,8 +12,12 @@ final readonly class DatabaseProvisionerManager implements DatabaseProvisioner
         private SqliteDatabaseProvisioner $sqlite,
     ) {}
 
-    public function provision(#[\SensitiveParameter] Shop $shop): void
-    {
+    public function provision(
+        #[\SensitiveParameter]
+        Shop $shop,
+        #[\SensitiveParameter]
+        TenantProvisioningLease $lease,
+    ): void {
         $freshShop = Shop::query()->whereKey($shop->getKey())->first();
 
         if (! $freshShop instanceof Shop) {
@@ -25,8 +29,8 @@ final readonly class DatabaseProvisionerManager implements DatabaseProvisioner
         }
 
         match ($freshShop->database_driver) {
-            'sqlite' => $this->sqlite->provision($freshShop),
-            'mysql' => $this->mysql->provision($freshShop),
+            'sqlite' => $this->sqlite->provision($freshShop, $lease),
+            'mysql' => $this->mysql->provision($freshShop, $lease),
             default => throw TenantProvisioningException::safe(
                 'target',
                 'UNSUPPORTED_DATABASE_DRIVER',
