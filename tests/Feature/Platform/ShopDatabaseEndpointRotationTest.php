@@ -23,7 +23,6 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
 use PDO;
-use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 
 class ShopDatabaseEndpointRotationTest extends PlatformTestCase
@@ -118,13 +117,13 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         $this->assertSame(0, $shop->lifecycleActivities()->count());
     }
 
-    #[DataProvider('forbiddenEndpointAddresses')]
-    public function test_preview_rejects_a_forbidden_endpoint_without_mutation(string $address): void
+    public function test_preview_rejects_a_nat64_dns_answer_without_mutation(): void
     {
+        $address = '64:ff9b::7f00:1';
         $this->resolveDatabaseHostTo('1.1.1.1');
         $shop = Shop::registerForProvisioning(
             name: 'Forbidden Endpoint Shop',
-            slug: 'forbidden-endpoint-shop-'.str_replace('.', '-', $address),
+            slug: 'forbidden-endpoint-shop-'.substr(hash('sha256', $address), 0, 12),
             databaseDriver: 'mysql',
             databaseName: 'forbidden_endpoint_shop',
             databaseHost: 'forbidden-endpoint.example.test',
@@ -145,6 +144,41 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
                 $exception->getMessage(),
             );
             $this->assertStringNotContainsString($address, $exception->getMessage());
+        }
+
+        $persistedShop = $shop->fresh();
+
+        $this->assertSame($oldFingerprint, $persistedShop->database_target_fingerprint);
+        $this->assertSame($oldClaims, $persistedShop->databaseTargetClaims()->pluck('fingerprint')->all());
+        $this->assertSame(0, $persistedShop->lifecycleActivities()->count());
+    }
+
+    public function test_preview_rejects_all_dns_answers_when_one_destination_is_forbidden(): void
+    {
+        $this->resolveDatabaseHostTo('1.1.1.1');
+        $shop = Shop::registerForProvisioning(
+            name: 'Mixed Endpoint Shop',
+            slug: 'mixed-endpoint-shop',
+            databaseDriver: 'mysql',
+            databaseName: 'mixed_endpoint_shop',
+            databaseHost: 'mixed-endpoint.example.test',
+        );
+        $shop->markActive();
+        $actor = PlatformUser::factory()->create();
+        $oldFingerprint = (string) $shop->database_target_fingerprint;
+        $oldClaims = $shop->databaseTargetClaims()->pluck('fingerprint')->all();
+        $this->resolveDatabaseHostToMany(['8.8.8.8', '100.64.0.1']);
+
+        try {
+            app(RotateShopDatabaseEndpoint::class)->preview($actor, $shop);
+            $this->fail('A DNS target with a forbidden answer was offered for rotation.');
+        } catch (TenantDatabaseEndpointRotationException $exception) {
+            $this->assertSame('ROTATION_DESTINATION_FORBIDDEN', $exception->errorCode);
+            $this->assertSame(
+                'The resolved database destination is not permitted.',
+                $exception->getMessage(),
+            );
+            $this->assertStringNotContainsString('100.64.0.1', $exception->getMessage());
         }
 
         $persistedShop = $shop->fresh();
@@ -223,6 +257,58 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         }
 
         $this->assertSame(0, $shop->lifecycleActivities()->count());
+    }
+
+    public function test_preview_allows_an_ordinary_public_unicast_endpoint(): void
+    {
+        $address = '8.8.8.8';
+        $this->resolveDatabaseHostTo('9.9.9.9');
+        $shop = Shop::registerForProvisioning(
+            name: 'Public Endpoint Shop',
+            slug: 'public-endpoint-shop-'.substr(hash('sha256', $address), 0, 12),
+            databaseDriver: 'mysql',
+            databaseName: 'public_endpoint_shop',
+            databaseHost: 'public-endpoint.example.test',
+        );
+        $shop->markActive();
+        $this->resolveDatabaseHostTo($address);
+
+        $preview = app(RotateShopDatabaseEndpoint::class)->preview(
+            PlatformUser::factory()->create(),
+            $shop,
+        );
+
+        $this->assertSame($address, $preview['new_target']['endpoints'][0]['address']);
+    }
+
+    public function test_preview_allows_a_public_candidate_when_the_central_mysql_host_is_private(): void
+    {
+        $this->resolveDatabaseHostTo('1.1.1.1');
+        $shop = Shop::registerForProvisioning(
+            name: 'Private Central Host Shop',
+            slug: 'private-central-host-shop',
+            databaseDriver: 'mysql',
+            databaseName: 'private_central_host_shop',
+            databaseHost: 'candidate-database.example.test',
+        );
+        $shop->markActive();
+        config()->set('database.connections.central', [
+            'driver' => 'mysql',
+            'database' => 'central',
+            'host' => 'central-database.internal.test',
+            'port' => 3306,
+        ]);
+        $this->resolveDatabaseHostsTo([
+            'candidate-database.example.test' => ['8.8.8.8'],
+            'central-database.internal.test' => ['127.0.0.1'],
+        ]);
+
+        $preview = app(RotateShopDatabaseEndpoint::class)->preview(
+            PlatformUser::factory()->create(),
+            $shop,
+        );
+
+        $this->assertSame('8.8.8.8', $preview['new_target']['endpoints'][0]['address']);
     }
 
     public function test_preview_rejects_a_literal_ip_target(): void
@@ -751,13 +837,35 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
 
     private function resolveDatabaseHostTo(string $address): void
     {
-        app()->instance(DatabaseHostResolver::class, new class($address) implements DatabaseHostResolver
+        $this->resolveDatabaseHostToMany([$address]);
+    }
+
+    /** @param list<string> $addresses */
+    private function resolveDatabaseHostToMany(array $addresses): void
+    {
+        app()->instance(DatabaseHostResolver::class, new class($addresses) implements DatabaseHostResolver
         {
-            public function __construct(private readonly string $address) {}
+            /** @param list<string> $addresses */
+            public function __construct(private readonly array $addresses) {}
 
             public function resolve(string $host): array
             {
-                return [$this->address];
+                return $this->addresses;
+            }
+        });
+    }
+
+    /** @param array<string, list<string>> $addressesByHost */
+    private function resolveDatabaseHostsTo(array $addressesByHost): void
+    {
+        app()->instance(DatabaseHostResolver::class, new class($addressesByHost) implements DatabaseHostResolver
+        {
+            /** @param array<string, list<string>> $addressesByHost */
+            public function __construct(private readonly array $addressesByHost) {}
+
+            public function resolve(string $host): array
+            {
+                return $this->addressesByHost[$host] ?? [];
             }
         });
     }
@@ -836,17 +944,6 @@ class ShopDatabaseEndpointRotationTest extends PlatformTestCase
         );
 
         return $connection;
-    }
-
-    /** @return array<string, array{string}> */
-    public static function forbiddenEndpointAddresses(): array
-    {
-        return [
-            'private address' => ['10.20.30.40'],
-            'loopback address' => ['127.0.0.2'],
-            'link-local address' => ['169.254.20.30'],
-            'multicast address' => ['224.0.0.1'],
-        ];
     }
 }
 

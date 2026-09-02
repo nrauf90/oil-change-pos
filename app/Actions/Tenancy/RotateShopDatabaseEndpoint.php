@@ -13,6 +13,7 @@ use App\Models\Central\ShopDatabaseTargetClaim;
 use App\Tenancy\DatabaseHostResolver;
 use App\Tenancy\DatabaseTargetConfiguration;
 use App\Tenancy\NormalizedDatabaseTarget;
+use App\Tenancy\PublicIpAddressClassifier;
 use App\Tenancy\TenantDatabaseEndpointMarkerReconciler;
 use App\Tenancy\ValidatedTenantConnection;
 use Closure;
@@ -30,6 +31,7 @@ final readonly class RotateShopDatabaseEndpoint
         private ConfigRepository $config,
         private DatabaseHostResolver $hostResolver,
         private CacheManager $cache,
+        private PublicIpAddressClassifier $addressClassifier,
     ) {}
 
     /**
@@ -648,7 +650,7 @@ final readonly class RotateShopDatabaseEndpoint
         NormalizedDatabaseTarget $target,
     ): void {
         foreach ($target->mysqlEndpoints as $endpoint) {
-            if ($this->isPublicUnicastAddress($endpoint['address'])) {
+            if ($this->addressClassifier->isPublicUnicast($endpoint['address'])) {
                 continue;
             }
 
@@ -657,25 +659,5 @@ final readonly class RotateShopDatabaseEndpoint
                 'The resolved database destination is not permitted.',
             );
         }
-    }
-
-    private function isPublicUnicastAddress(#[\SensitiveParameter] string $address): bool
-    {
-        if (filter_var(
-            $address,
-            FILTER_VALIDATE_IP,
-            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE,
-        ) === false) {
-            return false;
-        }
-
-        $packedAddress = inet_pton($address);
-
-        if (! is_string($packedAddress)) {
-            return false;
-        }
-
-        return ! ((strlen($packedAddress) === 4 && ord($packedAddress[0]) >= 224)
-            || (strlen($packedAddress) === 16 && ord($packedAddress[0]) === 255));
     }
 }
