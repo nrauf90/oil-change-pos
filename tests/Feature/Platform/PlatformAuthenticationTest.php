@@ -5,6 +5,8 @@ namespace Tests\Feature\Platform;
 use App\Filament\Platform\Resources\PlatformUsers\Pages\CreatePlatformUser;
 use App\Filament\Platform\Resources\PlatformUsers\Pages\EditPlatformUser;
 use App\Filament\Platform\Resources\PlatformUsers\Pages\ListPlatformUsers;
+use App\Http\Middleware\EnsureCentralHost;
+use App\Http\Middleware\InitializeTenancy;
 use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 use App\Models\Central\ShopAccessSession;
@@ -12,8 +14,12 @@ use App\Models\User;
 use App\Tenancy\TenantContext;
 use Filament\Facades\Filament;
 use Filament\Panel;
+use Illuminate\Cookie\Middleware\EncryptCookies;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Str;
 use Livewire\Livewire;
 use LogicException;
 
@@ -27,6 +33,98 @@ class PlatformAuthenticationTest extends PlatformTestCase
             ->assertSee('Platform administration')
             ->assertSee('Sign in')
             ->assertDontSee('Username');
+    }
+
+    public function test_platform_login_and_dashboard_are_not_available_on_a_tenant_host(): void
+    {
+        config()->set('app.url', 'https://pos.example.test');
+        $shop = Shop::factory()->create(['slug' => 'tenant-shop']);
+        $this->createMigratedTenantDatabase($shop);
+        $shop->markActive();
+        $platformUser = PlatformUser::factory()->create();
+
+        $this->get('https://tenant-shop.pos.example.test/platform/login')
+            ->assertNotFound();
+
+        $this->actingAs($platformUser, 'platform')
+            ->get('https://tenant-shop.pos.example.test/platform')
+            ->assertNotFound();
+    }
+
+    public function test_platform_routes_accept_only_the_app_url_host_with_a_non_default_port(): void
+    {
+        config()->set('app.url', 'https://pos.example.test:8443/application');
+        $platformUser = PlatformUser::factory()->create();
+
+        $this->get('https://pos.example.test:8443/platform/login')
+            ->assertSuccessful()
+            ->assertSee('Platform administration');
+
+        $this->actingAs($platformUser, 'platform')
+            ->get('https://pos.example.test:8443/platform')
+            ->assertSuccessful()
+            ->assertSee('Platform overview');
+    }
+
+    public function test_platform_host_is_checked_before_cookies_and_session_are_started(): void
+    {
+        $route = Route::getRoutes()->getByName('filament.platform.auth.login');
+        $this->assertNotNull($route);
+        $middleware = array_map(
+            static fn (string $name): string => Str::before($name, ':'),
+            app('router')->gatherRouteMiddleware($route),
+        );
+        $hostPosition = array_search(EnsureCentralHost::class, $middleware, true);
+        $cookiePosition = array_search(EncryptCookies::class, $middleware, true);
+        $sessionPosition = array_search(StartSession::class, $middleware, true);
+        $this->assertIsInt($hostPosition);
+        $this->assertIsInt($cookiePosition);
+        $this->assertIsInt($sessionPosition);
+        $this->assertLessThan($cookiePosition, $hostPosition);
+        $this->assertLessThan($sessionPosition, $hostPosition);
+    }
+
+    public function test_platform_livewire_update_succeeds_centrally_and_is_rejected_on_a_tenant_host(): void
+    {
+        config()->set('app.url', 'https://pos.example.test');
+        $shop = Shop::factory()->create(['slug' => 'platform-livewire-shop']);
+        $this->createMigratedTenantDatabase($shop);
+        $shop->markActive();
+        $platformUser = PlatformUser::factory()->create();
+        Auth::guard('platform')->login($platformUser);
+        session()->put(InitializeTenancy::SESSION_SHOP_KEY, $shop->getKey());
+        session()->save();
+        $sessionId = session()->getId();
+        $page = $this->withCookie((string) config('session.cookie'), $sessionId)
+            ->get('https://pos.example.test/platform')
+            ->assertSuccessful();
+        $matched = preg_match('/wire:snapshot="([^"]+)"/', $page->getContent(), $matches);
+        $this->assertSame(1, $matched, 'The platform page did not contain a Livewire snapshot.');
+        $snapshot = html_entity_decode($matches[1], ENT_QUOTES | ENT_HTML5);
+        $decodedSnapshot = json_decode($snapshot, true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame('platform', $decodedSnapshot['memo']['path'] ?? null);
+        $updateRoute = Route::getRoutes()->getByName('livewire.update');
+        $this->assertNotNull($updateRoute);
+        $payload = [
+            'components' => [[
+                'snapshot' => $snapshot,
+                'updates' => [],
+                'calls' => [],
+            ]],
+        ];
+        $updatePath = '/'.ltrim($updateRoute->uri(), '/');
+        $persistentMiddleware = Livewire::getPersistentMiddleware();
+        $this->assertContains(EnsureCentralHost::class, $persistentMiddleware);
+
+        $this->withCookie((string) config('session.cookie'), $sessionId)
+            ->withHeader('X-Livewire', 'true')
+            ->postJson('https://pos.example.test'.$updatePath, $payload)
+            ->assertSuccessful();
+
+        $this->withCookie((string) config('session.cookie'), $sessionId)
+            ->withHeader('X-Livewire', 'true')
+            ->postJson('https://platform-livewire-shop.pos.example.test'.$updatePath, $payload)
+            ->assertNotFound();
     }
 
     public function test_active_super_admin_can_access_platform_without_tenant_context(): void

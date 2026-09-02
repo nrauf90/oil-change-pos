@@ -27,6 +27,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -618,6 +619,54 @@ class SupportAccessTest extends PlatformTestCase
         $this->assertNotSame($oldSessionId, session()->getId());
         $this->assertAuthenticatedAs($platformUser, 'platform');
         $this->assertGuest('web');
+    }
+
+    public function test_platform_logout_ends_every_active_support_audit_before_revoking_authentication(): void
+    {
+        $platformUser = PlatformUser::factory()->create();
+        $firstShop = Shop::factory()->create(['status' => ShopStatus::Active]);
+        $secondShop = Shop::factory()->create(['status' => ShopStatus::Active]);
+        $endedShop = Shop::factory()->create(['status' => ShopStatus::Active]);
+        $this->travelTo('2026-09-03 09:00:00');
+        $alreadyEndedAudit = ShopAccessSession::start($platformUser, $endedShop);
+        $alreadyEndedAudit->end();
+        $this->travelTo('2026-09-03 10:00:00');
+        $firstActiveAudit = ShopAccessSession::start($platformUser, $firstShop);
+        $secondActiveAudit = ShopAccessSession::start($platformUser, $secondShop);
+        $this->actingAs($platformUser, 'platform')->withSession([
+            SupportAccessManager::SESSION_KEY => [
+                'audit_id' => $firstActiveAudit->getKey(),
+                'shop_id' => $firstShop->getKey(),
+            ],
+        ]);
+        $oldSessionId = session()->getId();
+        $this->travelTo('2026-09-03 10:30:00');
+
+        $this->post('https://pos.example.test/platform/logout')
+            ->assertRedirect()
+            ->assertSessionMissing(SupportAccessManager::SESSION_KEY);
+
+        $this->assertSame('2026-09-03 10:30:00', $firstActiveAudit->fresh()->ended_at?->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-09-03 10:30:00', $secondActiveAudit->fresh()->ended_at?->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-09-03 09:00:00', $alreadyEndedAudit->fresh()->ended_at?->format('Y-m-d H:i:s'));
+        $this->assertNotSame($oldSessionId, session()->getId());
+        $this->assertGuest('platform');
+    }
+
+    public function test_platform_logout_does_not_revoke_authentication_when_audit_teardown_fails(): void
+    {
+        $platformUser = PlatformUser::factory()->create();
+        $this->actingAs($platformUser, 'platform');
+        session()->save();
+        $oldSessionId = session()->getId();
+        Schema::connection('central')->drop('shop_access_sessions');
+
+        $this->withCookie((string) config('session.cookie'), $oldSessionId)
+            ->post('https://pos.example.test/platform/logout')
+            ->assertServerError();
+
+        $this->assertAuthenticatedAs($platformUser, 'platform');
+        $this->assertSame($oldSessionId, session()->getId());
     }
 
     public function test_exit_requires_csrf_and_leaves_active_audit_untouched_when_token_is_missing(): void

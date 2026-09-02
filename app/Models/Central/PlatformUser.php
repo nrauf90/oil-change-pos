@@ -75,6 +75,7 @@ class PlatformUser extends Authenticatable implements FilamentUser
                 throw new LogicException('The final active super administrator cannot be deactivated.');
             }
 
+            ShopAccessSession::endActiveForPlatformUser($platformUser);
             $platformUser->setRememberToken(Str::random(60));
             $platformUser->forceFill(['is_active' => false])->save();
             app(PlatformSessionAuthentication::class)->revokePersistedSessions(

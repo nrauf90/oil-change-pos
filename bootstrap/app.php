@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\EnforceReadOnlySupportAccess;
+use App\Http\Middleware\EnsureCentralHost;
 use App\Http\Middleware\EnsureFilamentActionMatchesTenant;
 use App\Http\Middleware\EnsureModuleIsEnabled;
 use App\Http\Middleware\EnsureShopIsActive;
@@ -12,6 +13,8 @@ use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
 use Filament\Http\Middleware\AuthenticateSession as FilamentAuthenticateSession;
 use Filament\Http\Middleware\SetUpPanel;
 use Illuminate\Auth\Middleware\Authenticate;
+use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
+use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -52,6 +55,12 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->appendToPriorityList(InitializeTenancy::class, EnsureFilamentActionMatchesTenant::class);
         $middleware->appendToPriorityList(EnsureFilamentActionMatchesTenant::class, SubstituteBindings::class);
         $middleware->appendToPriorityList(InitializeTenancy::class, SetUpPanel::class);
+        $middleware->prependToPriorityList([
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            StartSession::class,
+            SetUpPanel::class,
+        ], EnsureCentralHost::class);
         $middleware->prependToPriorityList(EnsureShopIsActive::class, InitializeSupportAccess::class);
         $middleware->prependToPriorityList([
             EnsureFilamentActionMatchesTenant::class,
