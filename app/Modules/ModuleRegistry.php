@@ -4,13 +4,14 @@ namespace App\Modules;
 
 use App\Enums\Permission;
 use App\Models\ModuleSetting;
+use App\Tenancy\TenantFeatureGate;
 use Illuminate\Support\Collection;
 
 /**
  * Holds every known module and answers "is this feature switched on?".
  *
- * Enabled state lives in the `modules` table and is cached for the request, so
- * the dozens of nav/permission checks on a page cost one query.
+ * Tenant preferences live in the `modules` table. The central platform state
+ * provides an additional ceiling, and both are cached for the request.
  */
 class ModuleRegistry
 {
@@ -21,8 +22,10 @@ class ModuleRegistry
     private ?array $enabledCache = null;
 
     /** @param array<int, Module> $modules */
-    public function __construct(array $modules = [])
-    {
+    public function __construct(
+        array $modules,
+        private readonly TenantFeatureGate $featureGate,
+    ) {
         foreach ($modules as $module) {
             $this->register($module);
         }
@@ -65,7 +68,7 @@ class ModuleRegistry
             return true;
         }
 
-        return $this->enabledMap()[$key] ?? $module->enabledByDefault();
+        return $this->moduleEnabled($module);
     }
 
     /** @return Collection<string, Module> */
@@ -79,6 +82,14 @@ class ModuleRegistry
         $module = $this->find($key);
 
         if (! $module instanceof Module || $module->isCore()) {
+            return;
+        }
+
+        if ($enabled && (! $this->featureGate->enabled($key) || ! $this->dependenciesEnabled($module))) {
+            return;
+        }
+
+        if (! $enabled && $this->enabledDependents($key)->isNotEmpty()) {
             return;
         }
 
@@ -160,6 +171,7 @@ class ModuleRegistry
     public function flush(): void
     {
         $this->enabledCache = null;
+        $this->featureGate->flush();
     }
 
     /** @return array<string, bool> */
@@ -169,5 +181,44 @@ class ModuleRegistry
             ->pluck('enabled', 'key')
             ->map(fn ($enabled) => (bool) $enabled)
             ->all();
+    }
+
+    /** @param array<string, true> $ancestors */
+    private function moduleEnabled(Module $module, array $ancestors = []): bool
+    {
+        if ($module->isCore()) {
+            return true;
+        }
+
+        $key = $module->key();
+
+        if (isset($ancestors[$key])
+            || ! $this->featureGate->enabled($key)
+            || ! ($this->enabledMap()[$key] ?? $module->enabledByDefault())) {
+            return false;
+        }
+
+        $ancestors[$key] = true;
+
+        foreach ($module->dependsOn() as $dependencyKey) {
+            $dependency = $this->find($dependencyKey);
+
+            if (! $dependency instanceof Module || ! $this->moduleEnabled($dependency, $ancestors)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function dependenciesEnabled(Module $module): bool
+    {
+        foreach ($module->dependsOn() as $dependencyKey) {
+            if (! $this->enabled($dependencyKey)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

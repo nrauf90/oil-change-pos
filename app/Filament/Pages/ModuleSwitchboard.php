@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Enums\Permission;
 use App\Modules\Module;
 use App\Modules\ModuleRegistry;
+use App\Tenancy\TenantFeatureGate;
 use BackedEnum;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -41,6 +42,7 @@ class ModuleSwitchboard extends Page
     public function getModuleRows(): array
     {
         $registry = app(ModuleRegistry::class);
+        $featureGate = app(TenantFeatureGate::class);
 
         return $registry->all()
             ->map(fn (Module $module) => [
@@ -49,6 +51,7 @@ class ModuleSwitchboard extends Page
                 'description' => $module->description(),
                 'icon' => $module->icon(),
                 'core' => $module->isCore(),
+                'platformEnabled' => $module->isCore() || $featureGate->enabled($module->key()),
                 'enabled' => $registry->enabled($module->key()),
                 'permissions' => $module->permissionNames(),
                 'dependsOn' => $module->dependsOn(),
@@ -82,7 +85,33 @@ class ModuleSwitchboard extends Page
             return;
         }
 
+        if (! app(TenantFeatureGate::class)->enabled($key)) {
+            Notification::make()
+                ->title($module->title().' is disabled by the platform')
+                ->body('Only a platform administrator can make this feature available to the shop.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
         $turningOff = $registry->enabled($key);
+
+        if (! $turningOff) {
+            $disabledDependencies = collect($module->dependsOn())
+                ->reject(fn (string $dependency): bool => $registry->enabled($dependency))
+                ->map(fn (string $dependency): string => $registry->find($dependency)?->title() ?? $dependency);
+
+            if ($disabledDependencies->isNotEmpty()) {
+                Notification::make()
+                    ->title('Switch on '.$disabledDependencies->join(', ', ' and ').' first')
+                    ->body($module->title().' depends on it.')
+                    ->warning()
+                    ->send();
+
+                return;
+            }
+        }
 
         // Refuse to pull the rug out from under a feature that is still on.
         if ($turningOff) {

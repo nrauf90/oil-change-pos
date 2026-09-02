@@ -1,0 +1,286 @@
+<?php
+
+namespace Tests\Feature\Tenancy;
+
+use App\Enums\ShopLifecycleEvent;
+use App\Filament\Pages\ModuleSwitchboard;
+use App\Filament\Platform\Resources\Shops\Pages\ViewShop;
+use App\Models\Central\PlatformUser;
+use App\Models\Central\Shop;
+use App\Models\Central\ShopFeature;
+use App\Models\ModuleSetting;
+use App\Models\User;
+use App\Modules\Module;
+use App\Modules\ModuleRegistry;
+use App\Tenancy\TenantConnectionManager;
+use App\Tenancy\TenantContext;
+use Filament\Facades\Filament;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Schema;
+use Livewire\Livewire;
+use Tests\TestCase;
+
+class PlatformFeatureEntitlementTest extends TestCase
+{
+    use RefreshDatabase;
+
+    /** ViewShop reconnects the per-test tenant, so only central uses a test transaction. */
+    protected array $connectionsToTransact = ['central'];
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $adminPanel = Filament::getPanels()['admin'] ?? null;
+
+        if ($adminPanel !== null) {
+            Filament::setCurrentPanel($adminPanel);
+        }
+    }
+
+    public function test_platform_off_feature_is_not_effectively_enabled(): void
+    {
+        ModuleSetting::query()->create(['key' => 'scripts', 'enabled' => true]);
+        $this->setPlatformFeature('scripts', false);
+
+        $this->assertFalse($this->registry()->enabled('scripts'));
+    }
+
+    public function test_missing_platform_row_uses_the_module_default(): void
+    {
+        $this->assertDatabaseMissing('shop_features', [
+            'shop_id' => $this->currentShop()->getKey(),
+            'module_key' => 'workshop',
+        ], 'central');
+
+        $this->assertTrue($this->registry()->enabled('workshop'));
+    }
+
+    public function test_core_module_remains_enabled_when_both_stored_states_are_off(): void
+    {
+        ModuleSetting::query()->create(['key' => 'sales', 'enabled' => false]);
+        $this->setPlatformFeature('sales', false);
+
+        $this->assertTrue($this->registry()->enabled('sales'));
+    }
+
+    public function test_tenant_off_preference_remains_effectively_off_when_platform_allows_feature(): void
+    {
+        ModuleSetting::query()->create(['key' => 'expenses', 'enabled' => false]);
+        $this->setPlatformFeature('expenses', true);
+
+        $this->assertFalse($this->registry()->enabled('expenses'));
+    }
+
+    public function test_platform_lookup_failure_with_current_shop_fails_closed(): void
+    {
+        ModuleSetting::query()->create(['key' => 'scripts', 'enabled' => true]);
+        Schema::connection('central')->drop('shop_features');
+        $this->registry()->flush();
+
+        $this->assertFalse($this->registry()->enabled('scripts'));
+    }
+
+    public function test_platform_off_feature_route_returns_404(): void
+    {
+        $this->actingAs(User::factory()->admin()->create());
+        $this->setPlatformFeature('scripts', false);
+
+        $this->get(route('scripts.index'))->assertNotFound();
+    }
+
+    public function test_platform_off_feature_is_hidden_from_navigation(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $this->setPlatformFeature('expenses', false);
+
+        $labels = collect($this->registry()->navigationFor($admin))->pluck('label')->all();
+
+        $this->assertNotContains('Expenses', $labels);
+    }
+
+    public function test_owner_cannot_override_platform_off_feature_from_switchboard(): void
+    {
+        $owner = User::factory()->admin()->create();
+        ModuleSetting::query()->create(['key' => 'scripts', 'enabled' => false]);
+        $this->setPlatformFeature('scripts', false);
+
+        Livewire::actingAs($owner)
+            ->test(ModuleSwitchboard::class)
+            ->call('toggle', 'scripts');
+
+        $this->assertDatabaseHas('modules', [
+            'key' => 'scripts',
+            'enabled' => false,
+        ], 'tenant');
+    }
+
+    public function test_tenant_cannot_enable_module_while_dependency_is_off(): void
+    {
+        $registry = $this->registry();
+        $registry->register(new TestDependencyModule);
+        $registry->register(new TestDependentModule);
+        ModuleSetting::query()->create(['key' => 'test-dependency', 'enabled' => false]);
+        ModuleSetting::query()->create(['key' => 'test-dependent', 'enabled' => false]);
+        $registry->flush();
+
+        $registry->setEnabled('test-dependent', true);
+
+        $this->assertDatabaseHas('modules', [
+            'key' => 'test-dependent',
+            'enabled' => false,
+        ], 'tenant');
+        $this->assertFalse($registry->enabled('test-dependent'));
+    }
+
+    public function test_platform_disable_and_reenable_preserves_tenant_data_and_creates_safe_audits(): void
+    {
+        $platformUser = PlatformUser::factory()->create();
+        $shop = $this->currentShop();
+        $tenantSetting = ModuleSetting::query()->create(['key' => 'scripts', 'enabled' => true]);
+
+        $this->platformShopPage($platformUser, $shop)
+            ->callAction('manageFeatures', [
+                'feature_keys' => ['reports', 'expenses', 'workshop'],
+            ])
+            ->assertNotified('Features updated');
+
+        $this->assertDatabaseHas('shop_features', [
+            'shop_id' => $shop->getKey(),
+            'module_key' => 'scripts',
+            'enabled' => false,
+        ], 'central');
+        $this->assertTenantSettingPreserved($shop, $tenantSetting);
+
+        $disabledAudit = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::FeatureDisabled)
+            ->firstOrFail();
+
+        $this->assertSame($platformUser->getKey(), $disabledAudit->platform_user_id);
+        $this->assertSame([
+            'module_key' => 'scripts',
+            'reason_code' => 'platform_action',
+        ], $disabledAudit->metadata);
+
+        $this->platformShopPage($platformUser, $shop)
+            ->callAction('manageFeatures', [
+                'feature_keys' => ['reports', 'expenses', 'scripts', 'workshop'],
+            ])
+            ->assertNotified('Features updated');
+
+        $this->assertDatabaseHas('shop_features', [
+            'shop_id' => $shop->getKey(),
+            'module_key' => 'scripts',
+            'enabled' => true,
+        ], 'central');
+        $this->assertTenantSettingPreserved($shop, $tenantSetting);
+
+        $enabledAudit = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::FeatureEnabled)
+            ->firstOrFail();
+
+        $this->assertSame([
+            'module_key' => 'scripts',
+            'reason_code' => 'platform_action',
+        ], $enabledAudit->metadata);
+        $this->assertStringNotContainsString(
+            'secret',
+            strtolower((string) json_encode([
+                $disabledAudit->metadata,
+                $enabledAudit->metadata,
+            ], JSON_THROW_ON_ERROR)),
+        );
+    }
+
+    private function registry(): ModuleRegistry
+    {
+        return resolve(ModuleRegistry::class);
+    }
+
+    private function currentShop(): Shop
+    {
+        return resolve(TenantContext::class)->shop();
+    }
+
+    private function setPlatformFeature(string $moduleKey, bool $enabled): void
+    {
+        ShopFeature::query()->updateOrCreate(
+            [
+                'shop_id' => $this->currentShop()->getKey(),
+                'module_key' => $moduleKey,
+            ],
+            ['enabled' => $enabled],
+        );
+        $this->registry()->flush();
+    }
+
+    private function platformShopPage(PlatformUser $platformUser, Shop $shop): mixed
+    {
+        Filament::setCurrentPanel(Filament::getPanels()['platform']);
+
+        return Livewire::actingAs($platformUser, 'platform')
+            ->test(ViewShop::class, ['record' => $shop->getKey()]);
+    }
+
+    private function assertTenantSettingPreserved(Shop $shop, ModuleSetting $setting): void
+    {
+        resolve(TenantConnectionManager::class)->within($shop, function () use ($setting): void {
+            $this->assertDatabaseHas('modules', [
+                'id' => $setting->getKey(),
+                'key' => 'scripts',
+                'enabled' => true,
+            ], 'tenant');
+        });
+    }
+}
+
+final class TestDependencyModule extends Module
+{
+    public function key(): string
+    {
+        return 'test-dependency';
+    }
+
+    public function title(): string
+    {
+        return 'Test dependency';
+    }
+
+    public function description(): string
+    {
+        return 'Dependency fixture.';
+    }
+
+    public function permissions(): array
+    {
+        return [];
+    }
+}
+
+final class TestDependentModule extends Module
+{
+    public function key(): string
+    {
+        return 'test-dependent';
+    }
+
+    public function title(): string
+    {
+        return 'Test dependent';
+    }
+
+    public function description(): string
+    {
+        return 'Dependent fixture.';
+    }
+
+    public function permissions(): array
+    {
+        return [];
+    }
+
+    public function dependsOn(): array
+    {
+        return ['test-dependency'];
+    }
+}
