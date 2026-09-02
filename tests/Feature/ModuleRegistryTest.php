@@ -152,6 +152,35 @@ class ModuleRegistryTest extends TestCase
         $this->assertSame([], $this->registry()->navigationFor(null));
     }
 
+    public function test_shipped_module_and_navigation_icons_use_heroicons(): void
+    {
+        foreach ($this->registry()->all() as $module) {
+            $this->assertStringStartsWith(
+                'heroicon-o-',
+                $module->icon(),
+                "{$module->key()} must use an outlined Heroicon",
+            );
+
+            foreach ($module->navigation() as $entry) {
+                $this->assertStringStartsWith(
+                    'heroicon-o-',
+                    $entry['icon'],
+                    "{$entry['label']} must use an outlined Heroicon",
+                );
+            }
+        }
+    }
+
+    public function test_tenant_navigation_renders_module_heroicons_as_svg(): void
+    {
+        $this->actingAs(User::factory()->manager()->create());
+
+        $this->get(route('pos.create'))
+            ->assertOk()
+            ->assertSee('data-navigation-icon', false)
+            ->assertDontSee('heroicon-o-shopping-cart', false);
+    }
+
     /* ---------------------------------------------------------------- */
     /* Route gating */
     /* ---------------------------------------------------------------- */

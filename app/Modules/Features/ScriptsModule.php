@@ -24,7 +24,7 @@ class ScriptsModule extends Module
 
     public function icon(): string
     {
-        return '&#128172;';
+        return 'heroicon-o-chat-bubble-left-right';
     }
 
     public function permissions(): array
@@ -35,7 +35,7 @@ class ScriptsModule extends Module
     public function navigation(): array
     {
         return [
-            ['route' => 'scripts.index', 'pattern' => 'scripts*', 'label' => 'Scripts', 'permission' => Permission::ViewScripts, 'icon' => '&#128172;'],
+            ['route' => 'scripts.index', 'pattern' => 'scripts*', 'label' => 'Scripts', 'permission' => Permission::ViewScripts, 'icon' => 'heroicon-o-chat-bubble-left-right'],
         ];
     }
 }

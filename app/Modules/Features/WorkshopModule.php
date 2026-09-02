@@ -24,7 +24,7 @@ class WorkshopModule extends Module
 
     public function icon(): string
     {
-        return '&#128295;';
+        return 'heroicon-o-wrench-screwdriver';
     }
 
     public function permissions(): array
@@ -40,8 +40,8 @@ class WorkshopModule extends Module
     public function navigation(): array
     {
         return [
-            ['route' => 'service-history.index', 'pattern' => 'service-history*', 'label' => 'Vehicle History', 'permission' => Permission::LookupServiceHistory, 'icon' => '&#128663;'],
-            ['route' => 'inspections.index', 'pattern' => 'inspections*', 'label' => 'Inspections', 'permission' => Permission::ViewAnyInspection, 'icon' => '&#128203;'],
+            ['route' => 'service-history.index', 'pattern' => 'service-history*', 'label' => 'Vehicle History', 'permission' => Permission::LookupServiceHistory, 'icon' => 'heroicon-o-truck'],
+            ['route' => 'inspections.index', 'pattern' => 'inspections*', 'label' => 'Inspections', 'permission' => Permission::ViewAnyInspection, 'icon' => 'heroicon-o-clipboard-document-check'],
         ];
     }
 }

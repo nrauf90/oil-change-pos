@@ -14,7 +14,10 @@
             ])>
                 <div class="flex items-start justify-between gap-4">
                     <div class="flex min-w-0 items-start gap-3">
-                        <span class="text-2xl leading-none">{!! $module['icon'] !!}</span>
+                        <x-filament::icon
+                            :icon="$module['icon']"
+                            class="size-7 shrink-0 text-primary-600 dark:text-primary-400"
+                        />
                         <div class="min-w-0">
                             <h3 class="flex flex-wrap items-center gap-2 font-semibold text-gray-950 dark:text-white">
                                 {{ $module['title'] }}

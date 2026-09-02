@@ -21,10 +21,10 @@ abstract class Module
 
     abstract public function description(): string;
 
-    /** An emoji or short glyph for the nav and the admin toggle list. */
+    /** An outlined Heroicon name for the nav and the admin toggle list. */
     public function icon(): string
     {
-        return '&#9881;';
+        return 'heroicon-o-cog-6-tooth';
     }
 
     /**

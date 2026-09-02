@@ -24,7 +24,7 @@ class AdminModule extends Module
 
     public function icon(): string
     {
-        return '&#128273;';
+        return 'heroicon-o-key';
     }
 
     public function isCore(): bool
@@ -55,7 +55,7 @@ class AdminModule extends Module
                 'label' => 'Suppliers & Payables',
                 'permission' => Permission::ManageSuppliers,
                 'group' => 'account',
-                'icon' => '&#128666;',
+                'icon' => 'heroicon-o-truck',
             ],
             // An audit trail is looked at now and then, not worked in all day,
             // so it sits in the profile menu rather than the counter bar.
@@ -65,7 +65,7 @@ class AdminModule extends Module
                 'label' => 'Activity Log',
                 'permission' => Permission::ViewActivityLog,
                 'group' => 'account',
-                'icon' => '&#128220;',
+                'icon' => 'heroicon-o-clipboard-document-list',
             ],
         ];
     }

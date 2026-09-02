@@ -10,7 +10,9 @@
 
 <div class="w-full max-w-sm">
     <div class="mb-6 text-center">
-        <span class="mx-auto grid size-14 place-items-center rounded-xl bg-amber-500 text-3xl text-slate-900">&#9881;</span>
+        <span class="mx-auto grid size-14 place-items-center rounded-xl bg-amber-500 text-slate-900">
+            <x-filament::icon icon="heroicon-o-wrench-screwdriver" class="size-7" />
+        </span>
         <h1 class="mt-4 text-2xl font-black tracking-tight text-white">{{ config('app.name') }}</h1>
         <p class="mt-1 text-sm font-medium text-slate-400">Oil change &amp; auto repair</p>
     </div>

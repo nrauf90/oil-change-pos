@@ -68,7 +68,7 @@
 
 @if (! $hasActivity)
     <div class="card p-12 text-center">
-        <div class="text-5xl">&#128176;</div>
+        <x-filament::icon icon="heroicon-o-wallet" class="mx-auto size-12 text-slate-400" />
         <p class="mt-4 text-xl font-black tracking-tight">Nothing through the drawer for {{ $label }}</p>
         <p class="mt-1 text-sm font-medium text-slate-500">
             No sales were finalised and no expenses were logged in this period.

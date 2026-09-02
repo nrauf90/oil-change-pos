@@ -24,7 +24,7 @@ class ExpensesModule extends Module
 
     public function icon(): string
     {
-        return '&#128181;';
+        return 'heroicon-o-banknotes';
     }
 
     public function dependsOn(): array
@@ -46,8 +46,8 @@ class ExpensesModule extends Module
     public function navigation(): array
     {
         return [
-            ['route' => 'expenses.index', 'pattern' => 'expenses*', 'label' => 'Expenses', 'permission' => Permission::ViewAnyExpense, 'icon' => '&#128181;'],
-            ['route' => 'cash-drawer.index', 'pattern' => 'cash-drawer*', 'label' => 'Cash Drawer', 'permission' => Permission::ViewCashDrawer, 'icon' => '&#128176;'],
+            ['route' => 'expenses.index', 'pattern' => 'expenses*', 'label' => 'Expenses', 'permission' => Permission::ViewAnyExpense, 'icon' => 'heroicon-o-banknotes'],
+            ['route' => 'cash-drawer.index', 'pattern' => 'cash-drawer*', 'label' => 'Cash Drawer', 'permission' => Permission::ViewCashDrawer, 'icon' => 'heroicon-o-wallet'],
         ];
     }
 }
