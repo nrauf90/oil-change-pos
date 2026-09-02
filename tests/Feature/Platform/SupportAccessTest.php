@@ -25,10 +25,12 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
+use RuntimeException;
 
 class SupportAccessTest extends PlatformTestCase
 {
@@ -271,6 +273,101 @@ class SupportAccessTest extends PlatformTestCase
                 'shop_id' => $secondShop->getKey(),
             ],
             session('platform.support_access'),
+        );
+    }
+
+    public function test_start_replaces_an_active_audit_missing_from_the_local_session(): void
+    {
+        $platformUser = PlatformUser::factory()->create();
+        $firstShop = Shop::factory()->create(['status' => ShopStatus::Active]);
+        $secondShop = Shop::factory()->create(['status' => ShopStatus::Active]);
+        $orphanedAudit = ShopAccessSession::start($platformUser, $firstShop);
+        $this->actingAs($platformUser, 'platform');
+
+        $this->postJson('/__support-access/start/'.$secondShop->getKey(), [
+            'platform_user_id' => $platformUser->getKey(),
+            'reason' => 'Serialized replacement',
+        ])->assertSuccessful();
+
+        $this->assertNotNull($orphanedAudit->fresh()->ended_at);
+        $this->assertSame(1, ShopAccessSession::query()->whereNull('ended_at')->count());
+        $this->assertSame(
+            $secondShop->getKey(),
+            ShopAccessSession::query()->whereNull('ended_at')->sole()->shop_id,
+        );
+    }
+
+    public function test_start_rolls_back_audit_when_the_transition_fails_after_insert(): void
+    {
+        $platformUser = PlatformUser::factory()->create();
+        $shop = Shop::factory()->create(['status' => ShopStatus::Active]);
+        $this->actingAs($platformUser, 'platform');
+        Event::listen(
+            'eloquent.created: '.ShopAccessSession::class,
+            static function (): void {
+                throw new RuntimeException('Simulated post-insert transition failure.');
+            },
+        );
+        $this->withoutExceptionHandling();
+
+        try {
+            $this->postJson('/__support-access/start/'.$shop->getKey(), [
+                'platform_user_id' => $platformUser->getKey(),
+                'reason' => 'Atomic transition',
+            ]);
+            $this->fail('The simulated transition failure was not raised.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Simulated post-insert transition failure.', $exception->getMessage());
+        }
+
+        $this->assertDatabaseCount('shop_access_sessions', 0, 'central');
+        $this->assertFalse(session()->has(SupportAccessManager::SESSION_KEY));
+    }
+
+    public function test_production_start_requires_a_shared_session_cookie_domain(): void
+    {
+        config()->set('app.env', 'production');
+        config()->set('session.domain');
+        $platformUser = PlatformUser::factory()->create();
+        $shop = Shop::factory()->create(['status' => ShopStatus::Active]);
+        $this->actingAs($platformUser, 'platform');
+        $this->withoutExceptionHandling();
+
+        try {
+            $this->postJson('/__support-access/start/'.$shop->getKey(), [
+                'platform_user_id' => $platformUser->getKey(),
+                'reason' => 'Production support',
+            ]);
+            $this->fail('A host-only production session cookie must not start cross-subdomain support access.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame(
+                'Support access requires SESSION_DOMAIN to match the central application host.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertDatabaseCount('shop_access_sessions', 0, 'central');
+    }
+
+    public function test_production_start_uses_the_configured_shared_session_domain(): void
+    {
+        config()->set('app.env', 'production');
+        config()->set('session.domain', '.pos.example.test');
+        $platformUser = PlatformUser::factory()->create();
+        $shop = Shop::factory()->create([
+            'slug' => 'north-support',
+            'status' => ShopStatus::Active,
+        ]);
+        $this->actingAs($platformUser, 'platform');
+
+        $this->postJson('/__support-access/start/'.$shop->getKey(), [
+            'platform_user_id' => $platformUser->getKey(),
+            'reason' => 'Production support',
+        ])->assertSuccessful();
+
+        $this->assertSame(
+            'https://north-support.pos.example.test/admin',
+            resolve(SupportAccessManager::class)->tenantEntryUrl($shop),
         );
     }
 

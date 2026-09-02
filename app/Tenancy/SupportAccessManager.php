@@ -14,7 +14,9 @@ use Illuminate\Auth\SessionGuard;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Cookie\QueueingFactory as CookieJar;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use RuntimeException;
+use Throwable;
 
 final readonly class SupportAccessManager
 {
@@ -31,36 +33,52 @@ final readonly class SupportAccessManager
 
     public function start(PlatformUser $user, Shop $shop, ?string $reason): ShopAccessSession
     {
+        $this->assertProductionSessionDomain();
+
         if (! $this->request->hasSession()) {
             throw new RuntimeException('Support access requires a server-side session.');
         }
 
-        [$platformUser, $activeShop] = $this->authorizedStartSubjects($user, $shop);
         $session = $this->request->session();
-        $currentAudit = $this->currentOwnedAudit($platformUser);
 
-        if ($currentAudit instanceof ShopAccessSession) {
-            $currentAudit->end();
-        }
+        return DB::connection('central')->transaction(function () use ($user, $shop, $reason, $session): ShopAccessSession {
+            [$platformUser, $activeShop] = $this->authorizedStartSubjects($user, $shop, true);
+            $activeAudits = ShopAccessSession::query()
+                ->where('platform_user_id', $platformUser->getKey())
+                ->whereNull('ended_at')
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
 
-        $session->forget(self::SESSION_KEY);
-        $this->forgetTenantIdentity($this->request);
+            foreach ($activeAudits as $activeAudit) {
+                $activeAudit->end();
+            }
 
-        $audit = ShopAccessSession::start(
-            platformUser: $platformUser,
-            shop: $activeShop,
-            reason: $reason,
-            ipAddress: $this->request->ip(),
-            userAgent: $this->request->userAgent(),
-        );
+            $session->forget(self::SESSION_KEY);
+            $this->forgetTenantIdentity($this->request);
 
-        $session->put(self::SESSION_KEY, [
-            'audit_id' => $audit->getKey(),
-            'shop_id' => $activeShop->getKey(),
-        ]);
-        $session->regenerate(true);
+            $audit = ShopAccessSession::start(
+                platformUser: $platformUser,
+                shop: $activeShop,
+                reason: $reason,
+                ipAddress: $this->request->ip(),
+                userAgent: $this->request->userAgent(),
+            );
 
-        return $audit;
+            try {
+                $session->put(self::SESSION_KEY, [
+                    'audit_id' => $audit->getKey(),
+                    'shop_id' => $activeShop->getKey(),
+                ]);
+                $session->regenerate(true);
+            } catch (Throwable $exception) {
+                $session->forget(self::SESSION_KEY);
+
+                throw $exception;
+            }
+
+            return $audit;
+        });
     }
 
     public function end(): void
@@ -207,8 +225,11 @@ final readonly class SupportAccessManager
     }
 
     /** @return array{PlatformUser, Shop} */
-    private function authorizedStartSubjects(PlatformUser $user, Shop $shop): array
-    {
+    private function authorizedStartSubjects(
+        PlatformUser $user,
+        Shop $shop,
+        bool $lockForUpdate = false,
+    ): array {
         $authenticatedUser = $this->auth->guard('platform')->user();
 
         if ($user::class !== PlatformUser::class
@@ -218,21 +239,31 @@ final readonly class SupportAccessManager
             throw new AuthorizationException('Active platform administrator authentication is required.');
         }
 
-        $platformUser = PlatformUser::query()
+        $platformUserQuery = PlatformUser::query()
             ->whereKey($user->getKey())
             ->where('role', PlatformUser::ROLE_SUPER_ADMIN)
-            ->where('is_active', true)
-            ->first();
+            ->where('is_active', true);
+
+        if ($lockForUpdate) {
+            $platformUserQuery->lockForUpdate();
+        }
+
+        $platformUser = $platformUserQuery->first();
 
         if (! $platformUser instanceof PlatformUser
             || ! $this->platformAuthentication->currentSessionMatches($platformUser)) {
             throw new AuthorizationException('Active platform administrator authentication is required.');
         }
 
-        $activeShop = Shop::query()
+        $activeShopQuery = Shop::query()
             ->whereKey($shop->getKey())
-            ->where('status', ShopStatus::Active)
-            ->first();
+            ->where('status', ShopStatus::Active);
+
+        if ($lockForUpdate) {
+            $activeShopQuery->lockForUpdate();
+        }
+
+        $activeShop = $activeShopQuery->first();
 
         if ($shop::class !== Shop::class || ! $activeShop instanceof Shop) {
             throw new AuthorizationException('Support access is available only for active shops.');
@@ -241,25 +272,6 @@ final readonly class SupportAccessManager
         $this->auth->guard('platform')->setUser($platformUser);
 
         return [$platformUser, $activeShop];
-    }
-
-    private function currentOwnedAudit(PlatformUser $platformUser): ?ShopAccessSession
-    {
-        $state = $this->request->session()->get(self::SESSION_KEY);
-
-        if (! is_array($state)
-            || array_keys($state) !== ['audit_id', 'shop_id']
-            || ! is_string($state['audit_id'])
-            || ! is_string($state['shop_id'])) {
-            return null;
-        }
-
-        return ShopAccessSession::query()
-            ->whereKey($state['audit_id'])
-            ->where('platform_user_id', $platformUser->getKey())
-            ->where('shop_id', $state['shop_id'])
-            ->whereNull('ended_at')
-            ->first();
     }
 
     private function ownedActiveAudit(
@@ -325,5 +337,25 @@ final readonly class SupportAccessManager
         }
 
         return $origin;
+    }
+
+    private function assertProductionSessionDomain(): void
+    {
+        if (in_array((string) $this->config->get('app.env'), ['local', 'testing'], true)) {
+            return;
+        }
+
+        $originHost = parse_url($this->configuredOrigin(), PHP_URL_HOST);
+        $sessionDomain = $this->config->get('session.domain');
+        $normalizedSessionDomain = is_string($sessionDomain)
+            ? ltrim(strtolower(trim($sessionDomain)), '.')
+            : '';
+
+        if (! is_string($originHost)
+            || ! hash_equals(strtolower($originHost), $normalizedSessionDomain)) {
+            throw new RuntimeException(
+                'Support access requires SESSION_DOMAIN to match the central application host.',
+            );
+        }
     }
 }
