@@ -10,6 +10,7 @@ use App\Modules\Features\SalesModule;
 use App\Modules\Features\ScriptsModule;
 use App\Modules\Features\WorkshopModule;
 use App\Modules\ModuleRegistry;
+use App\Tenancy\TenantFeatureGate;
 use Illuminate\Support\ServiceProvider;
 
 class ModuleServiceProvider extends ServiceProvider
@@ -32,7 +33,8 @@ class ModuleServiceProvider extends ServiceProvider
     {
         $this->app->singleton(ModuleRegistry::class, function (): ModuleRegistry {
             return new ModuleRegistry(
-                array_map(fn (string $module) => new $module, self::MODULES)
+                modules: array_map(fn (string $module) => new $module, self::MODULES),
+                featureGate: $this->app->make(TenantFeatureGate::class),
             );
         });
     }
