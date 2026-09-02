@@ -167,6 +167,77 @@ class ServiceHistoryTest extends TestCase
             ->assertSee('Repair');
     }
 
+    public function test_a_past_visit_shows_its_next_checkup_mileage(): void
+    {
+        $this->pricedSale([
+            'phone' => '03001234567',
+            'vehicle_plate' => 'AAA-111',
+            'mileage' => 84500,
+            'next_checkup_mileage' => 90000,
+        ]);
+
+        $this->actingAs($this->technician())
+            ->get(route('service-history.index', ['q' => '03001234567']))
+            ->assertOk()
+            ->assertSee('Visit odometer reading')
+            ->assertSee('84,500 km')
+            ->assertSee('Next checkup mileage')
+            ->assertSee('90,000 km');
+    }
+
+    public function test_visits_for_the_same_vehicle_render_in_one_collapsed_vehicle_card(): void
+    {
+        $older = $this->pricedSale([
+            'customer_name' => 'Ali Raza', 'phone' => '03001234567', 'vehicle_plate' => 'AAA-111',
+            'vehicle_model' => 'Toyota Corolla 2018', 'mileage' => 60100,
+        ]);
+        $older->forceFill(['created_at' => '2025-02-10 10:00:00'])->save();
+
+        $newer = $this->pricedSale([
+            'customer_name' => 'Ali Raza', 'phone' => '03001234567', 'vehicle_plate' => 'AAA 111',
+            'vehicle_model' => 'Toyota Corolla 2018', 'mileage' => 74300,
+        ]);
+        $newer->forceFill(['created_at' => '2026-08-20 10:00:00'])->save();
+
+        $response = $this->actingAs($this->technician())
+            ->get(route('service-history.index', ['q' => '03001234567']))
+            ->assertSee('Last visit')
+            ->assertSee('20 Aug 2026')
+            ->assertSee('2 visits')
+            ->assertSeeInOrder([$newer->invoice_number, $older->invoice_number]);
+
+        $this->assertMatchesRegularExpression(
+            '/<details(?![^>]*\\bopen\\b)[^>]*data-vehicle-history[^>]*>/',
+            $response->getContent(),
+        );
+        $this->assertMatchesRegularExpression(
+            '/<summary[^>]*>.*Visit odometer reading.*74,300 km.*<\/summary>/s',
+            $response->getContent(),
+        );
+        $this->assertSame(1, substr_count($response->getContent(), 'data-vehicle-history'));
+    }
+
+    public function test_different_vehicles_render_as_separate_vehicle_cards(): void
+    {
+        $this->pricedSale([
+            'customer_name' => 'Ali Raza', 'phone' => '03001234567',
+            'vehicle_plate' => 'AAA-111', 'vehicle_model' => 'Toyota Corolla 2018',
+        ]);
+        $this->pricedSale([
+            'customer_name' => 'Ali Raza', 'phone' => '03001234567',
+            'vehicle_plate' => 'BBB-222', 'vehicle_model' => 'Honda Civic 2021',
+        ]);
+
+        $response = $this->actingAs($this->technician())
+            ->get(route('service-history.index', ['q' => '03001234567']))
+            ->assertSee('AAA-111')
+            ->assertSee('Toyota Corolla 2018')
+            ->assertSee('BBB-222')
+            ->assertSee('Honda Civic 2021');
+
+        $this->assertSame(2, substr_count($response->getContent(), 'data-vehicle-history'));
+    }
+
     /* ---------------------------------------------------------------- */
     /* The critical rule: technicians never see money */
     /* ---------------------------------------------------------------- */

@@ -102,6 +102,7 @@ class VehicleMakeResource extends Resource
     public static function configureVehicleModelDeleteAction(Action $action): Action
     {
         return $action
+            ->color('danger')
             ->requiresConfirmation()
             ->modalHeading('Delete vehicle model?')
             ->modalDescription(function (array $arguments, Repeater $component): HtmlString {

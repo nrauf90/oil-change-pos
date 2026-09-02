@@ -34,7 +34,7 @@ class Sale extends Model
      */
     protected $fillable = [
         'customer_name', 'phone', 'vehicle_model',
-        'vehicle_plate', 'mileage', 'labor_charge', 'misc_charge', 'notes',
+        'vehicle_plate', 'mileage', 'next_checkup_mileage', 'labor_charge', 'misc_charge', 'notes',
     ];
 
     /** @return array<string, string> */
@@ -42,6 +42,7 @@ class Sale extends Model
     {
         return [
             'mileage' => 'integer',
+            'next_checkup_mileage' => 'integer',
             'labor_charge' => 'decimal:2',
             'misc_charge' => 'decimal:2',
             'total_amount' => 'decimal:2',

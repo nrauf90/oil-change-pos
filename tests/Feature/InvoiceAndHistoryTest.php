@@ -32,6 +32,7 @@ class InvoiceAndHistoryTest extends TestCase
             'vehicle_model' => 'Toyota Corolla 2018',
             'vehicle_plate' => 'ABC-123',
             'mileage' => 84500,
+            'next_checkup_mileage' => 90000,
         ]);
 
         $this->get(route('sales.show', $sale))
@@ -41,7 +42,25 @@ class InvoiceAndHistoryTest extends TestCase
             ->assertSee('03001234567')
             ->assertSee('Toyota Corolla 2018')
             ->assertSee('ABC-123')
-            ->assertSee('84,500 km');
+            ->assertSee('Visit odometer reading')
+            ->assertSee('84,500 km')
+            ->assertSee('Next checkup mileage')
+            ->assertSee('90,000 km');
+    }
+
+    public function test_the_invoice_pdf_lists_visit_and_next_checkup_mileage(): void
+    {
+        $sale = Sale::factory()->create([
+            'mileage' => 84500,
+            'next_checkup_mileage' => 90000,
+        ]);
+
+        $pdfHtml = view('sales.pdf', ['sale' => $sale])->render();
+
+        $this->assertStringContainsString('Visit odometer reading', $pdfHtml);
+        $this->assertStringContainsString('84,500 km', $pdfHtml);
+        $this->assertStringContainsString('Next checkup mileage', $pdfHtml);
+        $this->assertStringContainsString('90,000 km', $pdfHtml);
     }
 
     public function test_an_invoice_lists_every_line_at_the_price_that_was_charged(): void

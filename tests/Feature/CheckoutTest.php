@@ -49,7 +49,7 @@ class CheckoutTest extends TestCase
 
     public function test_a_sale_is_recorded_with_customer_and_vehicle_details(): void
     {
-        $this->post(route('sales.store'), $this->payload())->assertRedirect();
+        $this->post(route('sales.store'), $this->payload(['next_checkup_mileage' => 90000]))->assertRedirect();
 
         $this->assertDatabaseHas('sales', [
             'customer_name' => 'Ali Raza',
@@ -57,6 +57,7 @@ class CheckoutTest extends TestCase
             'vehicle_model' => 'Toyota Corolla 2018',
             'vehicle_plate' => 'ABC-123',
             'mileage' => 84500,
+            'next_checkup_mileage' => 90000,
         ]);
     }
 
@@ -247,6 +248,24 @@ class CheckoutTest extends TestCase
             ->assertSessionHasErrors('mileage');
     }
 
+    public function test_next_checkup_mileage_must_be_a_non_negative_whole_number(): void
+    {
+        $this->post(route('sales.store'), $this->payload(['next_checkup_mileage' => '-5']))
+            ->assertSessionHasErrors('next_checkup_mileage');
+    }
+
+    public function test_next_checkup_mileage_must_be_a_whole_number(): void
+    {
+        $this->post(route('sales.store'), $this->payload(['next_checkup_mileage' => '90000.5']))
+            ->assertSessionHasErrors('next_checkup_mileage');
+    }
+
+    public function test_next_checkup_mileage_cannot_exceed_the_visit_odometer_limit(): void
+    {
+        $this->post(route('sales.store'), $this->payload(['next_checkup_mileage' => 100000000]))
+            ->assertSessionHasErrors('next_checkup_mileage');
+    }
+
     public function test_a_failed_checkout_saves_nothing_at_all(): void
     {
         $this->post(route('sales.store'), $this->payload([
@@ -264,11 +283,12 @@ class CheckoutTest extends TestCase
     {
         $this->post(route('sales.store'), $this->payload([
             'customer_name' => '', 'phone' => '', 'vehicle_model' => '',
-            'vehicle_plate' => '', 'mileage' => '',
+            'vehicle_plate' => '', 'mileage' => '', 'next_checkup_mileage' => '',
         ]))->assertRedirect();
 
         $this->assertDatabaseCount('sales', 1);
         $this->assertNull(Sale::sole()->mileage);
+        $this->assertNull(Sale::sole()->next_checkup_mileage);
     }
 
     public function test_the_plate_number_is_stored_uppercased_and_trimmed(): void
@@ -508,6 +528,7 @@ class CheckoutTest extends TestCase
             'customer_name' => 'Ali Raza',
             'vehicle_plate' => 'ABC-123',
             'mileage' => 84500,
+            'next_checkup_mileage' => 91234,
             'labor_charge' => '750',
             'misc_charge' => '125.50',
             'lines' => [
@@ -525,6 +546,7 @@ class CheckoutTest extends TestCase
             ->assertSee('Ali Raza', false)
             ->assertSee('ABC-123', false)
             ->assertSee('84500', false)
+            ->assertSee('next_checkup_mileage\\u0022:\\u002291234\\u0022', false)
             ->assertSee('750', false)
             ->assertSee('125.50', false)
             ->assertSee('4200', false)

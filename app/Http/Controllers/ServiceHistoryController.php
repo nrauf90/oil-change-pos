@@ -21,12 +21,19 @@ class ServiceHistoryController extends Controller
         // looks up the literal "Array", so anything but a string is no search.
         $search = trim(is_string($q = $request->query('q')) ? $q : '');
         $withPricing = (bool) $request->user()?->can(Permission::ViewPricing->value);
+        $visits = ServiceHistory::lookup($search, $withPricing);
+        $vehicles = $visits->groupBy(function ($visit): string {
+            $plate = ServiceHistory::normalisePlate($visit->vehicle_plate);
+
+            return $plate !== '' ? 'plate:'.$plate : 'visit:'.$visit->getKey();
+        });
 
         return view('service-history.index', [
             'search' => $search,
             'searched' => $search !== '',
             'showPricing' => $withPricing,
-            'visits' => ServiceHistory::lookup($search, $withPricing),
+            'vehicles' => $vehicles,
+            'visits' => $visits,
         ]);
     }
 }
