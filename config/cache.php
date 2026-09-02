@@ -47,6 +47,15 @@ return [
             'lock_table' => env('DB_CACHE_LOCK_TABLE', 'cache_locks'),
         ],
 
+        'feature_entitlement_locks' => [
+            'driver' => 'database',
+            'connection' => 'central',
+            'table' => env('DB_CACHE_TABLE', 'cache'),
+            'lock_connection' => 'central',
+            'lock_table' => env('DB_CACHE_LOCK_TABLE', 'cache_locks'),
+            'lock_lottery' => [0, 100],
+        ],
+
         'file' => [
             'driver' => 'file',
             'path' => storage_path('framework/cache/data'),

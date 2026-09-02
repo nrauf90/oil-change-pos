@@ -7,6 +7,7 @@ use App\Actions\Tenancy\CollectTenantStatistics;
 use App\Actions\Tenancy\UpdateShopFeatureEntitlements;
 use App\Enums\DashboardPeriod;
 use App\Enums\ShopStatus;
+use App\Exceptions\FeatureEntitlementUpdateUnavailable;
 use App\Filament\Platform\Resources\Shops\ShopResource;
 use App\Filament\Platform\Resources\Shops\Tables\ShopsTable;
 use App\Models\Central\PlatformUser;
@@ -235,11 +236,20 @@ class ViewShop extends ViewRecord
             return;
         }
 
-        $changes = resolve(UpdateShopFeatureEntitlements::class)->handle(
-            $actor,
-            $shop,
-            $enabledKeys->all(),
-        );
+        try {
+            $changes = resolve(UpdateShopFeatureEntitlements::class)->handle(
+                $actor,
+                $shop,
+                $enabledKeys->all(),
+            );
+        } catch (FeatureEntitlementUpdateUnavailable) {
+            self::haltFeatureUpdate(
+                $action,
+                'Feature updates are temporarily unavailable. Please retry.',
+            );
+
+            return;
+        }
 
         resolve(ModuleRegistry::class)->flush();
 

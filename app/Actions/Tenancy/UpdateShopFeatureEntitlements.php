@@ -3,17 +3,23 @@
 namespace App\Actions\Tenancy;
 
 use App\Enums\ShopLifecycleEvent;
+use App\Exceptions\FeatureEntitlementUpdateUnavailable;
 use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 use App\Models\Central\ShopFeature;
 use App\Modules\Module;
 use App\Modules\ModuleRegistry;
 use Illuminate\Auth\Access\AuthorizationException;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Cache\CacheManager;
+use Illuminate\Cache\DatabaseLock;
+use Illuminate\Cache\DatabaseStore;
 use Illuminate\Support\Facades\DB;
+use Throwable;
 
 final readonly class UpdateShopFeatureEntitlements
 {
+    private const LOCK_STORE = 'feature_entitlement_locks';
+
     private const LOCK_SECONDS = 30;
 
     private const LOCK_WAIT_SECONDS = 10;
@@ -21,6 +27,7 @@ final readonly class UpdateShopFeatureEntitlements
     public function __construct(
         private ModuleRegistry $modules,
         private RecordShopLifecycleActivity $recordActivity,
+        private CacheManager $cache,
     ) {}
 
     /** @param list<string> $enabledFeatureKeys */
@@ -31,13 +38,14 @@ final readonly class UpdateShopFeatureEntitlements
             ->reject(static fn (Module $module): bool => $module->isCore());
         $enabledKeys = collect($enabledFeatureKeys);
 
-        return Cache::lock(
-            'shop-feature-entitlements:'.$shop->getKey(),
-            self::LOCK_SECONDS,
-        )->block(
-            self::LOCK_WAIT_SECONDS,
-            fn (): int => DB::connection('central')->transaction(
-                function () use ($actor, $enabledKeys, $modules, $shop): int {
+        $lock = $this->featureLock($shop);
+        $this->acquireLock($lock);
+
+        try {
+            return DB::connection('central')->transaction(
+                function () use ($actor, $enabledKeys, $lock, $modules, $shop): int {
+                    $this->refreshOwnedLock($lock);
+
                     $lockedActor = PlatformUser::on('central')
                         ->whereKey($actor->getKey())
                         ->lockForUpdate()
@@ -100,9 +108,95 @@ final readonly class UpdateShopFeatureEntitlements
                         $changes++;
                     }
 
+                    $this->refreshOwnedLock($lock);
+
                     return $changes;
                 },
-            ),
+            );
+        } finally {
+            $this->releaseLock($lock);
+        }
+    }
+
+    private function featureLock(Shop $shop): DatabaseLock
+    {
+        $configuration = config('cache.stores.'.self::LOCK_STORE);
+
+        if (! is_array($configuration)
+            || ($configuration['driver'] ?? null) !== 'database'
+            || ($configuration['connection'] ?? null) !== 'central'
+            || ($configuration['lock_connection'] ?? null) !== 'central') {
+            throw $this->lockUnavailable();
+        }
+
+        try {
+            $repository = $this->cache->store(self::LOCK_STORE);
+            $store = $repository->getStore();
+            $centralConnection = DB::connection('central');
+        } catch (Throwable $exception) {
+            throw $this->lockUnavailable($exception);
+        }
+
+        if (! $store instanceof DatabaseStore
+            || $store->getConnection() !== $centralConnection
+            || $store->getLockConnection() !== $centralConnection) {
+            throw $this->lockUnavailable();
+        }
+
+        try {
+            $lock = $repository->lock(
+                'shop-feature-entitlements:'.$shop->getKey(),
+                self::LOCK_SECONDS,
+            );
+        } catch (Throwable $exception) {
+            throw $this->lockUnavailable($exception);
+        }
+
+        if (! $lock instanceof DatabaseLock
+            || $lock->getConnectionName() !== 'central') {
+            throw $this->lockUnavailable();
+        }
+
+        return $lock;
+    }
+
+    private function acquireLock(DatabaseLock $lock): void
+    {
+        try {
+            $lock->block(self::LOCK_WAIT_SECONDS);
+        } catch (Throwable $exception) {
+            throw $this->lockUnavailable($exception);
+        }
+    }
+
+    private function refreshOwnedLock(DatabaseLock $lock): void
+    {
+        try {
+            $refreshed = $lock->refresh(self::LOCK_SECONDS);
+            $owned = $refreshed && $lock->isOwnedByCurrentProcess();
+        } catch (Throwable $exception) {
+            throw $this->lockUnavailable($exception);
+        }
+
+        if (! $owned) {
+            throw $this->lockUnavailable();
+        }
+    }
+
+    private function releaseLock(DatabaseLock $lock): void
+    {
+        try {
+            $lock->release();
+        } catch (Throwable $exception) {
+            report($exception);
+        }
+    }
+
+    private function lockUnavailable(?Throwable $previous = null): FeatureEntitlementUpdateUnavailable
+    {
+        return new FeatureEntitlementUpdateUnavailable(
+            'Feature entitlements could not be updated safely. Please retry.',
+            previous: $previous,
         );
     }
 }
