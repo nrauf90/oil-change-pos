@@ -18,6 +18,7 @@ use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
 use Filament\Facades\Filament;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -270,6 +271,58 @@ class PlatformFeatureEntitlementTest extends TestCase
         $this->assertSame(0, $shop->lifecycleActivities()
             ->where('event', ShopLifecycleEvent::FeatureDisabled)
             ->count());
+    }
+
+    public function test_feature_update_locks_the_shop_before_reading_entitlements(): void
+    {
+        $platformUser = PlatformUser::factory()->create();
+        $shop = $this->currentShop();
+        $page = $this->platformShopPage($platformUser, $shop);
+        $centralOperations = [];
+
+        Event::listen(TransactionBeginning::class, static function (TransactionBeginning $event) use (
+            &$centralOperations,
+        ): void {
+            if ($event->connectionName === 'central') {
+                $centralOperations[] = 'transaction';
+            }
+        });
+        Event::listen(QueryExecuted::class, static function (QueryExecuted $event) use (&$centralOperations): void {
+            if ($event->connectionName !== 'central'
+                || ! str_starts_with(strtolower(trim($event->sql)), 'select')) {
+                return;
+            }
+
+            $sql = strtolower($event->sql);
+
+            if (str_contains($sql, 'from "shops"')) {
+                $centralOperations[] = 'shop';
+            } elseif (str_contains($sql, 'from "shop_features"')) {
+                $centralOperations[] = 'features';
+            }
+        });
+
+        $page->callAction('manageFeatures', [
+            'feature_keys' => ['reports', 'expenses', 'workshop'],
+        ])->assertNotified('Features updated');
+
+        $transactionIndex = collect($centralOperations)->search(
+            static fn (string $operation): bool => $operation === 'transaction',
+        );
+        $shopReadIndex = collect($centralOperations)->search(
+            static fn (string $operation, int $index): bool => is_int($transactionIndex)
+                && $index > $transactionIndex
+                && $operation === 'shop',
+        );
+        $featureReadIndex = collect($centralOperations)->search(
+            static fn (string $operation, int $index): bool => is_int($shopReadIndex)
+                && $index > $shopReadIndex
+                && $operation === 'features',
+        );
+
+        $this->assertIsInt($transactionIndex, 'The update must use a central transaction.');
+        $this->assertIsInt($shopReadIndex, 'The update must acquire the per-shop serialization row.');
+        $this->assertIsInt($featureReadIndex, 'The update must read current entitlements inside the lock.');
     }
 
     public function test_platform_disable_and_reenable_preserves_module_owned_tenant_data(): void

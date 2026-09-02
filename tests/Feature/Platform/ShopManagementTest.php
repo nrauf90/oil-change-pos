@@ -7,16 +7,21 @@ use App\Enums\ShopStatus;
 use App\Filament\Platform\Resources\Shops\Pages\CreateShop;
 use App\Filament\Platform\Resources\Shops\Pages\ListShops;
 use App\Filament\Platform\Resources\Shops\Pages\ViewShop;
+use App\Filament\Platform\Resources\Shops\ShopResource;
 use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 use App\Models\Central\ShopOwner;
 use App\Modules\Module;
 use App\Modules\ModuleRegistry;
+use App\Tenancy\Provisioning\DatabaseProvisioner;
 use App\Tenancy\TenantContext;
+use Filament\Actions\Action;
+use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
 use Filament\Tables\Columns\TextColumn;
 use Livewire\Livewire;
+use RuntimeException;
 
 class ShopManagementTest extends PlatformTestCase
 {
@@ -65,7 +70,72 @@ class ShopManagementTest extends PlatformTestCase
             'shop_id' => $shop->getKey(),
             'migration_status' => 'current',
         ], 'central');
+        $this->assertSame(
+            [$platformUser->getKey(), $platformUser->getKey()],
+            $shop->lifecycleActivities()
+                ->whereIn('event', [
+                    ShopLifecycleEvent::ProvisioningStarted,
+                    ShopLifecycleEvent::ProvisioningSucceeded,
+                ])
+                ->orderBy('id')
+                ->pluck('platform_user_id')
+                ->all(),
+        );
         $this->assertFalse(resolve(TenantContext::class)->initialized());
+    }
+
+    public function test_failed_web_provisioning_is_retained_with_a_safe_actionable_notification(): void
+    {
+        $platformUser = PlatformUser::factory()->create();
+        $temporaryPassword = 'do-not-expose-this-password';
+        $this->mock(DatabaseProvisioner::class)
+            ->shouldReceive('provision')
+            ->once()
+            ->andThrow(new RuntimeException('private infrastructure failure'));
+
+        Livewire::actingAs($platformUser, 'platform')
+            ->test(CreateShop::class)
+            ->fillForm([
+                'name' => 'Failed Web Workshop',
+                'slug' => 'failed-web-workshop',
+                'timezone' => 'Asia/Karachi',
+                'currency' => 'PKR',
+                'owner_name' => 'Failed Owner',
+                'owner_username' => 'failed-owner',
+                'owner_email' => 'failed@example.test',
+                'temporary_owner_password' => $temporaryPassword,
+                'temporary_owner_password_confirmation' => $temporaryPassword,
+                'initial_feature_keys' => ['scripts'],
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors()
+            ->assertDontSee($temporaryPassword)
+            ->assertDontSee('private infrastructure failure');
+
+        $shop = Shop::query()->where('slug', 'failed-web-workshop')->firstOrFail();
+
+        $this->assertSame(ShopStatus::Failed, $shop->status);
+        $this->assertDatabaseHas('shop_lifecycle_activities', [
+            'shop_id' => $shop->getKey(),
+            'platform_user_id' => $platformUser->getKey(),
+            'event' => ShopLifecycleEvent::ProvisioningFailed->value,
+        ], 'central');
+        Notification::assertNotified(
+            Notification::make()
+                ->danger()
+                ->title('Shop provisioning failed')
+                ->body(
+                    'The tenant database could not be provisioned. Review the application log code and retry. '
+                    .'Stage: database. Code: DATABASE_PROVISION_FAILED.',
+                )
+                ->actions([
+                    Action::make('reviewFailedShop')
+                        ->label('Review failed shop')
+                        ->url(ShopResource::getUrl('view', ['record' => $shop]))
+                        ->markAsRead(),
+                ])
+                ->persistent(),
+        );
     }
 
     public function test_shop_list_uses_safe_status_badges_and_redacts_database_details(): void
@@ -213,6 +283,17 @@ class ShopManagementTest extends PlatformTestCase
 
         $this->assertSame(ShopStatus::Active, $shop->fresh()->status);
         $this->assertFileExists($database);
+        $this->assertSame(
+            [$platformUser->getKey(), $platformUser->getKey()],
+            $shop->lifecycleActivities()
+                ->whereIn('event', [
+                    ShopLifecycleEvent::ProvisioningStarted,
+                    ShopLifecycleEvent::ProvisioningSucceeded,
+                ])
+                ->orderBy('id')
+                ->pluck('platform_user_id')
+                ->all(),
+        );
         $this->assertFalse(resolve(TenantContext::class)->initialized());
     }
 

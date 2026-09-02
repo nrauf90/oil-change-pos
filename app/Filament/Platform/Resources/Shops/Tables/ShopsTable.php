@@ -178,18 +178,19 @@ class ShopsTable
                     ->maxLength(255),
             ])
             ->action(static function (Action $action, Shop $record, array $data): void {
-                self::authorizedActor($record);
+                $actor = self::authorizedActor($record);
 
                 try {
                     resolve(ProvisionShop::class)->retry(
                         $record,
                         (string) $data['temporary_owner_password'],
+                        $actor,
                     );
                 } catch (TenantProvisioningException $exception) {
                     Notification::make()
                         ->danger()
                         ->title('Shop provisioning failed')
-                        ->body($exception->getMessage())
+                        ->body(self::provisioningFailureBody($exception))
                         ->send();
                     $action->failure();
                     $action->halt();
@@ -216,5 +217,11 @@ class ShopsTable
         }
 
         return $actor;
+    }
+
+    private static function provisioningFailureBody(TenantProvisioningException $exception): string
+    {
+        return $exception->getMessage()
+            ." Stage: {$exception->stage}. Code: {$exception->errorCode}.";
     }
 }

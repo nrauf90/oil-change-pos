@@ -7,6 +7,7 @@ use App\Enums\ShopLifecycleEvent;
 use App\Enums\ShopStatus;
 use App\Exceptions\TenantDatabaseTargetConflict;
 use App\Exceptions\TenantProvisioningException;
+use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 use App\Models\Central\ShopFeature;
 use App\Models\Central\ShopHealthSnapshot;
@@ -45,10 +46,13 @@ final readonly class ProvisionShop
         private TenantProvisioningHook $hook,
     ) {}
 
-    public function handle(#[\SensitiveParameter] ProvisionShopData $data): Shop
-    {
+    public function handle(
+        #[\SensitiveParameter]
+        ProvisionShopData $data,
+        ?PlatformUser $actor = null,
+    ): Shop {
         $this->assertKnownFeatures($data->initialFeatureKeys);
-        $shop = $this->register($data);
+        $shop = $this->register($data, $actor);
 
         return $this->provisioningLock->run(
             $shop,
@@ -57,6 +61,7 @@ final readonly class ProvisionShop
                 $data->temporaryOwnerPassword,
                 1,
                 $lease,
+                $actor,
             ),
         );
     }
@@ -66,6 +71,7 @@ final readonly class ProvisionShop
         Shop $shop,
         #[\SensitiveParameter]
         ?string $temporaryPassword = null,
+        ?PlatformUser $actor = null,
     ): Shop {
         $attemptFingerprint = (string) $shop->database_target_fingerprint;
 
@@ -75,18 +81,26 @@ final readonly class ProvisionShop
                 $shop,
                 $temporaryPassword,
                 $attemptFingerprint,
+                $actor,
             ): Shop {
                 [$freshShop, $attempt] = $this->prepareRetry(
                     $shop,
                     $attemptFingerprint,
                     $lease,
+                    $actor,
                 );
 
                 if ($freshShop->status === ShopStatus::Active) {
                     return $freshShop;
                 }
 
-                return $this->runAttempt($freshShop, $temporaryPassword, $attempt, $lease);
+                return $this->runAttempt(
+                    $freshShop,
+                    $temporaryPassword,
+                    $attempt,
+                    $lease,
+                    $actor,
+                );
             },
         );
     }
@@ -105,10 +119,13 @@ final readonly class ProvisionShop
         }
     }
 
-    private function register(#[\SensitiveParameter] ProvisionShopData $data): Shop
-    {
+    private function register(
+        #[\SensitiveParameter]
+        ProvisionShopData $data,
+        ?PlatformUser $actor,
+    ): Shop {
         try {
-            return DB::connection('central')->transaction(function () use ($data): Shop {
+            return DB::connection('central')->transaction(function () use ($actor, $data): Shop {
                 $shop = Shop::registerForProvisioning(
                     name: $data->name,
                     slug: $data->slug,
@@ -148,6 +165,7 @@ final readonly class ProvisionShop
                 $this->recordLifecycleActivity->handle(
                     $shop,
                     ShopLifecycleEvent::ProvisioningStarted,
+                    $actor,
                     metadata: [
                         'attempt' => 1,
                         'database_driver' => $data->databaseDriver,
@@ -187,6 +205,7 @@ final readonly class ProvisionShop
         string $attemptFingerprint,
         #[\SensitiveParameter]
         TenantProvisioningLease $lease,
+        ?PlatformUser $actor,
     ): array {
         $lease->heartbeat();
 
@@ -194,6 +213,7 @@ final readonly class ProvisionShop
             $shop,
             $attemptFingerprint,
             $lease,
+            $actor,
         ): array {
             $freshShop = Shop::query()
                 ->whereKey($shop->getKey())
@@ -258,6 +278,7 @@ final readonly class ProvisionShop
             $this->recordLifecycleActivity->handle(
                 $freshShop,
                 ShopLifecycleEvent::ProvisioningStarted,
+                $actor,
                 metadata: [
                     'attempt' => $attempt,
                     'database_driver' => $freshShop->database_driver,
@@ -276,6 +297,7 @@ final readonly class ProvisionShop
         int $attempt,
         #[\SensitiveParameter]
         TenantProvisioningLease $lease,
+        ?PlatformUser $actor,
     ): Shop {
         try {
             $freshShop = $this->freshProvisioningShop($shop);
@@ -383,7 +405,7 @@ final readonly class ProvisionShop
                 $freshShop->fresh(),
             );
 
-            return $this->activate($freshShop, $migrationResult, $attempt, $lease);
+            return $this->activate($freshShop, $migrationResult, $attempt, $lease, $actor);
         } catch (TenantProvisioningInterrupted $exception) {
             throw $exception;
         } catch (TenantProvisioningException $exception) {
@@ -391,7 +413,7 @@ final readonly class ProvisionShop
                 throw $exception;
             }
 
-            $this->recordFailure($shop, $attempt, $exception, $lease);
+            $this->recordFailure($shop, $attempt, $exception, $lease, $actor);
 
             throw $exception;
         } catch (Throwable) {
@@ -400,7 +422,7 @@ final readonly class ProvisionShop
                 'PROVISIONING_FAILED',
                 'Tenant provisioning failed. Review the application log code and retry.',
             );
-            $this->recordFailure($shop, $attempt, $exception, $lease);
+            $this->recordFailure($shop, $attempt, $exception, $lease, $actor);
 
             throw $exception;
         } finally {
@@ -446,6 +468,7 @@ final readonly class ProvisionShop
         int $attempt,
         #[\SensitiveParameter]
         TenantProvisioningLease $lease,
+        ?PlatformUser $actor,
     ): Shop {
         try {
             return DB::connection('central')->transaction(function () use (
@@ -453,6 +476,7 @@ final readonly class ProvisionShop
                 $migrationResult,
                 $attempt,
                 $lease,
+                $actor,
             ): Shop {
                 $freshShop = Shop::query()
                     ->whereKey($shop->getKey())
@@ -482,6 +506,7 @@ final readonly class ProvisionShop
                 $this->recordLifecycleActivity->handle(
                     $freshShop,
                     ShopLifecycleEvent::ProvisioningSucceeded,
+                    $actor,
                     metadata: [
                         'attempt' => $attempt,
                         'database_driver' => $freshShop->database_driver,
@@ -518,6 +543,7 @@ final readonly class ProvisionShop
         TenantProvisioningException $exception,
         #[\SensitiveParameter]
         TenantProvisioningLease $lease,
+        ?PlatformUser $actor,
     ): void {
         $lease->heartbeat();
         Log::error('Tenant provisioning failed.', [
@@ -532,6 +558,7 @@ final readonly class ProvisionShop
                 $attempt,
                 $exception,
                 $lease,
+                $actor,
             ): void {
                 $freshShop = Shop::query()
                     ->whereKey($shop->getKey())
@@ -547,6 +574,7 @@ final readonly class ProvisionShop
                 $this->recordLifecycleActivity->handle(
                     $freshShop,
                     ShopLifecycleEvent::ProvisioningFailed,
+                    $actor,
                     metadata: [
                         'attempt' => $attempt,
                         'failure_stage' => $exception->stage,

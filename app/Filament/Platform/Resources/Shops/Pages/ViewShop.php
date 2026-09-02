@@ -248,8 +248,19 @@ class ViewShop extends ViewRecord
                     );
                 }
 
+                $lockedShop = Shop::on('central')
+                    ->whereKey($shop->getKey())
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $lockedShop instanceof Shop) {
+                    throw new AuthorizationException('The shop is no longer available.');
+                }
+
                 $storedFeatures = ShopFeature::on('central')
-                    ->where('shop_id', $shop->getKey())
+                    ->where('shop_id', $lockedShop->getKey())
+                    ->orderBy('module_key')
+                    ->lockForUpdate()
                     ->get()
                     ->keyBy('module_key');
                 $changes = 0;
@@ -267,13 +278,13 @@ class ViewShop extends ViewRecord
 
                     ShopFeature::on('central')->updateOrCreate(
                         [
-                            'shop_id' => $shop->getKey(),
+                            'shop_id' => $lockedShop->getKey(),
                             'module_key' => $module->key(),
                         ],
                         ['enabled' => $shouldEnable],
                     );
                     resolve(RecordShopLifecycleActivity::class)->handle(
-                        $shop,
+                        $lockedShop,
                         $shouldEnable
                             ? ShopLifecycleEvent::FeatureEnabled
                             : ShopLifecycleEvent::FeatureDisabled,
