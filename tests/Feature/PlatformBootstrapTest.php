@@ -50,10 +50,15 @@ class PlatformBootstrapTest extends TestCase
             $setupCommands,
             static fn (string $command): bool => str_contains($command, 'artisan migrate'),
         ));
+        $postCreateMigrationCommand = collect($scripts['post-create-project-cmd'])
+            ->first(static fn (string $command): bool => str_contains($command, 'artisan migrate'));
 
         $this->assertIsInt($databaseCreationIndex);
         $this->assertIsInt($migrationIndex);
         $this->assertLessThan($migrationIndex, $databaseCreationIndex);
+        $this->assertIsString($postCreateMigrationCommand);
+        $this->assertStringContainsString('--database=central', $postCreateMigrationCommand);
+        $this->assertStringContainsString('--path=database/migrations/central', $postCreateMigrationCommand);
 
         foreach (['setup', 'post-create-project-cmd'] as $scriptName) {
             foreach ($scripts[$scriptName] as $command) {
