@@ -17,12 +17,17 @@ use App\Modules\ModuleRegistry;
 use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
 use Filament\Facades\Filament;
+use Filament\Notifications\Notification;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Cache\CacheManager;
 use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Sleep;
 use InvalidArgumentException;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -272,6 +277,44 @@ class PlatformFeatureEntitlementTest extends TestCase
             ->count());
     }
 
+    public function test_busy_feature_update_shows_a_safe_retry_notification_without_mutation(): void
+    {
+        $this->configureFeatureLockStore();
+        $platformUser = PlatformUser::factory()->create();
+        $shop = $this->currentShop();
+        $heldLock = Cache::store('feature_entitlement_locks')->lock(
+            'shop-feature-entitlements:'.$shop->getKey(),
+            60,
+        );
+        $this->assertTrue($heldLock->acquire());
+        Sleep::fake(syncWithCarbon: true);
+
+        try {
+            $this->platformShopPage($platformUser, $shop)
+                ->callAction('manageFeatures', [
+                    'feature_keys' => ['reports', 'expenses', 'workshop'],
+                ])
+                ->assertNotified(
+                    Notification::make()
+                        ->danger()
+                        ->title('Features were not updated')
+                        ->body('Feature updates are temporarily unavailable. Please retry.'),
+                );
+        } finally {
+            $heldLock->release();
+            Sleep::fake(false);
+            Carbon::setTestNow();
+        }
+
+        $this->assertDatabaseCount('shop_features', 0, 'central');
+        $this->assertSame(0, $shop->lifecycleActivities()
+            ->whereIn('event', [
+                ShopLifecycleEvent::FeatureEnabled,
+                ShopLifecycleEvent::FeatureDisabled,
+            ])
+            ->count());
+    }
+
     public function test_platform_disable_and_reenable_preserves_module_owned_tenant_data(): void
     {
         $platformUser = PlatformUser::factory()->create();
@@ -382,6 +425,19 @@ class PlatformFeatureEntitlementTest extends TestCase
 
         return Livewire::actingAs($platformUser, 'platform')
             ->test(ViewShop::class, ['record' => $shop->getKey()]);
+    }
+
+    private function configureFeatureLockStore(): void
+    {
+        config()->set('cache.stores.feature_entitlement_locks', [
+            'driver' => 'database',
+            'connection' => 'central',
+            'table' => 'cache',
+            'lock_connection' => 'central',
+            'lock_table' => 'cache_locks',
+            'lock_lottery' => [0, 100],
+        ]);
+        app(CacheManager::class)->forgetDriver('feature_entitlement_locks');
     }
 
     private function assertTenantSettingPreserved(Shop $shop, ModuleSetting $setting): void
