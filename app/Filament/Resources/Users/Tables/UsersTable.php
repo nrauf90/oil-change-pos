@@ -2,10 +2,12 @@
 
 namespace App\Filament\Resources\Users\Tables;
 
+use App\Actions\ManageTenantUsers;
 use App\Enums\Role;
 use App\Filament\Resources\Roles\RoleResource;
 use App\Filament\Resources\Users\UserResource;
 use App\Models\Role as RoleModel;
+use App\Models\User;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
 use Filament\Tables\Columns\IconColumn;
@@ -13,9 +15,13 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
+use LogicException;
 
 class UsersTable
 {
@@ -89,10 +95,32 @@ class UsersTable
             ])
             ->recordActions([
                 EditAction::make(),
-                DeleteAction::make()
-                    ->hidden(fn (Model $record): bool => $record->is(auth()->user()) || UserResource::isLastAdmin($record)),
+                self::deleteAction(),
             ])
             ->defaultSort('name')
             ->stackedOnMobile();
+    }
+
+    public static function deleteAction(): DeleteAction
+    {
+        return DeleteAction::make()
+            ->using(static function (User $record): bool {
+                $actor = Auth::user();
+
+                if (! $actor instanceof User) {
+                    return false;
+                }
+
+                try {
+                    return resolve(ManageTenantUsers::class)->delete($actor, $record);
+                } catch (AuthorizationException|LogicException|QueryException) {
+                    return false;
+                }
+            })
+            ->failureNotificationTitle('Staff member could not be deleted')
+            ->failureNotificationBody(
+                'This account is now the final active admin or is required by existing shop records.',
+            )
+            ->hidden(fn (Model $record): bool => $record->is(auth()->user()) || UserResource::isLastAdmin($record));
     }
 }

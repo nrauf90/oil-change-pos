@@ -2,25 +2,30 @@
 
 namespace App\Filament\Resources\Users\Pages;
 
+use App\Actions\ManageTenantUsers;
 use App\Enums\Role;
+use App\Filament\Resources\Users\Tables\UsersTable;
 use App\Filament\Resources\Users\UserResource;
 use App\Models\Role as RoleModel;
-use Filament\Actions\DeleteAction;
+use App\Models\User;
 use Filament\Resources\Pages\EditRecord;
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Auth;
+use LogicException;
 
 class EditUser extends EditRecord
 {
     protected static string $resource = UserResource::class;
 
-    protected ?bool $hasDatabaseTransactions = true;
+    protected ?bool $hasDatabaseTransactions = false;
 
     private ?string $roleName = null;
 
     protected function getHeaderActions(): array
     {
         return [
-            DeleteAction::make()
-                ->hidden(fn (): bool => $this->record->is(auth()->user()) || UserResource::isLastAdmin($this->record)),
+            UsersTable::deleteAction(),
         ];
     }
 
@@ -74,9 +79,33 @@ class EditUser extends EditRecord
         return $data;
     }
 
-    protected function afterSave(): void
+    /** @param array<string, mixed> $data */
+    protected function handleRecordUpdate(Model $record, array $data): Model
     {
-        $this->record->assignSingleRole((string) $this->roleName);
+        $actor = Auth::user();
+
+        if (! $actor instanceof User || ! $record instanceof User) {
+            throw new AuthorizationException('Tenant staff authentication is required.');
+        }
+
+        try {
+            $updatedUser = resolve(ManageTenantUsers::class)->update(
+                $actor,
+                $record,
+                $data,
+                (string) $this->roleName,
+            );
+        } catch (LogicException $exception) {
+            $field = ! (bool) ($this->data['is_active'] ?? $record->is_active)
+                ? 'is_active'
+                : 'role';
+            $this->reject($field, $exception->getMessage());
+        }
+
+        $record->setRawAttributes($updatedUser->getAttributes(), true);
+        $record->setRelations($updatedUser->getRelations());
+
+        return $record;
     }
 
     private function reject(string $field, string $message): never
