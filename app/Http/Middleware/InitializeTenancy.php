@@ -203,7 +203,7 @@ final readonly class InitializeTenancy
             $session->forget([$guard->getName(), self::SESSION_SHOP_KEY]);
             $request->cookies->remove($rememberCookie);
             $this->cookies->queue($this->cookies->forget($rememberCookie));
-            $this->auth->forgetGuards();
+            $guard->forgetUser();
             $session->regenerate(true);
         } elseif ($sessionShopId !== null && ! $shopMatches) {
             $session->regenerate(true);

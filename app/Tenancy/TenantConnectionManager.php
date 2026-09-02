@@ -239,7 +239,7 @@ final class TenantConnectionManager
         Model::setConnectionResolver($this->database);
         $this->moduleRegistry->flush();
         $this->initializePermissionState((string) $shop->getKey());
-        $this->auth->forgetGuards();
+        $this->auth->guard('web')->forgetUser();
     }
 
     private function reconnectOwnedConnection(
@@ -282,6 +282,13 @@ final class TenantConnectionManager
 
     private function clearRuntimeState(): void
     {
+        $hadTenantState = $this->runtimeState->initialized()
+            || $this->activeLease !== null
+            || $this->activeConnection !== null
+            || $this->activePdo !== null
+            || $this->activeShop !== null
+            || $this->pendingShop !== null
+            || $this->pendingSnapshot !== null;
         $connections = [];
         $registeredConnection = $this->database->getConnections()[self::CONNECTION] ?? null;
 
@@ -323,7 +330,9 @@ final class TenantConnectionManager
 
         $this->attemptCleanup(fn (): mixed => Model::setConnectionResolver($this->database));
         $this->attemptCleanup(fn (): mixed => $this->moduleRegistry->flush());
-        $this->attemptCleanup(fn (): mixed => $this->auth->forgetGuards());
+        if ($hadTenantState) {
+            $this->attemptCleanup(fn (): mixed => $this->auth->guard('web')->forgetUser());
+        }
         $this->attemptCleanup(fn (): mixed => $this->permissionRegistrar->clearPermissionsCollection());
         $this->attemptCleanup(fn (): mixed => $this->permissionRegistrar->initializeCache());
     }
