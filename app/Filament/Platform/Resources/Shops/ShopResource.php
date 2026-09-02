@@ -2,6 +2,7 @@
 
 namespace App\Filament\Platform\Resources\Shops;
 
+use App\Enums\DashboardPeriod;
 use App\Enums\ShopStatus;
 use App\Filament\Platform\Resources\PlatformUsers\PlatformUserResource;
 use App\Filament\Platform\Resources\Shops\Pages\CreateShop;
@@ -17,6 +18,8 @@ use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Tabs;
+use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
@@ -108,44 +111,15 @@ class ShopResource extends Resource
                                 ->placeholder('No activity'),
                         ]),
 
-                    Section::make('This month')
-                        ->description('Statistics come only from this shop.')
+                    Section::make('Statistics')
+                        ->description('Statistics come only from this shop and follow its timezone.')
                         ->columnSpan(['default' => 1, 'lg' => 2])
-                        ->columns(['default' => 1, 'md' => 2, 'xl' => 4])
                         ->schema([
-                            self::statisticEntry('sales', 'Sales'),
-                            self::statisticEntry('expenses', 'Expenses'),
-                            self::statisticEntry('gross_margin', 'Gross margin'),
-                            TextEntry::make('statistics_transaction_count')
-                                ->label('Transactions')
-                                ->state(static fn (ViewShop $livewire): ?int => self::statistic(
-                                    $livewire,
-                                    'transaction_count',
-                                ))
-                                ->placeholder('Unavailable'),
-                            TextEntry::make('statistics_active_users')
-                                ->label('Active users')
-                                ->state(static fn (ViewShop $livewire): ?int => self::statistic(
-                                    $livewire,
-                                    'active_users',
-                                ))
-                                ->placeholder('Unavailable'),
-                            TextEntry::make('statistics_inventory_count')
-                                ->label('Inventory items')
-                                ->state(static fn (ViewShop $livewire): ?int => self::statistic(
-                                    $livewire,
-                                    'inventory_count',
-                                ))
-                                ->placeholder('Unavailable'),
-                            TextEntry::make('statistics_last_activity_at')
-                                ->label('Last activity')
-                                ->state(static fn (ViewShop $livewire): ?string => self::statistic(
-                                    $livewire,
-                                    'last_activity_at',
-                                ))
-                                ->dateTime('d M Y, g:i A')
-                                ->placeholder('No activity')
-                                ->columnSpan(['default' => 1, 'xl' => 2]),
+                            Tabs::make('Statistics periods')
+                                ->tabs(array_map(
+                                    static fn (DashboardPeriod $period): Tab => self::statisticsTab($period),
+                                    DashboardPeriod::cases(),
+                                )),
                         ]),
                 ]),
         ]);
@@ -256,12 +230,60 @@ class ShopResource extends Resource
         };
     }
 
-    private static function statisticEntry(string $key, string $label): TextEntry
+    private static function statisticsTab(DashboardPeriod $period): Tab
     {
-        return TextEntry::make('statistics_'.$key)
+        return Tab::make($period->label())
+            ->columns(['default' => 1, 'md' => 2, 'xl' => 4])
+            ->schema([
+                self::statisticEntry($period, 'sales', 'Sales'),
+                self::statisticEntry($period, 'expenses', 'Expenses'),
+                self::statisticEntry($period, 'gross_margin', 'Gross margin'),
+                TextEntry::make("statistics_{$period->value}_transaction_count")
+                    ->label('Transactions')
+                    ->state(static fn (ViewShop $livewire): ?int => self::statistic(
+                        $livewire,
+                        $period,
+                        'transaction_count',
+                    ))
+                    ->placeholder('Unavailable'),
+                TextEntry::make("statistics_{$period->value}_active_users")
+                    ->label('Active users')
+                    ->state(static fn (ViewShop $livewire): ?int => self::statistic(
+                        $livewire,
+                        $period,
+                        'active_users',
+                    ))
+                    ->placeholder('Unavailable'),
+                TextEntry::make("statistics_{$period->value}_inventory_count")
+                    ->label('Inventory items')
+                    ->state(static fn (ViewShop $livewire): ?int => self::statistic(
+                        $livewire,
+                        $period,
+                        'inventory_count',
+                    ))
+                    ->placeholder('Unavailable'),
+                TextEntry::make("statistics_{$period->value}_last_activity_at")
+                    ->label('Last activity')
+                    ->state(static fn (ViewShop $livewire): ?string => self::statistic(
+                        $livewire,
+                        $period,
+                        'last_activity_at',
+                    ))
+                    ->dateTime('d M Y, g:i A')
+                    ->placeholder('No activity')
+                    ->columnSpan(['default' => 1, 'xl' => 2]),
+            ]);
+    }
+
+    private static function statisticEntry(
+        DashboardPeriod $period,
+        string $key,
+        string $label,
+    ): TextEntry {
+        return TextEntry::make("statistics_{$period->value}_{$key}")
             ->label($label)
-            ->state(static function (ViewShop $livewire) use ($key): ?string {
-                $value = self::statistic($livewire, $key);
+            ->state(static function (ViewShop $livewire) use ($period, $key): ?string {
+                $value = self::statistic($livewire, $period, $key);
 
                 return is_string($value) ? $value : null;
             })
@@ -272,9 +294,12 @@ class ShopResource extends Resource
             ->placeholder('Unavailable');
     }
 
-    private static function statistic(ViewShop $livewire, string $key): int|string|null
-    {
-        $value = $livewire->tenantStatistics[$key] ?? null;
+    private static function statistic(
+        ViewShop $livewire,
+        DashboardPeriod $period,
+        string $key,
+    ): int|string|null {
+        $value = $livewire->tenantStatistics[$period->value][$key] ?? null;
 
         return is_int($value) || is_string($value) ? $value : null;
     }

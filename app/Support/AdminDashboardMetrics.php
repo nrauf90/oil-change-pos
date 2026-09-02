@@ -14,11 +14,15 @@ class AdminDashboardMetrics
     /**
      * @return array{current: array<string, mixed>, previous: array<string, mixed>}
      */
-    public function comparison(DashboardPeriod $period): array
+    public function comparison(DashboardPeriod $period, ?string $timezone = null): array
     {
         return [
-            'current' => $this->metricsFor(...$period->currentRange()),
-            'previous' => $this->metricsFor(...$period->previousRange()),
+            'current' => $this->metricsFor(...$this->rangeInStorageTimezone(
+                $period->currentRange($timezone),
+            )),
+            'previous' => $this->metricsFor(...$this->rangeInStorageTimezone(
+                $period->previousRange($timezone),
+            )),
         ];
     }
 
@@ -90,6 +94,20 @@ class AdminDashboardMetrics
             'margin' => $margin->totalMargin(),
             'margin_percent' => $margin->overallMarginPercent(),
             'has_uncosted_revenue' => $margin->hasUncostedRevenue(),
+        ];
+    }
+
+    /**
+     * @param  array{0: Carbon, 1: Carbon}  $range
+     * @return array{0: Carbon, 1: Carbon}
+     */
+    private function rangeInStorageTimezone(array $range): array
+    {
+        $storageTimezone = (string) config('app.timezone');
+
+        return [
+            $range[0]->setTimezone($storageTimezone),
+            $range[1]->setTimezone($storageTimezone),
         ];
     }
 

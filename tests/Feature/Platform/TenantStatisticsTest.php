@@ -18,6 +18,7 @@ use App\Support\AdminDashboardMetrics;
 use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 
 class TenantStatisticsTest extends PlatformTestCase
@@ -94,13 +95,65 @@ class TenantStatisticsTest extends PlatformTestCase
         $this->assertFalse(config()->has('database.connections.tenant'));
     }
 
+    #[DataProvider('localPeriodBoundaryCases')]
+    public function test_statistics_use_the_shops_timezone_at_period_rollovers(
+        DashboardPeriod $period,
+        string $slug,
+        string $now,
+        string $before,
+        string $start,
+        string $end,
+        string $after,
+    ): void {
+        $this->travelTo($now);
+        $shop = $this->provisionShop($slug, 'America/Los_Angeles');
+
+        resolve(TenantConnectionManager::class)->within($shop, function () use ($before, $start, $end, $after, $slug): void {
+            $owner = User::query()->where('username', "{$slug}-owner")->firstOrFail();
+            $item = Item::factory()->create(['unit_cost' => '10.00']);
+            $records = [
+                [$before, '100.00', '10.00'],
+                [$start, '200.00', '20.00'],
+                [$end, '300.00', '30.00'],
+                [$after, '400.00', '40.00'],
+            ];
+
+            foreach ($records as [$timestamp, $saleAmount, $expenseAmount]) {
+                $sale = Sale::factory()->create([
+                    'total_amount' => $saleAmount,
+                    'created_at' => $timestamp,
+                ]);
+                SaleItem::factory()->create([
+                    'sale_id' => $sale->getKey(),
+                    'item_id' => $item->getKey(),
+                    'quantity' => 1,
+                    'manually_charged_price' => $saleAmount,
+                ]);
+                Expense::factory()->create([
+                    'user_id' => $owner->getKey(),
+                    'amount' => $expenseAmount,
+                    'spent_at' => $timestamp,
+                ]);
+            }
+        });
+
+        $statistics = resolve(CollectTenantStatistics::class)->handle($shop, $period);
+
+        $this->assertSame('500.00', $statistics['sales']);
+        $this->assertSame('50.00', $statistics['expenses']);
+        $this->assertSame('480.00', $statistics['gross_margin']);
+        $this->assertSame(2, $statistics['transaction_count']);
+        $this->assertFalse(resolve(TenantContext::class)->initialized());
+        $this->assertFalse(config()->has('database.connections.tenant'));
+    }
+
     public function test_statistics_clear_tenant_context_when_metric_collection_fails(): void
     {
         $shop = $this->provisionShop('failing-statistics');
         $metrics = Mockery::mock(AdminDashboardMetrics::class);
         $metrics->shouldReceive('comparison')
             ->once()
-            ->with(DashboardPeriod::Today)
+            ->with(DashboardPeriod::Today, (string) $shop->timezone)
             ->andReturnUsing(function () use ($shop): never {
                 $this->assertTrue(resolve(TenantContext::class)->initialized());
                 $this->assertSame((string) $shop->getKey(), resolve(TenantContext::class)->id());
@@ -160,7 +213,43 @@ class TenantStatisticsTest extends PlatformTestCase
         $this->assertFalse(resolve(TenantContext::class)->initialized());
     }
 
-    private function provisionShop(string $slug): Shop
+    /**
+     * @return array<string, array{DashboardPeriod, string, string, string, string, string, string}>
+     */
+    public static function localPeriodBoundaryCases(): array
+    {
+        return [
+            'local midnight differs from UTC' => [
+                DashboardPeriod::Today,
+                'timezone-day',
+                '2026-09-07 06:30:00',
+                '2026-09-06 06:59:59',
+                '2026-09-06 07:00:00',
+                '2026-09-07 06:59:59',
+                '2026-09-07 07:00:00',
+            ],
+            'local week starts after the UTC boundary' => [
+                DashboardPeriod::Week,
+                'timezone-week',
+                '2026-09-07 06:30:00',
+                '2026-08-31 06:59:59',
+                '2026-08-31 07:00:00',
+                '2026-09-07 06:59:59',
+                '2026-09-07 07:00:00',
+            ],
+            'local month ends after the UTC month changes' => [
+                DashboardPeriod::Month,
+                'timezone-month',
+                '2026-09-01 06:30:00',
+                '2026-08-01 06:59:59',
+                '2026-08-01 07:00:00',
+                '2026-09-01 06:59:59',
+                '2026-09-01 07:00:00',
+            ],
+        ];
+    }
+
+    private function provisionShop(string $slug, string $timezone = 'Asia/Karachi'): Shop
     {
         $database = rtrim((string) config('database.tenant_sqlite_root'), '/\\')
             .DIRECTORY_SEPARATOR."{$slug}.sqlite";
@@ -174,6 +263,7 @@ class TenantStatisticsTest extends PlatformTestCase
             ownerUsername: "{$slug}-owner",
             ownerEmail: "{$slug}@example.test",
             temporaryOwnerPassword: 'temporary-owner-password',
+            timezone: $timezone,
         ));
     }
 }

@@ -29,22 +29,26 @@ enum DashboardPeriod: string
     }
 
     /** @return array{0: Carbon, 1: Carbon} */
-    public function currentRange(): array
+    public function currentRange(?string $timezone = null): array
     {
+        $now = now($timezone);
+
         return match ($this) {
-            self::Today => [now()->startOfDay(), now()->endOfDay()],
-            self::Week => [now()->startOfWeek(), now()->endOfWeek()],
-            self::Month => [now()->startOfMonth(), now()->endOfMonth()],
+            self::Today => [$now->copy()->startOfDay(), $now->copy()->endOfDay()],
+            self::Week => [$now->copy()->startOfWeek(), $now->copy()->endOfWeek()],
+            self::Month => [$now->copy()->startOfMonth(), $now->copy()->endOfMonth()],
         };
     }
 
     /** @return array{0: Carbon, 1: Carbon} */
-    public function previousRange(): array
+    public function previousRange(?string $timezone = null): array
     {
+        $now = now($timezone);
+
         return match ($this) {
-            self::Today => [now()->subDay()->startOfDay(), now()->subDay()->endOfDay()],
-            self::Week => [now()->subWeek()->startOfWeek(), now()->subWeek()->endOfWeek()],
-            self::Month => [now()->subMonthNoOverflow()->startOfMonth(), now()->subMonthNoOverflow()->endOfMonth()],
+            self::Today => [$now->copy()->subDay()->startOfDay(), $now->copy()->subDay()->endOfDay()],
+            self::Week => [$now->copy()->subWeek()->startOfWeek(), $now->copy()->subWeek()->endOfWeek()],
+            self::Month => [$now->copy()->subMonthNoOverflow()->startOfMonth(), $now->copy()->subMonthNoOverflow()->endOfMonth()],
         };
     }
 

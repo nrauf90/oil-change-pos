@@ -326,4 +326,16 @@ class ShopManagementTest extends PlatformTestCase
         $this->assertInstanceOf(Grid::class, $detailComponents[0]);
         $this->assertSame(['default' => 1, 'lg' => 2], $detailComponents[0]->getColumns());
     }
+
+    public function test_shop_detail_exposes_all_required_statistics_periods(): void
+    {
+        $platformUser = PlatformUser::factory()->create();
+        $shop = Shop::factory()->create();
+
+        Livewire::actingAs($platformUser, 'platform')
+            ->test(ViewShop::class, ['record' => $shop->getKey()])
+            ->assertSee('Today')
+            ->assertSee('This week')
+            ->assertSee('This month');
+    }
 }

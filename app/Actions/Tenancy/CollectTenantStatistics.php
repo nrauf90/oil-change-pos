@@ -42,7 +42,7 @@ final readonly class CollectTenantStatistics
 
         try {
             $this->connectionManager->connect($shop, requireActiveShop: true);
-            $metrics = $this->dashboardMetrics->comparison($period)['current'];
+            $metrics = $this->dashboardMetrics->comparison($period, (string) $shop->timezone)['current'];
             $lastActivity = ActivityLog::query()->latest('created_at')->first(['created_at']);
 
             return [

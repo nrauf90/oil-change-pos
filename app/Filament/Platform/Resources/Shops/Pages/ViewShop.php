@@ -32,7 +32,7 @@ class ViewShop extends ViewRecord
 {
     protected static string $resource = ShopResource::class;
 
-    /** @var array<string, int|string|null> */
+    /** @var array<string, array<string, int|string|null>> */
     public array $tenantStatistics = [];
 
     public function mount(int|string $record): void
@@ -55,10 +55,14 @@ class ViewShop extends ViewRecord
 
             if ($shop->status === ShopStatus::Active) {
                 try {
-                    $this->tenantStatistics = resolve(CollectTenantStatistics::class)->handle(
-                        $shop,
-                        DashboardPeriod::Month,
-                    );
+                    $statisticsCollector = resolve(CollectTenantStatistics::class);
+
+                    foreach (DashboardPeriod::cases() as $period) {
+                        $this->tenantStatistics[$period->value] = $statisticsCollector->handle(
+                            $shop,
+                            $period,
+                        );
+                    }
                 } catch (Throwable) {
                     $this->tenantStatistics = [];
                 }
