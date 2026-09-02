@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\Permission;
 use App\Enums\Role;
+use App\Filament\Resources\Roles\RoleResource;
 use App\Support\RolePermissionMatrix;
 use BackedEnum;
 use Filament\Notifications\Notification;
@@ -20,6 +21,8 @@ use Filament\Support\Icons\Heroicon;
 class RolePermissions extends Page
 {
     protected string $view = 'filament.pages.role-permissions';
+
+    protected static bool $shouldRegisterNavigation = false;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedShieldCheck;
 
@@ -75,6 +78,16 @@ class RolePermissions extends Page
 
         $matrix = $this->matrix();
         $wasHeld = $matrix->holds($roleEnum, $permissionEnum);
+
+        if (! $wasHeld && ! in_array($permissionEnum->value, RoleResource::effectivePermissionNames(), true)) {
+            Notification::make()
+                ->title("Cannot grant {$permissionEnum->value}")
+                ->body('This permission belongs to a feature that is unavailable for this shop.')
+                ->warning()
+                ->send();
+
+            return;
+        }
 
         if (! $matrix->toggle($roleEnum, $permissionEnum)) {
             Notification::make()
