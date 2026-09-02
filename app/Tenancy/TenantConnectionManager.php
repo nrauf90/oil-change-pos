@@ -8,11 +8,9 @@ use App\Tenancy\Exceptions\TenantDatabaseAttestationFailed;
 use Closure;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Config\Repository as ConfigRepository;
-use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Str;
 use LogicException;
 use PDO;
 use Spatie\Permission\PermissionRegistrar;
@@ -39,10 +37,6 @@ final class TenantConnectionManager
 
     private ?ValidatedTenantConnection $pendingSnapshot = null;
 
-    private ?Connection $testingSourceConnection = null;
-
-    private ?Shop $testingPendingShop = null;
-
     private bool $handlingConnectionEvent = false;
 
     public function __construct(
@@ -51,7 +45,6 @@ final class TenantConnectionManager
         private readonly TenantRuntimeState $runtimeState,
         private readonly PermissionRegistrar $permissionRegistrar,
         private readonly AuthManager $auth,
-        private readonly Application $application,
         private readonly TenantDatabaseAttestor $attestor,
         private readonly ModuleRegistry $moduleRegistry,
     ) {
@@ -161,12 +154,6 @@ final class TenantConnectionManager
         $this->handlingConnectionEvent = true;
 
         try {
-            if ($this->testingPendingShop !== null || $this->testingSourceConnection !== null) {
-                $this->attestTestingConnection($connection);
-
-                return;
-            }
-
             [$shop, $snapshot] = $this->connectionAttestationSubject();
             $this->runtimeState->deactivate();
             $pdo = $this->attestor->attest(
@@ -184,37 +171,6 @@ final class TenantConnectionManager
         } finally {
             $this->handlingConnectionEvent = false;
         }
-    }
-
-    /**
-     * Temporary Task 2 compatibility seam. Task 4 replaces this with its real
-     * file-backed central/tenant migration harness.
-     */
-    public function bootstrapForTesting(
-        #[\SensitiveParameter]
-        string $shopId,
-        #[\SensitiveParameter]
-        Connection $sourceConnection,
-    ): void {
-        if (! $this->application->runningUnitTests() || ! Str::isUuid($shopId)) {
-            throw new LogicException('Synthetic tenant bootstrap is available only to the test harness.');
-        }
-
-        $this->clearRuntimeState();
-        $shop = new Shop;
-        $shop->setRawAttributes([
-            'id' => $shopId,
-            'name' => 'Test tenant',
-            'slug' => 'test-tenant',
-        ], true);
-        $shop->exists = true;
-        $configuration = $sourceConnection->getConfig();
-        unset($configuration['name'], $configuration['url']);
-        $this->testingPendingShop = $shop;
-        $this->testingSourceConnection = $sourceConnection;
-        $this->config->set('database.connections.'.self::CONNECTION, $configuration);
-        $this->database->purge(self::CONNECTION);
-        $this->database->connection(self::CONNECTION);
     }
 
     /** @return array{Shop, ValidatedTenantConnection} */
@@ -257,27 +213,6 @@ final class TenantConnectionManager
         $this->moduleRegistry->flush();
         $this->initializePermissionState((string) $shop->getKey());
         $this->auth->forgetGuards();
-    }
-
-    private function attestTestingConnection(Connection $connection): void
-    {
-        if (! $this->application->runningUnitTests()
-            || $this->testingSourceConnection === null
-            || ($this->testingPendingShop === null && $this->activeShop === null)) {
-            throw new TenantDatabaseAttestationFailed;
-        }
-
-        $shop = $this->testingPendingShop ?? $this->activeShop;
-        $source = $this->testingSourceConnection;
-        $connection->setPdo($source->getPdo());
-        $connection->setReadPdo($source->getReadPdo());
-
-        if ($shop === null) {
-            throw new TenantDatabaseAttestationFailed;
-        }
-
-        $this->testingPendingShop = null;
-        $this->activate($shop, $connection, $source->getPdo());
     }
 
     private function reconnectOwnedConnection(
@@ -364,8 +299,6 @@ final class TenantConnectionManager
         $this->activeShop = null;
         $this->pendingShop = null;
         $this->pendingSnapshot = null;
-        $this->testingPendingShop = null;
-        $this->testingSourceConnection = null;
         $this->config->set('permission.cache.key', self::NO_TENANT_PERMISSION_CACHE_KEY);
         $this->removeTenantConfiguration();
 

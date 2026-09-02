@@ -2,20 +2,30 @@
 
 namespace Tests;
 
+use App\Models\Central\Shop;
 use App\Tenancy\TenantConnectionManager;
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use RuntimeException;
+use Tests\Concerns\UsesTenantDatabases;
 
 abstract class TestCase extends BaseTestCase
 {
-    private ?string $defaultTestTenantId = null;
+    use UsesTenantDatabases;
+
+    private static ?string $testDatabaseRoot = null;
+
+    private static bool $centralDatabaseMigrated = false;
+
+    private ?string $defaultTestTenantDatabase = null;
 
     protected function setUpTraits()
     {
         if ($this->usesDefaultTenantContext()) {
-            $this->initializeDefaultTenantContext();
+            $this->initializeDefaultTenantDatabases();
         }
 
         $uses = parent::setUpTraits();
@@ -25,7 +35,10 @@ abstract class TestCase extends BaseTestCase
                 DB::connection((string) config('database.default'))->select('select 1');
             }
 
-            $this->aliasTenantConnectionToDefault();
+            $this->aliasDefaultConnectionToTenant();
+            $this->beforeApplicationDestroyed(function (): void {
+                $this->cleanUpDefaultTenantDatabases();
+            });
         }
 
         return $uses;
@@ -44,27 +57,59 @@ abstract class TestCase extends BaseTestCase
         return true;
     }
 
-    private function initializeDefaultTenantContext(): void
+    private function initializeDefaultTenantDatabases(): void
     {
-        $defaultConnectionName = (string) config('database.default');
-        $defaultConfiguration = config('database.connections.'.$defaultConnectionName);
+        $databaseRoot = self::databaseRootForTests();
+        $tenantRoot = $databaseRoot.DIRECTORY_SEPARATOR.'tenants';
+        (new Filesystem)->ensureDirectoryExists($tenantRoot, 0700);
 
-        if (! is_array($defaultConfiguration)) {
-            return;
+        config()->set('database.tenant_sqlite_root', $tenantRoot);
+        config()->set(
+            'database.tenant_attestation_lock_path',
+            $databaseRoot.DIRECTORY_SEPARATOR.'attestation-locks',
+        );
+
+        $centralDatabase = $databaseRoot.DIRECTORY_SEPARATOR.'central.sqlite';
+
+        if (! is_file($centralDatabase) && ! touch($centralDatabase)) {
+            throw new RuntimeException('Unable to create the central test database.');
         }
 
-        $this->defaultTestTenantId = (string) Str::uuid();
-        $this->aliasTenantConnectionToDefault();
+        $this->configureCentralDatabase($centralDatabase);
+
+        if (! self::$centralDatabaseMigrated) {
+            $this->migrateCentralDatabase();
+            self::$centralDatabaseMigrated = true;
+        }
+
+        $tenantId = (string) Str::uuid();
+        $this->defaultTestTenantDatabase = $tenantRoot.DIRECTORY_SEPARATOR.$tenantId.'.sqlite';
+        $shop = Shop::registerForProvisioning(
+            name: 'Test Tenant '.$tenantId,
+            slug: 'test-tenant-'.$tenantId,
+            databaseDriver: 'sqlite',
+            databaseName: $this->defaultTestTenantDatabase,
+        );
+        $this->createMigratedTenantDatabase($shop);
+        app(TenantConnectionManager::class)->connect($shop);
     }
 
-    private function aliasTenantConnectionToDefault(): void
+    private function aliasDefaultConnectionToTenant(): void
     {
         $defaultConnection = DB::connection((string) config('database.default'));
-        app(TenantConnectionManager::class)->bootstrapForTesting(
-            $this->defaultTestTenantId ??= (string) Str::uuid(),
-            $defaultConnection,
-        );
         $tenantConnection = DB::connection('tenant');
+        $transactionLevel = $defaultConnection->transactionLevel();
+
+        while ($defaultConnection->transactionLevel() > 0) {
+            $defaultConnection->rollBack();
+        }
+
+        $defaultConnection->setPdo($tenantConnection->getPdo());
+        $defaultConnection->setReadPdo($tenantConnection->getReadPdo());
+
+        for ($level = 0; $level < $transactionLevel; $level++) {
+            $defaultConnection->beginTransaction();
+        }
 
         if ($this->app->bound('db.transactions')) {
             $tenantConnection->setTransactionManager($this->app->make('db.transactions'));
@@ -74,5 +119,42 @@ abstract class TestCase extends BaseTestCase
             $this->transactions = $transactionLevel;
         };
         $synchronizeTransactionLevel->call($tenantConnection, $defaultConnection->transactionLevel());
+    }
+
+    private function cleanUpDefaultTenantDatabases(): void
+    {
+        $tenantDatabase = $this->defaultTestTenantDatabase;
+        $this->defaultTestTenantDatabase = null;
+
+        try {
+            app(TenantConnectionManager::class)->disconnect();
+            DB::purge((string) config('database.default'));
+            DB::purge('central');
+        } finally {
+            if ($tenantDatabase !== null) {
+                (new Filesystem)->delete([
+                    $tenantDatabase,
+                    $tenantDatabase.'-shm',
+                    $tenantDatabase.'-wal',
+                ]);
+            }
+        }
+    }
+
+    private static function databaseRootForTests(): string
+    {
+        if (self::$testDatabaseRoot !== null) {
+            return self::$testDatabaseRoot;
+        }
+
+        $databaseRoot = sys_get_temp_dir().DIRECTORY_SEPARATOR.'oil-change-pos-tests-'.Str::uuid();
+        (new Filesystem)->ensureDirectoryExists($databaseRoot, 0700);
+        self::$testDatabaseRoot = $databaseRoot;
+
+        register_shutdown_function(static function () use ($databaseRoot): void {
+            (new Filesystem)->deleteDirectory($databaseRoot);
+        });
+
+        return $databaseRoot;
     }
 }

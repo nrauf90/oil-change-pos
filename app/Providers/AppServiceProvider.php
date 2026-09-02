@@ -69,7 +69,6 @@ class AppServiceProvider extends ServiceProvider
                 runtimeState: $runtimeState,
                 permissionRegistrar: $application->make(PermissionRegistrar::class),
                 auth: $application->make('auth'),
-                application: $application,
                 attestor: new TenantDatabaseAttestor(
                     $application->make('config'),
                     new TenantSqliteAttestationLock(

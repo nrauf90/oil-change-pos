@@ -43,7 +43,6 @@ use App\Tenancy\TenantContext;
 use App\Tenancy\TenantSqliteWitnessConnection;
 use App\Tenancy\ValidatedTenantConnection;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\File;
@@ -88,16 +87,10 @@ class TenantConnectionIsolationTest extends TestCase
             'database.tenant_attestation_lock_path',
             $this->tenantRoot.DIRECTORY_SEPARATOR.'attestation-locks',
         );
-        config()->set('database.connections.central', $this->sqliteConfiguration($centralDatabase));
-        DB::purge('central');
+        $this->configureCentralDatabase($centralDatabase);
         DB::purge('tenant');
 
-        Artisan::call('migrate', [
-            '--database' => 'central',
-            '--path' => 'database/migrations/central',
-            '--realpath' => false,
-            '--no-interaction' => true,
-        ]);
+        $this->migrateCentralDatabase();
 
         $this->manager = app(TenantConnectionManager::class);
         $this->shopA = $this->createMigratedTenant('shop-a');
@@ -1394,10 +1387,6 @@ PHP;
     ): Shop {
         $database = $this->tenantRoot.DIRECTORY_SEPARATOR.$slug.'.sqlite';
 
-        if (File::put($database, '') === false) {
-            throw new RuntimeException('Unable to create a tenant test database.');
-        }
-
         $shop = Shop::registerForProvisioning(
             name: str($slug)->headline()->toString(),
             slug: $slug,
@@ -1405,19 +1394,7 @@ PHP;
             databaseName: $database,
             databasePassword: $databasePassword,
         );
-        $this->writeTenantMarker($database, $shop);
-        $this->manager->connect($shop);
-
-        try {
-            Artisan::call('migrate', [
-                '--database' => 'tenant',
-                '--path' => 'database/migrations',
-                '--realpath' => false,
-                '--no-interaction' => true,
-            ]);
-        } finally {
-            $this->manager->disconnect();
-        }
+        $this->createMigratedTenantDatabase($shop);
 
         return $shop;
     }
@@ -1446,30 +1423,7 @@ PHP;
 
     private function writeTenantMarker(string $database, Shop $shop): void
     {
-        $connection = DB::build($this->sqliteConfiguration($database));
-
-        try {
-            $connection->statement(<<<'SQL'
-                CREATE TABLE tenant_installations (
-                    id INTEGER PRIMARY KEY,
-                    shop_id VARCHAR(36) NOT NULL UNIQUE,
-                    target_fingerprint VARCHAR(64) NOT NULL,
-                    attestation_hmac VARCHAR(64) NOT NULL,
-                    connection_nonce VARCHAR(64) NULL,
-                    created_at DATETIME NOT NULL
-                )
-                SQL);
-            $connection->table('tenant_installations')->insert([
-                'id' => 1,
-                'shop_id' => $shop->getKey(),
-                'target_fingerprint' => $shop->database_target_fingerprint,
-                'attestation_hmac' => $shop->databaseAttestationHmac(),
-                'connection_nonce' => null,
-                'created_at' => now(),
-            ]);
-        } finally {
-            DB::purge($connection->getName());
-        }
+        $this->installTenantDatabaseMarker($database, $shop);
     }
 
     private function replaceMarkerShopId(Shop $shop, string $shopId): void
