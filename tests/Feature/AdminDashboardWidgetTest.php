@@ -19,6 +19,16 @@ class AdminDashboardWidgetTest extends TestCase
 {
     use LazilyRefreshDatabase;
 
+    public function test_the_dashboard_does_not_show_the_account_welcome_widget(): void
+    {
+        $admin = User::factory()->admin()->create();
+
+        $this->actingAs($admin)
+            ->get('/admin')
+            ->assertOk()
+            ->assertDontSee('Welcome');
+    }
+
     public function test_the_admin_dashboard_shows_todays_financial_summary(): void
     {
         $this->travelTo('2026-03-18 14:00:00');

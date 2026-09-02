@@ -16,6 +16,7 @@ use Filament\Forms\Components\Repeater;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Features\SupportTesting\Testable;
 use Livewire\Livewire;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class VehicleCatalogueManagementTest extends TestCase
@@ -43,15 +44,18 @@ class VehicleCatalogueManagementTest extends TestCase
         $restoreRepeaterUuids = Repeater::fake();
 
         try {
-            Livewire::actingAs(User::factory()->admin()->create())
-                ->test(CreateVehicleMake::class)
-                ->fillForm([
-                    'name' => 'Toyota',
-                    'vehicleModels' => [
-                        ['name' => 'Corolla'],
-                        ['name' => 'Yaris'],
-                    ],
-                ])
+            $page = Livewire::actingAs(User::factory()->admin()->create())
+                ->test(CreateVehicleMake::class);
+
+            $page
+                ->set('data.newVehicleModelName', '  Corolla  ')
+                ->callFormComponentAction('vehicleModelActions', 'addModel')
+                ->assertHasNoFormErrors()
+                ->assertSet('data.newVehicleModelName', null)
+                ->set('data.newVehicleModelName', 'Yaris')
+                ->callFormComponentAction('vehicleModelActions', 'addModel')
+                ->assertHasNoFormErrors()
+                ->fillForm(['name' => 'Toyota'])
                 ->call('create')
                 ->assertHasNoFormErrors();
         } finally {
@@ -66,28 +70,32 @@ class VehicleCatalogueManagementTest extends TestCase
         );
     }
 
-    public function test_the_owner_can_rename_a_vehicle_make_and_replace_its_models_from_the_admin_panel(): void
+    public function test_create_and_edit_forms_use_the_full_available_content_width(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $make = VehicleMake::factory()->create();
+
+        $createPage = Livewire::actingAs($admin)->test(CreateVehicleMake::class);
+        $editPage = Livewire::actingAs($admin)->test(EditVehicleMake::class, ['record' => $make->getKey()]);
+
+        $this->assertSame(1, $createPage->instance()->form->getColumns('lg'));
+        $this->assertSame(1, $editPage->instance()->form->getColumns('lg'));
+    }
+
+    public function test_the_owner_can_rename_a_vehicle_make_and_add_a_model_without_editing_existing_model_names(): void
     {
         $restoreRepeaterUuids = Repeater::fake();
         $make = VehicleMake::factory()->create(['name' => 'Honda']);
-        $civic = $make->vehicleModels()->create(['name' => 'Civic']);
-        $city = $make->vehicleModels()->create(['name' => 'City']);
+        $make->vehicleModels()->create(['name' => 'Civic']);
 
         try {
             Livewire::actingAs(User::factory()->admin()->create())
                 ->test(EditVehicleMake::class, ['record' => $make->getKey()])
-                ->fillForm([
-                    'name' => 'Honda Atlas',
-                    'vehicleModels' => [
-                        [
-                            'id' => $civic->getKey(),
-                            'name' => 'Civic RS',
-                        ],
-                        [
-                            'name' => 'BR-V',
-                        ],
-                    ],
-                ])
+                ->assertFormFieldDoesNotExist('vehicleModels.0.name')
+                ->set('data.newVehicleModelName', 'BR-V')
+                ->callFormComponentAction('vehicleModelActions', 'addModel')
+                ->assertHasNoFormErrors()
+                ->fillForm(['name' => 'Honda Atlas'])
                 ->call('save')
                 ->assertHasNoFormErrors();
         } finally {
@@ -98,12 +106,52 @@ class VehicleCatalogueManagementTest extends TestCase
 
         $this->assertSame('Honda Atlas', $make->name);
         $this->assertSame(
-            ['BR-V', 'Civic RS'],
+            ['BR-V', 'Civic'],
             $make->vehicleModels()->orderBy('name')->pluck('name')->all(),
         );
-        $this->assertDatabaseMissing('vehicle_models', [
-            'id' => $city->getKey(),
-        ], 'tenant');
+    }
+
+    public function test_vehicle_models_render_as_one_dense_table_instead_of_individual_cards(): void
+    {
+        $make = VehicleMake::factory()->create(['name' => 'Honda']);
+        $make->vehicleModels()->create(['name' => 'Civic']);
+
+        Livewire::actingAs(User::factory()->admin()->create())
+            ->test(EditVehicleMake::class, ['record' => $make->getKey()])
+            ->assertFormFieldExists(
+                'vehicleModels',
+                checkFieldUsing: fn (Repeater $repeater): bool => count($repeater->getTableColumns() ?? []) === 1,
+            );
+    }
+
+    #[DataProvider('invalidVehicleModelNames')]
+    public function test_adding_a_model_rejects_blank_and_duplicate_names(string $modelName): void
+    {
+        $restoreRepeaterUuids = Repeater::fake();
+        $make = VehicleMake::factory()->create(['name' => 'Honda']);
+        $make->vehicleModels()->create(['name' => 'Civic']);
+
+        try {
+            Livewire::actingAs(User::factory()->admin()->create())
+                ->test(EditVehicleMake::class, ['record' => $make->getKey()])
+                ->set('data.newVehicleModelName', $modelName)
+                ->callFormComponentAction('vehicleModelActions', 'addModel')
+                ->assertHasFormErrors(['newVehicleModelName'])
+                ->assertSet('data.vehicleModels', fn (array $models): bool => count($models) === 1);
+        } finally {
+            $restoreRepeaterUuids();
+        }
+    }
+
+    /** @return array<string, array{string}> */
+    public static function invalidVehicleModelNames(): array
+    {
+        return [
+            'blank' => [''],
+            'whitespace only' => ['   '],
+            'exact duplicate' => ['Civic'],
+            'case-only duplicate' => ['cIVIc'],
+        ];
     }
 
     public function test_the_vehicle_catalogue_table_can_be_searched_by_make_or_model_name(): void

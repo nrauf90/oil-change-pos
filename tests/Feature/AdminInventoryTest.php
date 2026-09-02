@@ -10,6 +10,7 @@ use App\Filament\Resources\Items\Pages\ListItems;
 use App\Models\Item;
 use App\Models\User;
 use App\Modules\ModuleRegistry;
+use Filament\Schemas\Components\Grid;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -49,6 +50,25 @@ class AdminInventoryTest extends TestCase
             'stock_level' => 12,
             'low_stock_alert' => 3,
         ], 'tenant');
+    }
+
+    public function test_create_and_edit_forms_use_explicit_rows_for_the_inventory_cards(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $item = Item::factory()->create();
+
+        foreach ([
+            Livewire::actingAs($admin)->test(CreateItem::class),
+            Livewire::actingAs($admin)->test(EditItem::class, ['record' => $item->getKey()]),
+        ] as $page) {
+            $components = $page->instance()->form->getComponents(withHidden: true);
+
+            $this->assertCount(4, $components);
+            $this->assertInstanceOf(Grid::class, $components[0]);
+            $this->assertInstanceOf(Grid::class, $components[1]);
+            $this->assertSame(2, $components[0]->getColumns('lg'));
+            $this->assertSame(2, $components[1]->getColumns('lg'));
+        }
     }
 
     public function test_a_duplicate_item_name_is_rejected(): void

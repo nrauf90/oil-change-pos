@@ -36,7 +36,8 @@
                 'Mobile' => $sale->phone ?: '—',
                 'Vehicle' => $sale->vehicle_model ?: '—',
                 'Plate' => $sale->vehicle_plate ?: '—',
-                'Mileage' => $sale->mileage !== null ? number_format($sale->mileage).' km' : '—',
+                'Visit odometer reading' => $sale->mileage !== null ? number_format($sale->mileage).' km' : '—',
+                'Next checkup mileage' => $sale->next_checkup_mileage !== null ? number_format($sale->next_checkup_mileage).' km' : '—',
                 'Served by' => $sale->cashier?->name ?: '—',
             ] as $label => $value)
                 <div class="flex justify-between gap-4 text-sm">

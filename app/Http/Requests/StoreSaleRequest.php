@@ -19,6 +19,7 @@ class StoreSaleRequest extends FormRequest
             'vehicle_model' => ['nullable', 'string', 'max:150'],
             'vehicle_plate' => ['nullable', 'string', 'max:40'],
             'mileage' => ['nullable', 'integer', 'min:0', 'max:99999999'],
+            'next_checkup_mileage' => ['nullable', 'integer', 'min:0', 'max:99999999'],
             'notes' => ['nullable', 'string', 'max:2000'],
 
             // The regex is the shared grammar of a typed amount. It sits in front
@@ -64,6 +65,7 @@ class StoreSaleRequest extends FormRequest
         $this->merge([
             'vehicle_plate' => $this->normalisePlate($this->input('vehicle_plate')),
             'mileage' => $this->blankToNull($this->input('mileage')),
+            'next_checkup_mileage' => $this->blankToNull($this->input('next_checkup_mileage')),
             'labor_charge' => $this->money($this->input('labor_charge')),
             'misc_charge' => $this->money($this->input('misc_charge')),
             'lines' => $this->normaliseLines($this->input('lines')),

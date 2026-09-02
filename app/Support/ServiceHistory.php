@@ -40,7 +40,7 @@ final class ServiceHistory
     /** @var array<int, string> */
     private const SALE_COLUMNS = [
         'id', 'invoice_number', 'customer_name', 'phone', 'vehicle_model',
-        'vehicle_plate', 'mileage', 'notes', 'created_at',
+        'vehicle_plate', 'mileage', 'next_checkup_mileage', 'notes', 'created_at',
     ];
 
     /** @var array<int, string> */

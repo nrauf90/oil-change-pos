@@ -32,6 +32,7 @@ class RecordSale
                 'vehicle_model' => $data['vehicle_model'] ?? null,
                 'vehicle_plate' => $data['vehicle_plate'] ?? null,
                 'mileage' => $data['mileage'] ?? null,
+                'next_checkup_mileage' => $data['next_checkup_mileage'] ?? null,
                 'notes' => $data['notes'] ?? null,
                 'labor_charge' => SaleTotalCalculator::amount($data['labor_charge'] ?? null),
                 'misc_charge' => SaleTotalCalculator::amount($data['misc_charge'] ?? null),
