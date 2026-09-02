@@ -106,9 +106,11 @@ final readonly class InitializeTenancy
 
         try {
             try {
-                return $this->manager->within($shop, function () use ($request, $next): Response {
-                    return $this->runTenantRequest($request, $next);
-                }, requireActiveShop: true);
+                $this->manager->connect($shop, requireActiveShop: true);
+
+                // The outer global invocation disconnects after the route pipeline
+                // unwinds, so StartSession can persist while the tenant guard is valid.
+                return $this->runTenantRequest($request, $next);
             } catch (TenantDatabaseAttestationFailed) {
                 $this->manager->disconnect();
 
