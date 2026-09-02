@@ -200,6 +200,19 @@ class ViewShop extends ViewRecord
 
         $changes = DB::connection('central')->transaction(
             static function () use ($actor, $enabledKeys, $modules, $shop): int {
+                $lockedActor = PlatformUser::on('central')
+                    ->whereKey($actor->getKey())
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $lockedActor instanceof PlatformUser
+                    || ! $lockedActor->is_active
+                    || $lockedActor->role !== PlatformUser::ROLE_SUPER_ADMIN) {
+                    throw new AuthorizationException(
+                        'Your platform administrator access is no longer active.',
+                    );
+                }
+
                 $storedFeatures = ShopFeature::on('central')
                     ->where('shop_id', $shop->getKey())
                     ->get()
@@ -229,7 +242,7 @@ class ViewShop extends ViewRecord
                         $shouldEnable
                             ? ShopLifecycleEvent::FeatureEnabled
                             : ShopLifecycleEvent::FeatureDisabled,
-                        $actor,
+                        $lockedActor,
                         [
                             'module_key' => $module->key(),
                             'reason_code' => 'platform_action',

@@ -85,7 +85,8 @@ class ModuleRegistry
             return;
         }
 
-        if ($enabled && (! $this->featureGate->enabled($key) || ! $this->dependenciesEnabled($module))) {
+        if ($enabled && (! $this->featureGate->enabled($key, $module->enabledByDefault())
+            || ! $this->dependenciesEnabled($module))) {
             return;
         }
 
@@ -193,7 +194,7 @@ class ModuleRegistry
         $key = $module->key();
 
         if (isset($ancestors[$key])
-            || ! $this->featureGate->enabled($key)
+            || ! $this->featureGate->enabled($key, $module->enabledByDefault())
             || ! ($this->enabledMap()[$key] ?? $module->enabledByDefault())) {
             return false;
         }

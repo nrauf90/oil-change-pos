@@ -8,9 +8,9 @@ use Throwable;
 /**
  * Applies the platform-owned feature ceiling for the current tenant.
  *
- * Missing rows preserve the platform default (enabled). Once a tenant context
- * exists, a failed central lookup denies optional features rather than
- * accidentally exposing them.
+ * Missing rows preserve the caller-supplied module default. Once a tenant
+ * context exists, a failed central lookup denies optional features rather
+ * than accidentally exposing them.
  */
 class TenantFeatureGate
 {
@@ -21,7 +21,7 @@ class TenantFeatureGate
 
     public function __construct(private readonly TenantContext $tenantContext) {}
 
-    public function enabled(string $moduleKey): bool
+    public function enabled(string $moduleKey, bool $enabledByDefault = true): bool
     {
         if (! $this->tenantContext->initialized()) {
             return true;
@@ -39,7 +39,7 @@ class TenantFeatureGate
                     ->all();
             }
 
-            return $this->enabledByModule[$moduleKey] ?? true;
+            return $this->enabledByModule[$moduleKey] ?? $enabledByDefault;
         } catch (Throwable) {
             return false;
         }
