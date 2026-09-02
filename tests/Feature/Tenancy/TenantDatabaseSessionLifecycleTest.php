@@ -286,6 +286,62 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
         $this->assertTenantStateIsRevoked();
     }
 
+    public function test_platform_logout_preserves_a_coexisting_tenant_database_session(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('platform-database-logout');
+        $platformUser = PlatformUser::factory()->create();
+        $platformGuard = Auth::guard('platform');
+        $platformGuard->login($platformUser);
+        session()->save();
+        $platformSessionId = session()->getId();
+        $this->resetResolvedSessionAndGuards();
+
+        $loginResponse = $this->withCookie((string) config('session.cookie'), $platformSessionId)
+            ->post($this->tenantUrl($shop, '/login'), [
+                'username' => $user->username,
+                'password' => 'secret-password',
+            ]);
+
+        $loginResponse->assertRedirect();
+        $tenantSessionId = $loginResponse->baseRequest->session()->getId();
+        $webSessionKey = Auth::guard('web')->getName();
+        $platformSessionKey = Auth::guard('platform')->getName();
+        $loginResponse
+            ->assertSessionHas($webSessionKey, $user->getKey())
+            ->assertSessionHas($platformSessionKey, $platformUser->getKey());
+        $this->resetResolvedSessionAndGuards();
+
+        $logoutResponse = $this->withCookie((string) config('session.cookie'), $tenantSessionId)
+            ->post('https://pos.example.test/platform/logout');
+
+        $logoutResponse
+            ->assertRedirect()
+            ->assertSessionHas($webSessionKey, $user->getKey())
+            ->assertSessionHas(InitializeTenancy::SESSION_SHOP_KEY, $shop->getKey())
+            ->assertSessionMissing($platformSessionKey);
+        $loggedOutSessionId = $logoutResponse->baseRequest->session()->getId();
+        $this->assertNotSame($tenantSessionId, $loggedOutSessionId);
+        $this->assertDatabaseMissing('sessions', ['id' => $tenantSessionId], 'central');
+        $this->assertDatabaseHas('sessions', ['id' => $loggedOutSessionId], 'central');
+        $encodedPayload = DB::connection('central')
+            ->table('sessions')
+            ->where('id', $loggedOutSessionId)
+            ->value('payload');
+        $this->assertIsString($encodedPayload);
+        $payload = json_decode(base64_decode($encodedPayload, true), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame($user->getKey(), $payload[$webSessionKey]);
+        $this->assertArrayNotHasKey($platformSessionKey, $payload);
+        $this->assertTenantStateIsRevoked();
+        $this->resetResolvedSessionAndGuards();
+
+        $this->withCredentials()
+            ->withCookie((string) config('session.cookie'), $loggedOutSessionId)
+            ->getJson($this->tenantUrl($shop, '/quick-items'))
+            ->assertOk();
+        $this->assertGuest('platform');
+        $this->assertTenantStateIsRevoked();
+    }
+
     public function test_database_session_starts_before_tenant_binding_and_authentication(): void
     {
         $webMiddleware = $this->routeMiddleware('quick-items.store');
@@ -332,6 +388,7 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
     private function resetResolvedSessionAndGuards(): void
     {
         Auth::forgetGuards();
+        config()->set('auth.defaults.guard', 'web');
         $this->app->forgetInstance('auth.driver');
         app(SessionManager::class)->forgetDrivers();
         $this->app->forgetInstance('session.store');

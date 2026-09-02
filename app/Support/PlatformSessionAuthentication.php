@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Models\Central\PlatformUser;
+use App\Tenancy\SupportAccessManager;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
@@ -92,6 +93,7 @@ class PlatformSessionAuthentication
                     $payload[$platformLoginKey],
                     $payload[self::GENERATION_SESSION_KEY],
                     $payload['password_hash_platform'],
+                    $payload[SupportAccessManager::SESSION_KEY],
                 );
 
                 $connection->table((string) config('session.table', 'sessions'))
@@ -116,6 +118,7 @@ class PlatformSessionAuthentication
         $session->forget([
             self::GENERATION_SESSION_KEY,
             'password_hash_platform',
+            SupportAccessManager::SESSION_KEY,
         ]);
     }
 

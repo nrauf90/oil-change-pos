@@ -2,6 +2,7 @@
 
 namespace App\Tenancy;
 
+use App\Http\Controllers\Auth\PlatformPanelLogoutController;
 use App\Http\Controllers\Auth\TenantPanelLogoutController;
 use App\Http\Middleware\EnforceReadOnlySupportAccess;
 use App\Http\Middleware\InitializeSupportAccess;
@@ -25,6 +26,7 @@ final readonly class TenantPackageRouteRegistrar
 
     public function register(): void
     {
+        $this->registerPlatformPanelLogoutController();
         $this->registerTenantPanelLogoutController();
         $this->registerTenantBoundFilamentActionRoutes();
 
@@ -115,6 +117,16 @@ final readonly class TenantPackageRouteRegistrar
 
         if ($logoutRoute instanceof RoutingRoute) {
             $logoutRoute->uses(TenantPanelLogoutController::class);
+            Route::getRoutes()->refreshActionLookups();
+        }
+    }
+
+    private function registerPlatformPanelLogoutController(): void
+    {
+        $logoutRoute = $this->routeNamed('filament.platform.auth.logout');
+
+        if ($logoutRoute instanceof RoutingRoute) {
+            $logoutRoute->uses(PlatformPanelLogoutController::class);
             Route::getRoutes()->refreshActionLookups();
         }
     }

@@ -4,6 +4,7 @@ namespace App\Models\Central;
 
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\DB;
 use LogicException;
 
 class ShopAccessSession extends CentralModel
@@ -71,6 +72,22 @@ class ShopAccessSession extends CentralModel
             ->update(['ended_at' => now()]);
 
         $this->refresh();
+    }
+
+    public static function endActiveForPlatformUser(PlatformUser $platformUser): void
+    {
+        DB::connection('central')->transaction(static function () use ($platformUser): void {
+            $activeAudits = static::on('central')
+                ->where('platform_user_id', $platformUser->getKey())
+                ->whereNull('ended_at')
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+
+            foreach ($activeAudits as $activeAudit) {
+                $activeAudit->end();
+            }
+        });
     }
 
     /** @return BelongsTo<PlatformUser, $this> */

@@ -3,6 +3,7 @@
 namespace App\Providers\Filament;
 
 use App\Filament\Platform\Pages\PlatformDashboard;
+use App\Http\Middleware\EnsureCentralHost;
 use App\Http\Middleware\EnsureFreshPlatformAuthentication;
 use App\Http\Middleware\UsePlatformGuard;
 use App\Models\Central\PlatformUser;
@@ -61,6 +62,7 @@ class PlatformPanelProvider extends PanelProvider
             ])
             ->discoverWidgets(in: app_path('Filament/Platform/Widgets'), for: 'App\Filament\Platform\Widgets')
             ->middleware([
+                EnsureCentralHost::class,
                 EncryptCookies::class,
                 AddQueuedCookiesToResponse::class,
                 StartSession::class,
@@ -73,6 +75,7 @@ class PlatformPanelProvider extends PanelProvider
                 DispatchServingFilamentEvent::class,
             ])
             ->persistentMiddleware([
+                EnsureCentralHost::class,
                 UsePlatformGuard::class,
             ])
             ->authMiddleware([
