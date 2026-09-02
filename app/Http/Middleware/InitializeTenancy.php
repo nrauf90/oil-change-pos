@@ -11,6 +11,7 @@ use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
 use App\Tenancy\TenantLivewireUploadUrlGenerator;
 use App\Tenancy\TenantResolver;
+use App\Tenancy\TenantSessionInvalidator;
 use Closure;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\SessionGuard;
@@ -47,6 +48,7 @@ final readonly class InitializeTenancy
         private CookieJar $cookies,
         private UrlGenerator $url,
         private ConfigRepository $config,
+        private TenantSessionInvalidator $sessionInvalidator,
     ) {}
 
     /**
@@ -74,6 +76,7 @@ final readonly class InitializeTenancy
             }
         } catch (Throwable) {
             $this->manager->disconnect();
+            $this->sessionInvalidator->invalidate($request);
 
             return $this->unavailableResponse->unavailable($request);
         }
@@ -83,10 +86,14 @@ final readonly class InitializeTenancy
                 return $next($request);
             }
 
+            $this->sessionInvalidator->invalidate($request);
+
             return $this->unavailableResponse->notFound($request);
         }
 
         if ($shop->status !== ShopStatus::Active) {
+            $this->sessionInvalidator->invalidate($request);
+
             return $this->unavailableResponse->unavailable($request);
         }
 
@@ -106,11 +113,14 @@ final readonly class InitializeTenancy
 
         try {
             try {
-                return $this->manager->within($shop, function () use ($request, $next): Response {
-                    return $this->runTenantRequest($request, $next);
-                }, requireActiveShop: true);
+                $this->manager->connect($shop, requireActiveShop: true);
+
+                // The outer global invocation disconnects after the route pipeline
+                // unwinds, so StartSession can persist while the tenant guard is valid.
+                return $this->runTenantRequest($request, $next);
             } catch (TenantDatabaseAttestationFailed) {
                 $this->manager->disconnect();
+                $this->sessionInvalidator->invalidate($request);
 
                 return $this->unavailableResponse->unavailable($request);
             }

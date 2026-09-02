@@ -8,6 +8,7 @@ use App\Models\Central\Shop;
 use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
 use App\Tenancy\TenantResolver;
+use App\Tenancy\TenantSessionInvalidator;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Routing\UrlGenerator;
@@ -24,6 +25,7 @@ final readonly class EnsureShopIsActive
         private TenantContext $context,
         private ShopUnavailableResponse $unavailableResponse,
         private UrlGenerator $url,
+        private TenantSessionInvalidator $sessionInvalidator,
     ) {}
 
     /**
@@ -43,15 +45,20 @@ final readonly class EnsureShopIsActive
             $shop = $this->resolver->resolve($request);
         } catch (Throwable) {
             $this->manager->disconnect();
+            $this->sessionInvalidator->invalidate($request);
 
             return $this->unavailableResponse->unavailable($request);
         }
 
         if ($shop === null) {
+            $this->sessionInvalidator->invalidate($request);
+
             return $this->unavailableResponse->notFound($request);
         }
 
         if ($shop->status !== ShopStatus::Active) {
+            $this->sessionInvalidator->invalidate($request);
+
             return $this->unavailableResponse->unavailable($request);
         }
 

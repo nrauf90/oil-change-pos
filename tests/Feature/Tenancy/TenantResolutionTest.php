@@ -382,7 +382,7 @@ class TenantResolutionTest extends TestCase
             InitializeTenancy::SESSION_SHOP_KEY => $shopA->getKey(),
         ]);
         $oldSessionId = session()->getId();
-        session()->save();
+        $this->saveSessionForTenant($shopA);
 
         $this->withCookie((string) config('session.cookie'), $oldSessionId)
             ->get('https://pos.example.test/__tenants/mismatch-replay-b/session-probe')
@@ -470,7 +470,7 @@ class TenantResolutionTest extends TestCase
             InitializeTenancy::SESSION_SHOP_KEY => $shop->getKey(),
         ]);
         $oldSessionId = session()->getId();
-        session()->save();
+        $this->saveSessionForTenant($shop);
 
         $this->withCookie((string) config('session.cookie'), $oldSessionId)
             ->post('https://logout-replay-shop.pos.example.test/logout')
@@ -509,7 +509,7 @@ class TenantResolutionTest extends TestCase
         $recallerName = auth('web')->getRecallerName();
         $oldRecaller = $loginResponse->getCookie($recallerName);
         $oldSessionId = session()->getId();
-        session()->save();
+        $this->saveSessionForTenant($shop);
 
         $loginResponse->assertRedirect();
         $this->assertNotNull($oldRecaller);
@@ -616,6 +616,7 @@ class TenantResolutionTest extends TestCase
         $this->assertMiddlewarePrecedes($webMiddleware, InitializeTenancy::class, PermissionMiddleware::class);
         $this->assertMiddlewarePrecedes($filamentMiddleware, StartSession::class, InitializeSupportAccess::class);
         $this->assertMiddlewarePrecedes($filamentMiddleware, InitializeSupportAccess::class, EnsureShopIsActive::class);
+        $this->assertMiddlewarePrecedes($filamentMiddleware, StartSession::class, EnsureShopIsActive::class);
         $this->assertMiddlewarePrecedes($filamentMiddleware, EnsureShopIsActive::class, InitializeTenancy::class);
         $this->assertMiddlewarePrecedes($filamentMiddleware, InitializeTenancy::class, EnforceReadOnlySupportAccess::class);
         $this->assertMiddlewarePrecedes($filamentMiddleware, EnforceReadOnlySupportAccess::class, SetUpPanel::class);
@@ -1268,6 +1269,13 @@ class TenantResolutionTest extends TestCase
     private function migrateTenant(Shop $shop): void
     {
         $this->migrateTenantDatabase($shop);
+    }
+
+    private function saveSessionForTenant(Shop $shop): void
+    {
+        $this->manager->within($shop, static function (): void {
+            session()->save();
+        });
     }
 
     /** @return list<string> */
