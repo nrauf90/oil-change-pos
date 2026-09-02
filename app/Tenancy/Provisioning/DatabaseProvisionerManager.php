@@ -3,6 +3,7 @@
 namespace App\Tenancy\Provisioning;
 
 use App\Exceptions\TenantProvisioningException;
+use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 
 final readonly class DatabaseProvisionerManager implements DatabaseProvisioner
@@ -17,6 +18,7 @@ final readonly class DatabaseProvisionerManager implements DatabaseProvisioner
         Shop $shop,
         #[\SensitiveParameter]
         TenantProvisioningLease $lease,
+        ?PlatformUser $actor = null,
     ): void {
         $freshShop = Shop::query()->whereKey($shop->getKey())->first();
 
@@ -29,8 +31,8 @@ final readonly class DatabaseProvisionerManager implements DatabaseProvisioner
         }
 
         match ($freshShop->database_driver) {
-            'sqlite' => $this->sqlite->provision($freshShop, $lease),
-            'mysql' => $this->mysql->provision($freshShop, $lease),
+            'sqlite' => $this->sqlite->provision($freshShop, $lease, $actor),
+            'mysql' => $this->mysql->provision($freshShop, $lease, $actor),
             default => throw TenantProvisioningException::safe(
                 'target',
                 'UNSUPPORTED_DATABASE_DRIVER',

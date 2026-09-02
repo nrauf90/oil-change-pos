@@ -71,10 +71,15 @@ class ShopManagementTest extends PlatformTestCase
             'migration_status' => 'current',
         ], 'central');
         $this->assertSame(
-            [$platformUser->getKey(), $platformUser->getKey()],
+            [
+                $platformUser->getKey(),
+                $platformUser->getKey(),
+                $platformUser->getKey(),
+            ],
             $shop->lifecycleActivities()
                 ->whereIn('event', [
                     ShopLifecycleEvent::ProvisioningStarted,
+                    ShopLifecycleEvent::TenantInstallationAuthorized,
                     ShopLifecycleEvent::ProvisioningSucceeded,
                 ])
                 ->orderBy('id')
@@ -284,10 +289,15 @@ class ShopManagementTest extends PlatformTestCase
         $this->assertSame(ShopStatus::Active, $shop->fresh()->status);
         $this->assertFileExists($database);
         $this->assertSame(
-            [$platformUser->getKey(), $platformUser->getKey()],
+            [
+                $platformUser->getKey(),
+                $platformUser->getKey(),
+                $platformUser->getKey(),
+            ],
             $shop->lifecycleActivities()
                 ->whereIn('event', [
                     ShopLifecycleEvent::ProvisioningStarted,
+                    ShopLifecycleEvent::TenantInstallationAuthorized,
                     ShopLifecycleEvent::ProvisioningSucceeded,
                 ])
                 ->orderBy('id')

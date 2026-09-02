@@ -306,7 +306,7 @@ final readonly class ProvisionShop
                 'database',
                 'DATABASE_PROVISION_FAILED',
                 'The tenant database could not be provisioned. Review the application log code and retry.',
-                fn (): mixed => $this->databaseProvisioner->provision($freshShop, $lease),
+                fn (): mixed => $this->databaseProvisioner->provision($freshShop, $lease, $actor),
             );
             $freshShop = $this->freshProvisioningShop($freshShop);
             $centralOwner = $freshShop->owner()->first();

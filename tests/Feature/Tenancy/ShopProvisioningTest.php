@@ -9,6 +9,7 @@ use App\Enums\Role as RoleEnum;
 use App\Enums\ShopLifecycleEvent;
 use App\Enums\ShopStatus;
 use App\Exceptions\TenantProvisioningException;
+use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 use App\Models\Central\ShopFeature;
 use App\Models\Central\ShopOwner;
@@ -1079,6 +1080,7 @@ class ShopProvisioningTest extends TestCase
                 #[\SensitiveParameter]
                 Shop $shop,
                 TenantProvisioningLease $lease,
+                ?PlatformUser $actor = null,
             ): void {
                 throw new RuntimeException($this->driverDetail);
             }

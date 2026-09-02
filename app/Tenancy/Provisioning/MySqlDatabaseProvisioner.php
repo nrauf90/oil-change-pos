@@ -6,6 +6,7 @@ use App\Actions\Tenancy\RecordShopLifecycleActivity;
 use App\Enums\ShopLifecycleEvent;
 use App\Enums\ShopStatus;
 use App\Exceptions\TenantProvisioningException;
+use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 use App\Tenancy\ValidatedTenantConnection;
 use Illuminate\Support\Facades\DB;
@@ -25,6 +26,7 @@ final readonly class MySqlDatabaseProvisioner implements DatabaseProvisioner
         Shop $shop,
         #[\SensitiveParameter]
         TenantProvisioningLease $lease,
+        ?PlatformUser $actor = null,
     ): void {
         $attemptFingerprint = (string) $shop->database_target_fingerprint;
         [$freshShop, $snapshot] = $this->reloadProvisioningShop($shop, $attemptFingerprint);
@@ -79,7 +81,12 @@ final readonly class MySqlDatabaseProvisioner implements DatabaseProvisioner
                     TenantProvisioningCheckpoint::AfterPhysicalCreateBeforeAuthorization,
                     $freshShop,
                 );
-                $this->publishCreationAuthorization($freshShop, $attemptFingerprint, $lease);
+                $this->publishCreationAuthorization(
+                    $freshShop,
+                    $attemptFingerprint,
+                    $lease,
+                    $actor,
+                );
                 $this->hook->reached(
                     TenantProvisioningCheckpoint::AfterAuthorization,
                     $freshShop->fresh(),
@@ -208,11 +215,13 @@ final readonly class MySqlDatabaseProvisioner implements DatabaseProvisioner
         string $attemptFingerprint,
         #[\SensitiveParameter]
         TenantProvisioningLease $lease,
+        ?PlatformUser $actor,
     ): void {
         DB::connection('central')->transaction(function () use (
             $shop,
             $attemptFingerprint,
             $lease,
+            $actor,
         ): void {
             $lockedShop = Shop::query()
                 ->whereKey($shop->getKey())
@@ -235,6 +244,7 @@ final readonly class MySqlDatabaseProvisioner implements DatabaseProvisioner
             $this->lifecycleActivity->handle(
                 $lockedShop,
                 ShopLifecycleEvent::TenantInstallationAuthorized,
+                $actor,
                 metadata: [
                     'database_driver' => 'mysql',
                     'reason_code' => TenantInstallationReason::ExclusiveCreate->value,

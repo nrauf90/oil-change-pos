@@ -6,6 +6,7 @@ use App\Actions\Tenancy\RecordShopLifecycleActivity;
 use App\Enums\ShopLifecycleEvent;
 use App\Enums\ShopStatus;
 use App\Exceptions\TenantProvisioningException;
+use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 use App\Tenancy\SqliteDatabaseIdentitySnapshot;
 use Illuminate\Support\Facades\DB;
@@ -24,6 +25,7 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
         Shop $shop,
         #[\SensitiveParameter]
         TenantProvisioningLease $lease,
+        ?PlatformUser $actor = null,
     ): void {
         $attemptFingerprint = (string) $shop->database_target_fingerprint;
         $freshShop = $this->reloadAttemptShop($shop, $attemptFingerprint);
@@ -81,6 +83,7 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
                 $attemptFingerprint,
                 $identity,
                 $lease,
+                $actor,
             );
             $this->hook->reached(
                 TenantProvisioningCheckpoint::AfterAuthorization,
@@ -215,12 +218,14 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
         SqliteDatabaseIdentitySnapshot $identity,
         #[\SensitiveParameter]
         TenantProvisioningLease $lease,
+        ?PlatformUser $actor,
     ): void {
         DB::connection('central')->transaction(function () use (
             $shop,
             $attemptFingerprint,
             $identity,
             $lease,
+            $actor,
         ): void {
             $lockedShop = Shop::query()
                 ->whereKey($shop->getKey())
@@ -248,6 +253,7 @@ final readonly class SqliteDatabaseProvisioner implements DatabaseProvisioner
             $this->lifecycleActivity->handle(
                 $materializedShop,
                 ShopLifecycleEvent::TenantInstallationAuthorized,
+                $actor,
                 metadata: [
                     'database_driver' => 'sqlite',
                     'reason_code' => TenantInstallationReason::ExclusiveCreate->value,
