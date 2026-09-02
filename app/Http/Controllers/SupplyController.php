@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Requests\SupplyRequest;
 use App\Models\Supplier;
 use App\Models\Supply;
+use App\Tenancy\TenantStoragePath;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
@@ -18,19 +19,25 @@ class SupplyController extends Controller
         return view('supplies.create', compact('supplier'));
     }
 
-    public function store(SupplyRequest $request, Supplier $supplier): RedirectResponse
-    {
+    public function store(
+        SupplyRequest $request,
+        Supplier $supplier,
+        TenantStoragePath $storagePaths,
+    ): RedirectResponse {
         $data = $request->safe()->except('bill_image');
 
         if ($request->hasFile('bill_image')) {
-            $data['bill_image_path'] = $request->file('bill_image')->store('supplier-bills');
+            $data['bill_image_path'] = $storagePaths->store(
+                $request->file('bill_image'),
+                'supplier-bills',
+            );
         }
 
         try {
             $supply = $supplier->supplies()->create($data);
         } catch (Throwable $exception) {
             if (isset($data['bill_image_path'])) {
-                Storage::disk('local')->delete($data['bill_image_path']);
+                $storagePaths->delete($data['bill_image_path'], 'supplier-bills');
             }
 
             throw $exception;
@@ -49,13 +56,17 @@ class SupplyController extends Controller
         ]);
     }
 
-    public function bill(Supplier $supplier, Supply $supply): StreamedResponse
-    {
+    public function bill(
+        Supplier $supplier,
+        Supply $supply,
+        TenantStoragePath $storagePaths,
+    ): StreamedResponse {
         $this->ensureSupplierOwnsSupply($supplier, $supply);
-        abort_if(blank($supply->bill_image_path) || ! Storage::disk('local')->exists($supply->bill_image_path), 404);
+        $path = $storagePaths->readablePath($supply->bill_image_path, 'supplier-bills');
+        abort_if($path === null, 404);
 
         return Storage::disk('local')->response(
-            $supply->bill_image_path,
+            $path,
             headers: ['X-Content-Type-Options' => 'nosniff'],
         );
     }

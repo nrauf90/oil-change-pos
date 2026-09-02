@@ -9,6 +9,7 @@ use App\Models\Supplier;
 use App\Models\SupplierPayment;
 use App\Models\Supply;
 use App\Models\User;
+use App\Tenancy\TenantStoragePath;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -175,7 +176,10 @@ class SupplierLedgerTest extends TestCase
     public function test_private_evidence_requires_supplier_permission_and_disables_mime_sniffing(): void
     {
         Storage::fake('local');
-        Storage::disk('local')->put('supplier-bills/bill.jpg', 'image bytes');
+        Storage::disk('local')->put(
+            app(TenantStoragePath::class)->path('supplier-bills/bill.jpg'),
+            'image bytes',
+        );
         $supply = Supply::factory()->create(['bill_image_path' => 'supplier-bills/bill.jpg']);
 
         $this->get(route('suppliers.supplies.bill', [$supply->supplier, $supply]))
