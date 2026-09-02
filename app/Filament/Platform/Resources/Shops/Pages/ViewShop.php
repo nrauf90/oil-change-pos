@@ -5,9 +5,11 @@ namespace App\Filament\Platform\Resources\Shops\Pages;
 use App\Actions\Tenancy\CollectShopHealth;
 use App\Actions\Tenancy\CollectTenantStatistics;
 use App\Actions\Tenancy\RecordShopLifecycleActivity;
+use App\Actions\Tenancy\RotateShopDatabaseEndpoint;
 use App\Enums\DashboardPeriod;
 use App\Enums\ShopLifecycleEvent;
 use App\Enums\ShopStatus;
+use App\Exceptions\TenantDatabaseEndpointRotationException;
 use App\Filament\Platform\Resources\Shops\ShopResource;
 use App\Filament\Platform\Resources\Shops\Tables\ShopsTable;
 use App\Models\Central\PlatformUser;
@@ -19,6 +21,7 @@ use App\Tenancy\SupportAccessManager;
 use Filament\Actions\Action;
 use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Icons\Heroicon;
@@ -74,11 +77,80 @@ class ViewShop extends ViewRecord
     {
         return [
             self::supportAccessAction(),
+            self::rotateDatabaseEndpointAction(),
             self::manageFeaturesAction(),
             ShopsTable::suspendAction(),
             ShopsTable::reactivateAction(),
             ShopsTable::retryProvisioningAction(),
         ];
+    }
+
+    private static function rotateDatabaseEndpointAction(): Action
+    {
+        return Action::make('rotateDatabaseEndpoint')
+            ->label('Rotate database endpoint')
+            ->icon(Heroicon::OutlinedArrowsRightLeft)
+            ->color('danger')
+            ->visible(static fn (Shop $record): bool => in_array(
+                $record->status,
+                [ShopStatus::Active, ShopStatus::Suspended],
+                true,
+            ) && $record->database_driver === 'mysql' && $record->database_socket === null)
+            ->authorize(static fn (Shop $record): bool => ShopResource::canView($record))
+            ->modalHeading(static fn (Shop $record): string => 'Rotate '.$record->name.' database endpoint')
+            ->modalDescription(static function (Shop $record): string {
+                $actor = Auth::guard('platform')->user();
+
+                if (! $actor instanceof PlatformUser) {
+                    return 'Active super administrator access is required.';
+                }
+
+                try {
+                    return self::databaseEndpointRotationSummary(
+                        resolve(RotateShopDatabaseEndpoint::class)->preview($actor, $record),
+                    );
+                } catch (TenantDatabaseEndpointRotationException $exception) {
+                    return $exception->getMessage();
+                } catch (Throwable) {
+                    return 'The database endpoint rotation cannot be previewed safely.';
+                }
+            })
+            ->modalSubmitActionLabel('Rotate endpoint')
+            ->schema([
+                TextInput::make('confirmation')
+                    ->label('Type the exact shop slug to confirm')
+                    ->helperText(static fn (Shop $record): string => $record->slug)
+                    ->required()
+                    ->maxLength(63),
+            ])
+            ->action(static function (Action $action, Shop $record, array $data): void {
+                $actor = self::authorizedActor($record);
+                $confirmation = $data['confirmation'] ?? null;
+
+                try {
+                    resolve(RotateShopDatabaseEndpoint::class)->handle(
+                        $actor,
+                        $record,
+                        is_string($confirmation) ? $confirmation : '',
+                    );
+                } catch (TenantDatabaseEndpointRotationException $exception) {
+                    Notification::make()
+                        ->danger()
+                        ->title('Database endpoint was not rotated')
+                        ->body($exception->getMessage())
+                        ->send();
+                    $action->failure();
+                    $action->halt();
+
+                    return;
+                }
+
+                Notification::make()
+                    ->success()
+                    ->title('Database endpoint rotated')
+                    ->body('The normalized target, tenant marker, and audit trail were reconciled.')
+                    ->send();
+            });
     }
 
     private static function supportAccessAction(): Action
@@ -111,6 +183,36 @@ class ViewShop extends ViewRecord
                 $manager->start($platformUser, $record, $reason);
                 $livewire->redirect($manager->tenantEntryUrl($record), navigate: false);
             });
+    }
+
+    /** @param array<string, mixed> $preview */
+    private static function databaseEndpointRotationSummary(array $preview): string
+    {
+        $old = $preview['old_target'];
+        $new = $preview['new_target'];
+        $oldHosts = implode(', ', $old['hosts']);
+        $newEndpoints = collect($new['endpoints'])
+            ->map(static fn (array $endpoint): string => sprintf(
+                '%s -> %s:%d',
+                $endpoint['host'],
+                $endpoint['address'],
+                $endpoint['port'],
+            ))
+            ->join(', ');
+
+        return sprintf(
+            'Registered: %s/%s at %s:%d, fingerprint %s. Candidate: %s/%s at %s, fingerprint %s.%s',
+            $old['driver'],
+            $old['database'],
+            $oldHosts,
+            $old['port'],
+            $old['fingerprint'],
+            $new['driver'],
+            $new['database'],
+            $newEndpoints,
+            $new['fingerprint'],
+            $preview['pending'] ? ' A previously started rotation will be recovered.' : '',
+        );
     }
 
     private static function manageFeaturesAction(): Action

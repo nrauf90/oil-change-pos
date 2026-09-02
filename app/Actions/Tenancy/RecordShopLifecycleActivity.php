@@ -23,7 +23,10 @@ class RecordShopLifecycleActivity
      *     migration?: string,
      *     batch?: int,
      *     table_count?: int,
-     *     owner_linked?: bool
+     *     owner_linked?: bool,
+     *     rotation_id?: string,
+     *     old_target_fingerprint?: string,
+     *     new_target_fingerprint?: string
      * } $metadata Unknown keys and values outside the event-specific schema are discarded.
      */
     public function handle(
@@ -94,6 +97,10 @@ class RecordShopLifecycleActivity
             ShopLifecycleEvent::ExistingDatabaseAdopted => [
                 'database_driver', 'table_count', 'owner_linked',
             ],
+            ShopLifecycleEvent::DatabaseEndpointRotationStarted,
+            ShopLifecycleEvent::DatabaseEndpointRotationCompleted => [
+                'rotation_id', 'old_target_fingerprint', 'new_target_fingerprint',
+            ],
         };
     }
 
@@ -111,9 +118,21 @@ class RecordShopLifecycleActivity
             return is_string($value) && in_array($value, ['mysql', 'sqlite'], true);
         }
 
-        if ($key === 'target_fingerprint') {
+        if (in_array($key, [
+            'target_fingerprint',
+            'old_target_fingerprint',
+            'new_target_fingerprint',
+        ], true)) {
             return is_string($value)
                 && preg_match('/\A[a-f0-9]{64}\z/', $value) === 1;
+        }
+
+        if ($key === 'rotation_id') {
+            return is_string($value)
+                && preg_match(
+                    '/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/',
+                    $value,
+                ) === 1;
         }
 
         if (! is_string($value) || $this->looksLikeCredential($value)) {

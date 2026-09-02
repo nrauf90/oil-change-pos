@@ -285,6 +285,72 @@ class Shop extends CentralModel
         $this->setRawAttributes($attributes, true);
     }
 
+    /** @param list<string> $expectedOldClaimFingerprints */
+    public function rotateDatabaseEndpoint(
+        #[\SensitiveParameter]
+        NormalizedDatabaseTarget $target,
+        #[\SensitiveParameter]
+        string $expectedOldFingerprint,
+        #[\SensitiveParameter]
+        array $expectedOldClaimFingerprints,
+    ): void {
+        try {
+            $this->updateLocked(function (self $shop) use (
+                $target,
+                $expectedOldFingerprint,
+                $expectedOldClaimFingerprints,
+            ): void {
+                if (! in_array($shop->status, [ShopStatus::Active, ShopStatus::Suspended], true)
+                    || $shop->database_driver !== 'mysql'
+                    || $shop->database_socket !== null
+                    || $target->driver !== 'mysql'
+                    || $target->effectiveSocket !== null) {
+                    throw new LogicException('The shop database endpoint is not eligible for rotation.');
+                }
+
+                $registeredFingerprint = (string) $shop->database_target_fingerprint;
+
+                if (! hash_equals($expectedOldFingerprint, $registeredFingerprint)
+                    || $shop->database_driver !== $target->driver
+                    || $shop->database_name !== $target->database
+                    || $shop->database_host !== $target->host
+                    || ($shop->database_port === null ? null : (int) $shop->database_port) !== $target->port
+                    || $shop->database_socket !== $target->socket
+                    || hash_equals($registeredFingerprint, $target->fingerprint)) {
+                    throw new LogicException('The registered shop database target changed during rotation.');
+                }
+
+                $ownedClaims = $shop->databaseTargetClaims()
+                    ->pluck('fingerprint')
+                    ->map(static fn (mixed $fingerprint): string => (string) $fingerprint)
+                    ->all();
+                sort($ownedClaims, SORT_STRING);
+                sort($expectedOldClaimFingerprints, SORT_STRING);
+
+                if ($ownedClaims !== $expectedOldClaimFingerprints) {
+                    throw new LogicException('The registered shop database claims changed during rotation.');
+                }
+
+                $shop->assertDatabaseTargetIsAvailable($target);
+                $shop->allowsProvisioningTargetChange = true;
+
+                try {
+                    $shop->applyNormalizedDatabaseTarget($target);
+                    $shop->save();
+                    $shop->replaceDatabaseTargetClaims($target->claimFingerprints());
+                } finally {
+                    $shop->allowsProvisioningTargetChange = false;
+                }
+            });
+        } catch (UniqueConstraintViolationException $exception) {
+            if ($this->violatesDatabaseTargetIdentity($exception)) {
+                throw TenantDatabaseTargetConflict::alreadyAssigned();
+            }
+
+            throw $exception;
+        }
+    }
+
     public function markProvisioningFailed(string $message): void
     {
         $this->transition(
@@ -404,12 +470,24 @@ class Shop extends CentralModel
 
     public function databaseAttestationHmac(): string
     {
-        $shopId = $this->getKey();
         $fingerprint = $this->getAttribute('database_target_fingerprint');
+
+        if (! is_string($fingerprint)) {
+            throw new LogicException('Shop database attestation material is incomplete.');
+        }
+
+        return $this->databaseAttestationHmacForFingerprint($fingerprint);
+    }
+
+    public function databaseAttestationHmacForFingerprint(
+        #[\SensitiveParameter]
+        string $fingerprint,
+    ): string {
+        $shopId = $this->getKey();
         $key = $this->getAttribute('database_attestation_key');
 
         if (! is_string($shopId) || $shopId === ''
-            || ! is_string($fingerprint) || $fingerprint === ''
+            || preg_match('/\A[a-f0-9]{64}\z/', $fingerprint) !== 1
             || ! is_string($key) || $key === '') {
             throw new LogicException('Shop database attestation material is incomplete.');
         }
