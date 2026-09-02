@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -224,43 +225,69 @@ class TenantFileIsolationTest extends TestCase
         Storage::disk('local')->assertExists('supplier-bills/shared.jpg');
     }
 
-    /**
-     * Regression caught: serving a legacy path forever leaves it global and
-     * makes the evidence disappear as soon as that shared source is retired.
-     */
-    public function test_legacy_bill_is_copied_to_the_current_shop_and_survives_source_removal(): void
+    public function test_same_unscoped_legacy_bill_path_is_denied_to_both_tenants(): void
+    {
+        Storage::fake('local');
+        $legacyPath = 'supplier-bills/ambiguous-bill.jpg';
+        Storage::disk('local')->put($legacyPath, 'ambiguous-legacy-bytes');
+        $evidenceA = $this->seedLegacyBill($this->shopA, 'Tenant A owner', $legacyPath);
+        $evidenceB = $this->seedLegacyBill($this->shopB, 'Tenant B owner', $legacyPath);
+
+        $this->loginTo($this->shopA);
+        $this->get($this->tenantUrl(
+            $this->shopA,
+            '/suppliers/'.$evidenceA['supplier_id'].'/supplies/'.$evidenceA['supply_id'].'/bill',
+        ))->assertNotFound();
+        $this->logoutFrom($this->shopA);
+
+        $this->loginTo($this->shopB);
+        $this->get($this->tenantUrl(
+            $this->shopB,
+            '/suppliers/'.$evidenceB['supplier_id'].'/supplies/'.$evidenceB['supply_id'].'/bill',
+        ))->assertNotFound();
+
+        Storage::disk('local')->assertExists($legacyPath);
+        Storage::disk('local')->assertMissing('tenants/'.$this->shopA->getKey().'/'.$legacyPath);
+        Storage::disk('local')->assertMissing('tenants/'.$this->shopB->getKey().'/'.$legacyPath);
+    }
+
+    public function test_pre_migrated_legacy_bill_copy_is_served_only_to_its_tenant(): void
     {
         Storage::fake('local');
         $legacyPath = 'supplier-bills/legacy-bill.jpg';
-        $scopedPath = 'tenants/'.$this->shopA->getKey().'/'.$legacyPath;
-        Storage::disk('local')->put($legacyPath, 'legacy-bill-bytes');
-        $evidence = $this->seedLegacyBill($this->shopA, 'Tenant A owner', $legacyPath);
+        $scopedPathA = 'tenants/'.$this->shopA->getKey().'/'.$legacyPath;
+        $scopedPathB = 'tenants/'.$this->shopB->getKey().'/'.$legacyPath;
+        Storage::disk('local')->put($legacyPath, 'untrusted-global-bytes');
+        Storage::disk('local')->put($scopedPathA, 'tenant-a-migrated-bytes');
+        $evidenceA = $this->seedLegacyBill($this->shopA, 'Tenant A owner', $legacyPath);
+        $evidenceB = $this->seedLegacyBill($this->shopB, 'Tenant B owner', $legacyPath);
 
         $this->loginTo($this->shopA);
         $response = $this->get($this->tenantUrl(
             $this->shopA,
-            '/suppliers/'.$evidence['supplier_id'].'/supplies/'.$evidence['supply_id'].'/bill',
+            '/suppliers/'.$evidenceA['supplier_id'].'/supplies/'.$evidenceA['supply_id'].'/bill',
         ))->assertOk();
 
-        $this->assertSame('legacy-bill-bytes', $response->streamedContent());
+        $this->assertSame('tenant-a-migrated-bytes', $response->streamedContent());
         Storage::disk('local')->assertExists($legacyPath);
-        Storage::disk('local')->assertExists($scopedPath);
+        Storage::disk('local')->assertExists($scopedPathA);
+        Storage::disk('local')->assertMissing($scopedPathB);
+        $this->logoutFrom($this->shopA);
 
-        Storage::disk('local')->delete($legacyPath);
-        $response = $this->get($this->tenantUrl(
-            $this->shopA,
-            '/suppliers/'.$evidence['supplier_id'].'/supplies/'.$evidence['supply_id'].'/bill',
-        ))->assertOk();
-
-        $this->assertSame('legacy-bill-bytes', $response->streamedContent());
+        $this->loginTo($this->shopB);
+        $this->get($this->tenantUrl(
+            $this->shopB,
+            '/suppliers/'.$evidenceB['supplier_id'].'/supplies/'.$evidenceB['supply_id'].'/bill',
+        ))->assertNotFound();
     }
 
-    public function test_legacy_payment_receipt_is_lazily_copied_to_the_current_shop(): void
+    public function test_pre_migrated_legacy_receipt_never_falls_back_to_the_global_source(): void
     {
         Storage::fake('local');
         $legacyPath = 'supplier-payment-receipts/legacy-receipt.png';
         $scopedPath = 'tenants/'.$this->shopA->getKey().'/'.$legacyPath;
-        Storage::disk('local')->put($legacyPath, 'legacy-receipt-bytes');
+        Storage::disk('local')->put($legacyPath, 'untrusted-global-bytes');
+        Storage::disk('local')->put($scopedPath, 'tenant-a-migrated-bytes');
         $evidence = $this->seedLegacyReceipt($this->shopA, 'Tenant A owner', $legacyPath);
 
         $this->loginTo($this->shopA);
@@ -269,17 +296,88 @@ class TenantFileIsolationTest extends TestCase
             '/suppliers/'.$evidence['supplier_id'].'/supplies/'.$evidence['supply_id'].'/payments/'.$evidence['payment_id'].'/receipt',
         ))->assertOk();
 
-        $this->assertSame('legacy-receipt-bytes', $response->streamedContent());
+        $this->assertSame('tenant-a-migrated-bytes', $response->streamedContent());
         Storage::disk('local')->assertExists($legacyPath);
         Storage::disk('local')->assertExists($scopedPath);
 
-        Storage::disk('local')->delete($legacyPath);
-        $response = $this->get($this->tenantUrl(
+        Storage::disk('local')->delete($scopedPath);
+        $this->get($this->tenantUrl(
             $this->shopA,
             '/suppliers/'.$evidence['supplier_id'].'/supplies/'.$evidence['supply_id'].'/payments/'.$evidence['payment_id'].'/receipt',
-        ))->assertOk();
+        ))->assertNotFound();
 
-        $this->assertSame('legacy-receipt-bytes', $response->streamedContent());
+        Storage::disk('local')->assertExists($legacyPath);
+    }
+
+    public function test_failed_payment_write_deletes_the_new_tenant_scoped_receipt(): void
+    {
+        Storage::fake('local');
+        $evidence = $this->seedTenant($this->shopA, function (): array {
+            $owner = $this->createOwner('Tenant A owner');
+            $supply = Supply::factory()->create(['total_amount' => '1000.00']);
+            SupplierPayment::factory()
+                ->for($supply)
+                ->for($owner)
+                ->create(['amount' => '900.00']);
+
+            return [
+                'supplier_id' => $supply->supplier_id,
+                'supply_id' => $supply->getKey(),
+            ];
+        });
+        $receipt = $this->imageWithHash('failed-receipt.png', 'c');
+        $expectedPath = 'tenants/'.$this->shopA->getKey()
+            .'/supplier-payment-receipts/'.str_repeat('c', 40).'.png';
+
+        $this->loginTo($this->shopA);
+        $this->post($this->tenantUrl(
+            $this->shopA,
+            '/suppliers/'.$evidence['supplier_id'].'/supplies/'.$evidence['supply_id'].'/payments',
+        ), [
+            'amount' => '200.00',
+            'method' => PaymentMethod::Online->value,
+            'paid_at' => now()->subMinute()->format('Y-m-d H:i:s'),
+            'receipt_image' => $receipt,
+        ])->assertSessionHasErrors('amount');
+
+        Storage::disk('local')->assertMissing($expectedPath);
+        $this->assertSame(1, $this->seedTenant(
+            $this->shopA,
+            static fn (): int => SupplierPayment::query()->count(),
+        ));
+    }
+
+    #[DataProvider('unsafeStoredPaths')]
+    public function test_traversal_and_confusable_prefix_paths_cannot_be_read_or_deleted(string $storedPath): void
+    {
+        Storage::fake('local');
+
+        $result = $this->seedTenant($this->shopB, static function () use ($storedPath): array {
+            $paths = app(TenantStoragePath::class);
+
+            return [
+                'read' => $paths->readablePath($storedPath, 'supplier-bills'),
+                'delete' => $paths->delete($storedPath, 'supplier-bills'),
+            ];
+        });
+
+        $this->assertNull($result['read']);
+        $this->assertFalse($result['delete']);
+    }
+
+    /** @return array<string, array{string}> */
+    public static function unsafeStoredPaths(): array
+    {
+        return [
+            'absolute' => ['/supplier-bills/secret.jpg'],
+            'windows separator' => ['supplier-bills\secret.jpg'],
+            'null byte' => ["supplier-bills/secret\0.jpg"],
+            'empty segment' => ['supplier-bills//secret.jpg'],
+            'dot segment' => ['supplier-bills/./secret.jpg'],
+            'parent segment' => ['supplier-bills/../secret.jpg'],
+            'legacy sibling prefix' => ['supplier-bills-archive/secret.jpg'],
+            'foreign tenant prefix' => ['tenants/foreign/supplier-bills/secret.jpg'],
+        ];
     }
 
     private function createActiveTenant(string $slug): Shop

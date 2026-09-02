@@ -63,12 +63,7 @@ final readonly class TenantStoragePath
             return $migratedPath;
         }
 
-        if (! $this->disk()->exists($storedPath)
-            || ! $this->disk()->copy($storedPath, $migratedPath)) {
-            return null;
-        }
-
-        return $migratedPath;
+        return null;
     }
 
     public function delete(?string $storedPath, string $legacyDirectory): bool
