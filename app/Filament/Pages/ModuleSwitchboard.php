@@ -51,7 +51,8 @@ class ModuleSwitchboard extends Page
                 'description' => $module->description(),
                 'icon' => $module->icon(),
                 'core' => $module->isCore(),
-                'platformEnabled' => $module->isCore() || $featureGate->enabled($module->key()),
+                'platformEnabled' => $module->isCore()
+                    || $featureGate->enabled($module->key(), $module->enabledByDefault()),
                 'enabled' => $registry->enabled($module->key()),
                 'permissions' => $module->permissionNames(),
                 'dependsOn' => $module->dependsOn(),
@@ -85,7 +86,7 @@ class ModuleSwitchboard extends Page
             return;
         }
 
-        if (! app(TenantFeatureGate::class)->enabled($key)) {
+        if (! app(TenantFeatureGate::class)->enabled($key, $module->enabledByDefault())) {
             Notification::make()
                 ->title($module->title().' is disabled by the platform')
                 ->body('Only a platform administrator can make this feature available to the shop.')
