@@ -26,6 +26,9 @@ return Application::configure(basePath: dirname(__DIR__))
             resolve(TenantPackageRouteRegistrar::class)->register();
         },
     )
+    ->withCommands([
+        __DIR__.'/../app/Console/Commands',
+    ])
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->trustHosts();
         $middleware->append(InitializeTenancy::class);
