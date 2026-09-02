@@ -158,6 +158,86 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
         $this->assertTenantStateIsRevoked();
     }
 
+    public function test_suspended_tenant_invalidates_database_session_without_losing_platform_identity(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-suspended');
+        $platformUser = PlatformUser::factory()->create();
+        $platformGuard = Auth::guard('platform');
+        $platformGuard->login($platformUser);
+        $platformSessionKey = $platformGuard->getName();
+        session()->save();
+        $platformSessionId = session()->getId();
+        $this->resetResolvedSessionAndGuards();
+
+        $loginResponse = $this->withCookie((string) config('session.cookie'), $platformSessionId)
+            ->post($this->tenantUrl($shop, '/login'), [
+                'username' => $user->username,
+                'password' => 'secret-password',
+            ]);
+
+        $loginResponse
+            ->assertRedirect()
+            ->assertSessionHas($platformSessionKey, $platformUser->getKey());
+        $tenantSessionId = $loginResponse->baseRequest->session()->getId();
+        $this->assertTenantStateIsRevoked();
+        $this->resetResolvedSessionAndGuards();
+        $shop->suspend();
+
+        $unavailableResponse = $this->withCookie((string) config('session.cookie'), $tenantSessionId)
+            ->get($this->tenantUrl($shop, '/quick-items'));
+
+        $unavailableResponse
+            ->assertStatus(503)
+            ->assertSee('Shop unavailable')
+            ->assertSessionHas($platformSessionKey, $platformUser->getKey())
+            ->assertSessionMissing(Auth::guard('web')->getName())
+            ->assertSessionMissing(InitializeTenancy::SESSION_SHOP_KEY);
+        $invalidatedSessionId = $unavailableResponse->baseRequest->session()->getId();
+        $this->assertNotSame($tenantSessionId, $invalidatedSessionId);
+        $this->assertDatabaseMissing('sessions', ['id' => $tenantSessionId], 'central');
+        $this->assertDatabaseHas('sessions', ['id' => $invalidatedSessionId], 'central');
+        $this->assertTenantStateIsRevoked();
+        $this->resetResolvedSessionAndGuards();
+
+        $this->withCookie((string) config('session.cookie'), $invalidatedSessionId)
+            ->get('/platform')
+            ->assertOk();
+        $this->assertAuthenticatedAs($platformUser, 'platform');
+        $this->assertGuest('web');
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_attestation_failure_invalidates_authenticated_database_session_before_the_error_response(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-attestation-failure');
+        $loginResponse = $this->post($this->tenantUrl($shop, '/login'), [
+            'username' => $user->username,
+            'password' => 'secret-password',
+        ])->assertRedirect();
+        $tenantSessionId = $loginResponse->baseRequest->session()->getId();
+        $this->assertTenantStateIsRevoked();
+        $this->resetResolvedSessionAndGuards();
+        $this->manager->within($shop, static function (): void {
+            DB::connection('tenant')->table('tenant_installations')->update([
+                'attestation_hmac' => str_repeat('0', 64),
+            ]);
+        });
+
+        $unavailableResponse = $this->withCookie((string) config('session.cookie'), $tenantSessionId)
+            ->get($this->tenantUrl($shop, '/quick-items'));
+
+        $unavailableResponse
+            ->assertStatus(503)
+            ->assertSee('Shop unavailable')
+            ->assertSessionMissing(Auth::guard('web')->getName())
+            ->assertSessionMissing(InitializeTenancy::SESSION_SHOP_KEY);
+        $invalidatedSessionId = $unavailableResponse->baseRequest->session()->getId();
+        $this->assertNotSame($tenantSessionId, $invalidatedSessionId);
+        $this->assertDatabaseMissing('sessions', ['id' => $tenantSessionId], 'central');
+        $this->assertDatabaseHas('sessions', ['id' => $invalidatedSessionId], 'central');
+        $this->assertTenantStateIsRevoked();
+    }
+
     public function test_tenant_logout_preserves_a_coexisting_platform_database_session(): void
     {
         [$shop, $user] = $this->createActiveTenantWithManager('database-logout');
