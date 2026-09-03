@@ -10,6 +10,7 @@ use App\Tenancy\SupportAccessManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 
 class PlatformSessionRevocationTest extends PlatformTestCase
@@ -410,6 +411,57 @@ class PlatformSessionRevocationTest extends PlatformTestCase
             ->assertRedirect('/platform/login');
 
         $this->assertGuest('platform');
+    }
+
+    public function test_password_change_revokes_active_platform_and_support_sessions(): void
+    {
+        $actor = PlatformUser::factory()->create();
+        $platformUser = PlatformUser::factory()->create();
+        $shop = Shop::factory()->create();
+        $activeAudit = ShopAccessSession::start($platformUser, $shop);
+        $platformGuard = Auth::guard('platform');
+        $webGuard = Auth::guard('web');
+        $oldRememberToken = $platformUser->getRememberToken();
+        $sessionId = 'platform-password-change-session';
+        DB::connection('central')->table('sessions')->insert([
+            'id' => $sessionId,
+            'user_id' => 731,
+            'ip_address' => '127.0.0.1',
+            'user_agent' => 'PHPUnit',
+            'payload' => $this->encodeSessionPayload([
+                '_token' => 'csrf-token',
+                $platformGuard->getName() => $platformUser->getKey(),
+                'auth_generation_platform' => hash_hmac(
+                    'sha256',
+                    (string) $oldRememberToken,
+                    (string) config('app.key'),
+                ),
+                SupportAccessManager::SESSION_KEY => [
+                    'audit_id' => $activeAudit->getKey(),
+                    'shop_id' => $shop->getKey(),
+                ],
+                $webGuard->getName() => 731,
+                'tenant.checkout.draft' => ['sale_id' => 91],
+            ]),
+            'last_activity' => now()->timestamp,
+        ]);
+
+        resolve(ManagePlatformUsers::class)->update(
+            $actor,
+            $platformUser,
+            ['password' => 'replacement-platform-password'],
+        );
+
+        $freshPlatformUser = $platformUser->fresh();
+        $this->assertTrue(Hash::check('replacement-platform-password', $freshPlatformUser->password));
+        $this->assertNotSame($oldRememberToken, $freshPlatformUser->getRememberToken());
+        $this->assertNotNull($activeAudit->fresh()->ended_at);
+        $payload = $this->persistedSessionPayload($sessionId);
+        $this->assertArrayNotHasKey($platformGuard->getName(), $payload);
+        $this->assertArrayNotHasKey('auth_generation_platform', $payload);
+        $this->assertArrayNotHasKey(SupportAccessManager::SESSION_KEY, $payload);
+        $this->assertSame(731, $payload[$webGuard->getName()]);
+        $this->assertSame(['sale_id' => 91], $payload['tenant.checkout.draft']);
     }
 
     /** @param array<string, mixed> $payload */

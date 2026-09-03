@@ -3,14 +3,21 @@
 namespace App\Actions;
 
 use App\Models\Central\PlatformUser;
+use App\Models\Central\ShopAccessSession;
+use App\Support\PlatformSessionAuthentication;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
 
 class ManagePlatformUsers
 {
+    public function __construct(
+        private readonly PlatformSessionAuthentication $sessionAuthentication,
+    ) {}
+
     /** @param array<string, mixed> $data */
     public function create(PlatformUser $actor, array $data): PlatformUser
     {
@@ -36,17 +43,31 @@ class ManagePlatformUsers
             $this->authorizeActor($platformUsers, $actor->getKey());
             $platformUser = $this->managedUser($platformUsers, $record->getKey());
             $isActive = (bool) ($data['is_active'] ?? $platformUser->is_active);
+            $activeStateChanged = $isActive !== $platformUser->is_active;
+            $passwordIsChanging = array_key_exists('password', $data);
 
-            if ($isActive !== $platformUser->is_active) {
+            if ($activeStateChanged) {
                 if ($isActive) {
                     $platformUser->activate();
                 } else {
                     $platformUser->deactivate();
                 }
+            } elseif ($passwordIsChanging) {
+                ShopAccessSession::endActiveForPlatformUser($platformUser);
+                $platformUser->setRememberToken(Str::random(60));
             }
 
             $platformUser->fill(Arr::only($data, ['name', 'email', 'password']));
             $platformUser->save();
+
+            if ($passwordIsChanging && ! $activeStateChanged) {
+                $connectionName = $platformUser->getConnectionName() ?? 'central';
+                $this->sessionAuthentication->revokePersistedSessions(
+                    $platformUser->getKey(),
+                    $connectionName,
+                );
+                $this->sessionAuthentication->forgetCurrentAuthentication($platformUser->getKey());
+            }
 
             return $platformUser;
         });
