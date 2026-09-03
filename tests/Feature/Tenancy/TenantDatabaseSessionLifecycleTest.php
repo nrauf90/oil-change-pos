@@ -134,28 +134,37 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
         $this->assertTenantStateIsRevoked();
     }
 
-    public function test_valid_remember_cookie_records_the_tenant_authentication_generation(): void
+    public function test_valid_remember_cookie_restores_after_database_session_expiry_and_records_generation(): void
     {
         [$shop, $user] = $this->createActiveTenantWithManager('database-remember-generation');
         $webGuard = Auth::guard('web');
         $recallerName = $webGuard->getRecallerName();
+        $tenantBindingName = $recallerName.'_tenant';
         $loginResponse = $this->post($this->tenantUrl($shop, '/login'), [
             'username' => $user->username,
             'password' => 'secret-password',
             'remember' => true,
         ])->assertRedirect();
         $recaller = $loginResponse->getCookie($recallerName);
+        $tenantBinding = $loginResponse->getCookie($tenantBindingName);
         $this->assertNotNull($recaller);
+        $this->assertNotNull($tenantBinding);
+        $tenantBindingPayload = json_decode($tenantBinding->getValue(), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame($shop->getKey(), $tenantBindingPayload['shop_id']);
+        $this->assertSame(
+            hash_hmac('sha256', $recaller->getValue(), (string) config('app.key')),
+            $tenantBindingPayload['recaller_digest'],
+        );
+        $expiredSessionId = $loginResponse->baseRequest->session()->getId();
+        DB::connection('central')->table('sessions')->where('id', $expiredSessionId)->delete();
         $this->resetResolvedSessionAndGuards();
-        $this->withSession([
-            $webGuard->getName() => null,
-            TenantSessionAuthentication::GENERATION_SESSION_KEY => null,
-            InitializeTenancy::SESSION_SHOP_KEY => $shop->getKey(),
-        ]);
 
         $response = $this
             ->withCredentials()
-            ->withCookie($recallerName, $recaller->getValue())
+            ->withCookies([
+                $recallerName => $recaller->getValue(),
+                $tenantBindingName => $tenantBinding->getValue(),
+            ])
             ->getJson($this->tenantUrl($shop, '/quick-items'));
 
         $response
@@ -165,6 +174,61 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
                 TenantSessionAuthentication::GENERATION_SESSION_KEY,
                 hash_hmac('sha256', (string) $user->getRememberToken(), (string) config('app.key')),
             );
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_remember_cookie_cannot_be_replayed_across_tenants_after_database_session_expiry(): void
+    {
+        [$originShop, $originUser] = $this->createActiveTenantWithManager('database-remember-origin');
+        [$otherShop, $otherUser] = $this->createActiveTenantWithManager('database-remember-other');
+        $webGuard = Auth::guard('web');
+        $recallerName = $webGuard->getRecallerName();
+        $tenantBindingName = $recallerName.'_tenant';
+        $loginResponse = $this->post($this->tenantUrl($originShop, '/login'), [
+            'username' => $originUser->username,
+            'password' => 'secret-password',
+            'remember' => true,
+        ])->assertRedirect();
+        $recaller = $loginResponse->getCookie($recallerName);
+        $tenantBinding = $loginResponse->getCookie($tenantBindingName);
+        $this->assertNotNull($recaller);
+        $this->assertNotNull($tenantBinding);
+        $expiredSessionId = $loginResponse->baseRequest->session()->getId();
+        $sharedCredentials = $this->manager->within(
+            $originShop,
+            static function () use ($originUser): array {
+                $freshUser = User::query()->findOrFail($originUser->getKey());
+
+                return [
+                    'id' => $freshUser->getKey(),
+                    'password' => $freshUser->getAuthPassword(),
+                    'remember_token' => $freshUser->getRememberToken(),
+                ];
+            },
+        );
+        $this->manager->within($otherShop, function () use ($otherUser, $sharedCredentials): void {
+            $collidingUser = User::query()->findOrFail($otherUser->getKey());
+            $this->assertSame((string) $sharedCredentials['id'], (string) $collidingUser->getKey());
+            $collidingUser->forceFill(['password' => $sharedCredentials['password']]);
+            $collidingUser->setRememberToken($sharedCredentials['remember_token']);
+            $collidingUser->save();
+        });
+        DB::connection('central')->table('sessions')->where('id', $expiredSessionId)->delete();
+        $this->resetResolvedSessionAndGuards();
+
+        $response = $this
+            ->withCookies([
+                $recallerName => $recaller->getValue(),
+                $tenantBindingName => $tenantBinding->getValue(),
+            ])
+            ->get($this->tenantUrl($otherShop, '/quick-items'));
+
+        $response
+            ->assertRedirect($this->tenantUrl($otherShop, '/login'))
+            ->assertCookieExpired($recallerName)
+            ->assertCookieExpired($tenantBindingName)
+            ->assertSessionMissing($webGuard->getName())
+            ->assertSessionMissing(TenantSessionAuthentication::GENERATION_SESSION_KEY);
         $this->assertTenantStateIsRevoked();
     }
 
@@ -217,7 +281,10 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
             'remember' => true,
         ])->assertRedirect();
         $oldRecaller = $loginResponse->getCookie($recallerName);
+        $tenantBindingName = $recallerName.'_tenant';
+        $tenantBinding = $loginResponse->getCookie($tenantBindingName);
         $this->assertNotNull($oldRecaller);
+        $this->assertNotNull($tenantBinding);
         $this->resetResolvedSessionAndGuards();
 
         $this->manager->within($shop, static function () use ($actorId, $user): void {
@@ -232,6 +299,82 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
             Auth::guard('web')->getName() => null,
             InitializeTenancy::SESSION_SHOP_KEY => $shop->getKey(),
         ]);
+
+        $this->withCookies([
+            $recallerName => $oldRecaller->getValue(),
+            $tenantBindingName => $tenantBinding->getValue(),
+        ])
+            ->get($this->tenantUrl($shop, '/quick-items'))
+            ->assertRedirect($this->tenantUrl($shop, '/login'))
+            ->assertCookieExpired($recallerName)
+            ->assertCookieExpired($tenantBindingName);
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_direct_reactivation_of_a_legacy_inactive_user_revokes_existing_credentials(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-legacy-inactive-reactivation');
+        $actorId = $this->manager->within(
+            $shop,
+            static fn (): int => (int) User::factory()->admin()->create()->getKey(),
+        );
+        $webGuard = Auth::guard('web');
+        $recallerName = $webGuard->getRecallerName();
+        $loginResponse = $this->post($this->tenantUrl($shop, '/login'), [
+            'username' => $user->username,
+            'password' => 'secret-password',
+            'remember' => true,
+        ])->assertRedirect();
+        $oldRecaller = $loginResponse->getCookie($recallerName);
+        $this->assertNotNull($oldRecaller);
+        $oldRememberToken = $this->manager->within(
+            $shop,
+            static fn (): ?string => User::query()->findOrFail($user->getKey())->getRememberToken(),
+        );
+        $this->resetResolvedSessionAndGuards();
+
+        $this->manager->within($shop, static function () use ($user): void {
+            User::query()->whereKey($user->getKey())->update(['is_active' => false]);
+        });
+        $sessionId = 'legacy-inactive-user-session';
+        DB::connection('central')->table('sessions')->insert([
+            'id' => $sessionId,
+            'user_id' => $user->getKey(),
+            'ip_address' => '127.0.0.1',
+            'user_agent' => 'PHPUnit',
+            'payload' => $this->encodeSessionPayload([
+                '_token' => 'csrf-token',
+                $webGuard->getName() => $user->getKey(),
+                TenantSessionAuthentication::GENERATION_SESSION_KEY => hash_hmac(
+                    'sha256',
+                    (string) $oldRememberToken,
+                    (string) config('app.key'),
+                ),
+                InitializeTenancy::SESSION_SHOP_KEY => $shop->getKey(),
+            ]),
+            'last_activity' => now()->timestamp,
+        ]);
+
+        $this->manager->within($shop, static function () use ($actorId, $user): void {
+            resolve(ManageTenantUsers::class)->update(
+                User::query()->findOrFail($actorId),
+                User::query()->findOrFail($user->getKey()),
+                ['is_active' => true],
+                Role::Manager->value,
+            );
+        });
+
+        $newRememberToken = $this->manager->within(
+            $shop,
+            static fn (): ?string => User::query()->findOrFail($user->getKey())->getRememberToken(),
+        );
+        $this->assertNotSame($oldRememberToken, $newRememberToken);
+        $payload = $this->persistedSessionPayload($sessionId);
+        $this->assertArrayNotHasKey($webGuard->getName(), $payload);
+        $this->assertArrayNotHasKey(TenantSessionAuthentication::GENERATION_SESSION_KEY, $payload);
+        $this->assertArrayNotHasKey(InitializeTenancy::SESSION_SHOP_KEY, $payload);
+        $this->resetResolvedSessionAndGuards();
+        $this->withSession([InitializeTenancy::SESSION_SHOP_KEY => $shop->getKey()]);
 
         $this->withCookie($recallerName, $oldRecaller->getValue())
             ->get($this->tenantUrl($shop, '/quick-items'))
@@ -551,17 +694,28 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
             ->post($this->tenantUrl($shop, '/login'), [
                 'username' => $user->username,
                 'password' => 'secret-password',
+                'remember' => true,
             ]);
 
         $loginResponse
             ->assertRedirect()
             ->assertSessionHas($platformSessionKey, $platformUser->getKey());
         $tenantSessionId = $loginResponse->baseRequest->session()->getId();
+        $recallerName = Auth::guard('web')->getRecallerName();
+        $tenantBindingName = $recallerName.'_tenant';
+        $recaller = $loginResponse->getCookie($recallerName);
+        $tenantBinding = $loginResponse->getCookie($tenantBindingName);
+        $this->assertNotNull($recaller);
+        $this->assertNotNull($tenantBinding);
         $this->assertTenantStateIsRevoked();
         $this->resetResolvedSessionAndGuards();
         $shop->suspend();
 
-        $unavailableResponse = $this->withCookie((string) config('session.cookie'), $tenantSessionId)
+        $unavailableResponse = $this->withCookies([
+            (string) config('session.cookie') => $tenantSessionId,
+            $recallerName => $recaller->getValue(),
+            $tenantBindingName => $tenantBinding->getValue(),
+        ])
             ->get($this->tenantUrl($shop, '/quick-items'));
 
         $unavailableResponse
@@ -569,13 +723,16 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
             ->assertSee('Shop unavailable')
             ->assertSessionHas($platformSessionKey, $platformUser->getKey())
             ->assertSessionMissing(Auth::guard('web')->getName())
-            ->assertSessionMissing(InitializeTenancy::SESSION_SHOP_KEY);
+            ->assertSessionMissing(InitializeTenancy::SESSION_SHOP_KEY)
+            ->assertCookieExpired($recallerName)
+            ->assertCookieExpired($tenantBindingName);
         $invalidatedSessionId = $unavailableResponse->baseRequest->session()->getId();
         $this->assertNotSame($tenantSessionId, $invalidatedSessionId);
         $this->assertDatabaseMissing('sessions', ['id' => $tenantSessionId], 'central');
         $this->assertDatabaseHas('sessions', ['id' => $invalidatedSessionId], 'central');
         $this->assertTenantStateIsRevoked();
         $this->resetResolvedSessionAndGuards();
+        unset($this->defaultCookies[$recallerName], $this->defaultCookies[$tenantBindingName]);
 
         $this->withCookie((string) config('session.cookie'), $invalidatedSessionId)
             ->get('/platform')
@@ -631,30 +788,44 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
             ->post($this->tenantUrl($shop, '/login'), [
                 'username' => $user->username,
                 'password' => 'secret-password',
+                'remember' => true,
             ]);
 
         $loginResponse
             ->assertRedirect()
             ->assertSessionHas($platformSessionKey, $platformUser->getKey());
         $tenantSessionId = $loginResponse->baseRequest->session()->getId();
+        $recallerName = Auth::guard('web')->getRecallerName();
+        $tenantBindingName = $recallerName.'_tenant';
+        $recaller = $loginResponse->getCookie($recallerName);
+        $tenantBinding = $loginResponse->getCookie($tenantBindingName);
+        $this->assertNotNull($recaller);
+        $this->assertNotNull($tenantBinding);
         $this->assertNotSame($platformSessionId, $tenantSessionId);
         $this->assertTenantStateIsRevoked();
         $this->resetResolvedSessionAndGuards();
 
-        $logoutResponse = $this->withCookie((string) config('session.cookie'), $tenantSessionId)
+        $logoutResponse = $this->withCookies([
+            (string) config('session.cookie') => $tenantSessionId,
+            $recallerName => $recaller->getValue(),
+            $tenantBindingName => $tenantBinding->getValue(),
+        ])
             ->post($this->tenantUrl($shop, '/logout'));
 
         $logoutResponse
             ->assertRedirect($this->tenantUrl($shop, '/login'))
             ->assertSessionHas($platformSessionKey, $platformUser->getKey())
             ->assertSessionMissing(Auth::guard('web')->getName())
-            ->assertSessionMissing(InitializeTenancy::SESSION_SHOP_KEY);
+            ->assertSessionMissing(InitializeTenancy::SESSION_SHOP_KEY)
+            ->assertCookieExpired($recallerName)
+            ->assertCookieExpired($tenantBindingName);
         $loggedOutSessionId = $logoutResponse->baseRequest->session()->getId();
         $this->assertNotSame($tenantSessionId, $loggedOutSessionId);
         $this->assertDatabaseMissing('sessions', ['id' => $tenantSessionId], 'central');
         $this->assertDatabaseHas('sessions', ['id' => $loggedOutSessionId], 'central');
         $this->assertTenantStateIsRevoked();
         $this->resetResolvedSessionAndGuards();
+        unset($this->defaultCookies[$recallerName], $this->defaultCookies[$tenantBindingName]);
 
         $this->withCookie((string) config('session.cookie'), $loggedOutSessionId)
             ->get('/platform')

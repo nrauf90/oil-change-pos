@@ -6,6 +6,7 @@ use App\Http\Middleware\InitializeTenancy;
 use App\Models\User;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\SessionGuard;
+use Illuminate\Contracts\Cookie\QueueingFactory as CookieJar;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -16,12 +17,15 @@ final readonly class TenantSessionAuthentication
 {
     public const GENERATION_SESSION_KEY = 'auth_generation_web';
 
+    private const TENANT_RECALLER_SUFFIX = '_tenant';
+
     public function __construct(
         private AuthManager $auth,
         private DatabaseManager $database,
+        private CookieJar $cookies,
     ) {}
 
-    public function recordLogin(User $user): bool
+    public function recordLogin(User $user, bool $remember): bool
     {
         $attributes = $user->getConnection()->transaction(function () use ($user): array {
             $freshUser = User::on($user->getConnectionName())
@@ -55,15 +59,64 @@ final readonly class TenantSessionAuthentication
             $this->generation($user),
         );
 
+        if ($remember) {
+            $this->queueTenantRecallerBinding(
+                $this->sessionShopKey(),
+                $this->recallerValue($user),
+            );
+        }
+
         return true;
     }
 
-    public function recordRememberedAuthentication(User $user): void
+    public function recordRememberedAuthentication(User $user, Request $request): void
     {
         $this->guard()->getSession()->put(
             self::GENERATION_SESSION_KEY,
             $this->generation($user),
         );
+
+        $recaller = $request->cookie($this->guard()->getRecallerName());
+
+        if (is_string($recaller)) {
+            $this->queueTenantRecallerBinding($this->sessionShopKey(), $recaller);
+        }
+    }
+
+    public function tenantRecallerCookieName(): string
+    {
+        return $this->guard()->getRecallerName().self::TENANT_RECALLER_SUFFIX;
+    }
+
+    public function tenantRecallerMatches(Request $request, string $shopKey): bool
+    {
+        $recaller = $request->cookie($this->guard()->getRecallerName());
+        $encodedBinding = $request->cookie($this->tenantRecallerCookieName());
+
+        if (! is_string($recaller) || ! is_string($encodedBinding)) {
+            return false;
+        }
+
+        try {
+            $binding = json_decode($encodedBinding, true, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            return false;
+        }
+
+        return is_array($binding)
+            && isset($binding['shop_id'], $binding['recaller_digest'])
+            && is_string($binding['shop_id'])
+            && is_string($binding['recaller_digest'])
+            && hash_equals($shopKey, $binding['shop_id'])
+            && hash_equals($this->recallerDigest($recaller), $binding['recaller_digest']);
+    }
+
+    public function forgetTenantRecaller(Request $request): void
+    {
+        $cookieName = $this->tenantRecallerCookieName();
+
+        $request->cookies->remove($cookieName);
+        $this->cookies->queue($this->cookies->forget($cookieName));
     }
 
     public function currentSessionMatches(User $user): bool
@@ -105,7 +158,7 @@ final readonly class TenantSessionAuthentication
         }
 
         if ($guard->viaRemember()) {
-            $this->recordRememberedAuthentication($user);
+            $this->recordRememberedAuthentication($user, $request);
 
             return;
         }
@@ -180,6 +233,7 @@ final readonly class TenantSessionAuthentication
         }
 
         $guard->logoutCurrentDevice();
+        $this->forgetTenantRecaller(request());
         $session->forget([
             self::GENERATION_SESSION_KEY,
             'password_hash_web',
@@ -194,6 +248,42 @@ final readonly class TenantSessionAuthentication
             (string) $user->getRememberToken(),
             (string) config('app.key'),
         );
+    }
+
+    private function recallerValue(User $user): string
+    {
+        $guard = $this->guard();
+
+        return $user->getAuthIdentifier().'|'.
+            $user->getRememberToken().'|'.
+            $guard->hashPasswordForCookie($user->getAuthPassword());
+    }
+
+    private function recallerDigest(string $recaller): string
+    {
+        return hash_hmac('sha256', $recaller, (string) config('app.key'));
+    }
+
+    private function sessionShopKey(): string
+    {
+        $shopKey = $this->guard()->getSession()->get(InitializeTenancy::SESSION_SHOP_KEY);
+
+        if (! is_string($shopKey) || $shopKey === '') {
+            throw new RuntimeException('The remembered tenant must have an active shop binding.');
+        }
+
+        return $shopKey;
+    }
+
+    private function queueTenantRecallerBinding(string $shopKey, string $recaller): void
+    {
+        $this->cookies->queue($this->cookies->forever(
+            $this->tenantRecallerCookieName(),
+            json_encode([
+                'shop_id' => $shopKey,
+                'recaller_digest' => $this->recallerDigest($recaller),
+            ], JSON_THROW_ON_ERROR),
+        ));
     }
 
     /** @return array<string, mixed>|null */

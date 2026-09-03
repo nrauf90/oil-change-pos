@@ -65,9 +65,10 @@ final class ManageTenantUsers
                     : 'This is the last active admin. Promote another staff member to admin before changing this role.');
             }
 
-            $wasActive = $user->is_active;
+            $wasActive = (bool) $user->is_active;
+            $requiresCredentialRevocation = ! $wasActive || ! $willBeActive;
 
-            if ($wasActive && ! $willBeActive) {
+            if ($requiresCredentialRevocation) {
                 $user->setRememberToken(Str::random(60));
             }
 
@@ -75,7 +76,7 @@ final class ManageTenantUsers
             $user->save();
             $user->assignSingleRole($role);
 
-            if (! $willBeActive) {
+            if ($requiresCredentialRevocation) {
                 $this->sessionAuthentication->revokePersistedSessions(
                     $this->tenantContext->id(),
                     $user->getKey(),

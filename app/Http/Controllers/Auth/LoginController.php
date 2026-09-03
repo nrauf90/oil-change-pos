@@ -36,7 +36,10 @@ class LoginController extends Controller
 
         $user = $request->user();
 
-        if (! $user instanceof User || ! $sessionAuthentication->recordLogin($user)) {
+        if (! $user instanceof User || ! $sessionAuthentication->recordLogin(
+            $user,
+            $request->boolean('remember'),
+        )) {
             throw ValidationException::withMessages([
                 'username' => trans('auth.failed'),
             ]);

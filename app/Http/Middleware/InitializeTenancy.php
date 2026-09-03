@@ -209,13 +209,23 @@ final readonly class InitializeTenancy
         $sessionShopId = $session->get(self::SESSION_SHOP_KEY);
         $activeShopId = $this->context->id();
         $rememberCookie = $guard->getRecallerName();
-        $hasWebIdentity = $session->has($guard->getName()) || $request->cookies->has($rememberCookie);
+        $hasSessionIdentity = $session->has($guard->getName());
+        $hasRecaller = $request->cookies->has($rememberCookie);
         $shopMatches = is_string($sessionShopId) && hash_equals($activeShopId, $sessionShopId);
+        $tenantRecallerMatches = $this->sessionAuthentication->tenantRecallerMatches($request, $activeShopId);
+        $shouldInvalidateAuthentication = ($hasSessionIdentity && ! $shopMatches)
+            || (! $hasSessionIdentity && $hasRecaller && ! $shopMatches && ! $tenantRecallerMatches);
 
-        if ($hasWebIdentity && ! $shopMatches) {
-            $session->forget([$guard->getName(), self::SESSION_SHOP_KEY]);
+        if ($shouldInvalidateAuthentication) {
+            $session->forget([
+                $guard->getName(),
+                TenantSessionAuthentication::GENERATION_SESSION_KEY,
+                'password_hash_web',
+                self::SESSION_SHOP_KEY,
+            ]);
             $request->cookies->remove($rememberCookie);
             $this->cookies->queue($this->cookies->forget($rememberCookie));
+            $this->sessionAuthentication->forgetTenantRecaller($request);
             $guard->forgetUser();
             $session->regenerate(true);
         } elseif ($sessionShopId !== null && ! $shopMatches) {

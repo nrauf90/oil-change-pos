@@ -3,6 +3,7 @@
 namespace App\Tenancy;
 
 use App\Http\Middleware\InitializeTenancy;
+use App\Support\TenantSessionAuthentication;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Contracts\Cookie\QueueingFactory as CookieJar;
@@ -14,6 +15,7 @@ final readonly class TenantSessionInvalidator
     public function __construct(
         private AuthManager $auth,
         private CookieJar $cookies,
+        private TenantSessionAuthentication $sessionAuthentication,
     ) {}
 
     public function invalidate(Request $request): void
@@ -37,6 +39,7 @@ final readonly class TenantSessionInvalidator
         ]);
         $request->cookies->remove($recallerName);
         $this->cookies->queue($this->cookies->forget($recallerName));
+        $this->sessionAuthentication->forgetTenantRecaller($request);
         $guard->forgetUser();
         $session->regenerate(true);
     }
