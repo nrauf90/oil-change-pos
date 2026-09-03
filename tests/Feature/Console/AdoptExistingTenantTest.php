@@ -6,6 +6,10 @@ use App\Enums\ShopLifecycleEvent;
 use App\Enums\ShopStatus;
 use App\Models\Central\Shop;
 use App\Models\User;
+use App\Tenancy\Provisioning\NullTenantProvisioningHook;
+use App\Tenancy\Provisioning\TenantProvisioningCheckpoint;
+use App\Tenancy\Provisioning\TenantProvisioningHook;
+use App\Tenancy\Provisioning\TenantProvisioningInterrupted;
 use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
 use Illuminate\Database\Schema\Blueprint;
@@ -20,6 +24,15 @@ use Tests\TestCase;
 class AdoptExistingTenantTest extends TestCase
 {
     private const MARKER_MIGRATION = '2026_09_02_042731_create_tenant_installations_table';
+
+    private const ROLE_DESCRIPTION_MIGRATION = '2026_09_02_121450_add_description_to_roles_table';
+
+    private const LEGACY_TENANT_MIGRATION_CUTOFF = '2026_09_01_135125_create_item_vehicle_compatibilities_table';
+
+    private const LEGACY_NON_TENANT_MIGRATIONS = [
+        '0001_01_01_000001_create_cache_table',
+        '0001_01_01_000002_create_jobs_table',
+    ];
 
     private string $databaseRoot;
 
@@ -129,6 +142,22 @@ class AdoptExistingTenantTest extends TestCase
         $this->assertFalse(app(TenantContext::class)->initialized());
     }
 
+    public function test_adoption_rejects_non_legacy_central_migration_history_without_writes(): void
+    {
+        DB::connection('legacy')->table('migrations')->insert([
+            'migration' => '2026_09_01_000001_create_platform_users_table',
+            'batch' => 1,
+        ]);
+        DB::purge('legacy');
+
+        $this->artisan('tenants:adopt-existing', $this->adoptionOptions())
+            ->expectsOutputToContain('ADOPTION_UNKNOWN_MIGRATIONS')
+            ->assertExitCode(1);
+
+        $this->assertSame(0, Shop::query()->count());
+        $this->assertFalse(app(TenantContext::class)->initialized());
+    }
+
     public function test_force_registers_the_shop_owner_health_receipt_and_adoption_without_changing_operational_data(): void
     {
         $source = DB::connection('legacy');
@@ -183,15 +212,80 @@ class AdoptExistingTenantTest extends TestCase
         $this->assertSame($beforeColumns, $source->getSchemaBuilder()->getColumnListing('items'));
         $this->assertSame($beforeItem, (array) $source->table('items')->where('name', 'Preserved filter')->first());
         $this->assertSame($beforeUser, (array) $source->table('users')->where('username', 'legacy-admin')->first());
-        $expectedMigrations = [...$beforeMigrations, self::MARKER_MIGRATION];
+        $expectedMigrations = [
+            ...$beforeMigrations,
+            self::MARKER_MIGRATION,
+            self::ROLE_DESCRIPTION_MIGRATION,
+        ];
         sort($expectedMigrations);
 
         $this->assertSame(
             $expectedMigrations,
             $source->table('migrations')->orderBy('migration')->pluck('migration')->all(),
         );
+        $this->assertTrue($source->getSchemaBuilder()->hasColumn('roles', 'description'));
         $this->assertSame(1, $source->table('tenant_installations')->count());
         $this->assertFalse(app(TenantContext::class)->initialized());
+    }
+
+    public function test_adoption_resumes_after_marker_installation_before_pending_migration(): void
+    {
+        $this->app->instance(TenantProvisioningHook::class, new class implements TenantProvisioningHook
+        {
+            public function reached(TenantProvisioningCheckpoint $checkpoint, Shop $shop): void
+            {
+                if ($checkpoint === TenantProvisioningCheckpoint::BeforeTenantMigrationRun) {
+                    throw new TenantProvisioningInterrupted;
+                }
+            }
+        });
+        $options = [
+            ...$this->adoptionOptions(),
+            '--force' => true,
+            '--no-interaction' => true,
+        ];
+
+        $this->artisan('tenants:adopt-existing', $options)
+            ->expectsOutputToContain('TENANT_MIGRATION_FAILED')
+            ->assertExitCode(1);
+
+        DB::purge('legacy');
+        $source = DB::connection('legacy');
+        $this->assertSame(
+            1,
+            $source->table('migrations')->where('migration', self::MARKER_MIGRATION)->count(),
+        );
+        $this->assertFalse($source->getSchemaBuilder()->hasColumn('roles', 'description'));
+        $this->assertSame(
+            ShopStatus::Provisioning,
+            Shop::query()->where('slug', 'legacy-workshop')->firstOrFail()->status,
+        );
+
+        $this->app->instance(TenantProvisioningHook::class, new NullTenantProvisioningHook);
+
+        $this->artisan('tenants:adopt-existing', $options)
+            ->expectsOutputToContain('Existing database adopted')
+            ->assertSuccessful();
+
+        DB::purge('legacy');
+        $source = DB::connection('legacy');
+        $this->assertTrue($source->getSchemaBuilder()->hasColumn('roles', 'description'));
+        $this->assertSame(
+            1,
+            $source->table('migrations')->where('migration', self::MARKER_MIGRATION)->count(),
+        );
+        $this->assertSame(
+            1,
+            $source->table('migrations')->where('migration', self::ROLE_DESCRIPTION_MIGRATION)->count(),
+        );
+        $this->assertSame(
+            $source->table('migrations')->count(),
+            $source->table('migrations')->distinct()->count('migration'),
+        );
+        $this->assertSame(
+            ShopStatus::Active,
+            Shop::query()->where('slug', 'legacy-workshop')->firstOrFail()->status,
+        );
     }
 
     public function test_successfully_adopted_database_cannot_be_adopted_twice(): void
@@ -294,7 +388,8 @@ class AdoptExistingTenantTest extends TestCase
 
         $migrationNames = collect((new Filesystem)->glob($this->tenantMigrationPath().DIRECTORY_SEPARATOR.'*.php'))
             ->map(static fn (string $path): string => pathinfo($path, PATHINFO_FILENAME))
-            ->reject(static fn (string $migration): bool => $migration === self::MARKER_MIGRATION)
+            ->filter(static fn (string $migration): bool => $migration <= self::LEGACY_TENANT_MIGRATION_CUTOFF)
+            ->concat(self::LEGACY_NON_TENANT_MIGRATIONS)
             ->sort()
             ->values();
 

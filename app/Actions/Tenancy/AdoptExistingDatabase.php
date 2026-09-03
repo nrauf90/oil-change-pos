@@ -12,6 +12,7 @@ use App\Models\Central\ShopOwner;
 use App\Models\User;
 use App\Tenancy\DatabaseHostResolver;
 use App\Tenancy\DatabaseTargetConfiguration;
+use App\Tenancy\Migrations\TenantMigrationRunner;
 use App\Tenancy\NormalizedDatabaseTarget;
 use App\Tenancy\OpenedTenantDatabaseIdentityVerifier;
 use App\Tenancy\Provisioning\DatabaseTenantProvisioningLease;
@@ -38,6 +39,11 @@ final readonly class AdoptExistingDatabase
 {
     private const MARKER_MIGRATION = '2026_09_02_042731_create_tenant_installations_table';
 
+    private const LEGACY_MONOLITH_ONLY_MIGRATIONS = [
+        '0001_01_01_000001_create_cache_table',
+        '0001_01_01_000002_create_jobs_table',
+    ];
+
     private const REQUIRED_TABLES = [
         'migrations',
         'users',
@@ -60,6 +66,7 @@ final readonly class AdoptExistingDatabase
         private OpenedTenantDatabaseIdentityVerifier $identityVerifier,
         private TenantInstallationBootstrapper $installationBootstrapper,
         private TenantConnectionManager $connectionManager,
+        private TenantMigrationRunner $migrationRunner,
         private RecordShopLifecycleActivity $recordLifecycleActivity,
         private Filesystem $filesystem,
     ) {}
@@ -68,7 +75,7 @@ final readonly class AdoptExistingDatabase
      * @return array{
      *     driver: 'mysql'|'sqlite',
      *     required_table_count: int,
-     *     migration_status: 'current'|'marker-pending',
+     *     migration_status: 'current'|'marker-pending'|'migrations-pending',
      *     owner_username: string,
      *     adopted: bool,
      *     shop_id: string|null
@@ -147,6 +154,8 @@ final readonly class AdoptExistingDatabase
                             $freshShop,
                             function () use ($lockedInspection, $lease): void {
                                 $lease->heartbeat();
+                                $this->migrationRunner->runConnected($lease);
+                                $lease->heartbeat();
                                 $this->verifyConnectedDatabase($lockedInspection);
                                 $lease->heartbeat();
                             },
@@ -171,7 +180,7 @@ final readonly class AdoptExistingDatabase
      *     target: NormalizedDatabaseTarget,
      *     driver: 'mysql'|'sqlite',
      *     required_table_count: int,
-     *     migration_status: 'current'|'marker-pending',
+     *     migration_status: 'current'|'marker-pending'|'migrations-pending',
      *     owner_id: int|string,
      *     owner_name: string,
      *     owner_username: string,
@@ -351,7 +360,7 @@ final readonly class AdoptExistingDatabase
         }
     }
 
-    /** @return 'current'|'marker-pending' */
+    /** @return 'current'|'marker-pending'|'migrations-pending' */
     private function migrationStatus(Connection $connection): string
     {
         $canonical = $this->canonicalMigrations();
@@ -376,21 +385,38 @@ final readonly class AdoptExistingDatabase
             }
         }
 
-        if (array_diff($ran, $canonical) !== []) {
+        if (array_diff($ran, $canonical, self::LEGACY_MONOLITH_ONLY_MIGRATIONS) !== []) {
             throw $this->failure(
                 'ADOPTION_UNKNOWN_MIGRATIONS',
                 'The source database contains unknown tenant migrations.',
             );
         }
 
-        $pending = array_values(array_diff($canonical, $ran));
+        $ranTenantMigrations = array_values(array_diff(
+            $ran,
+            self::LEGACY_MONOLITH_ONLY_MIGRATIONS,
+        ));
+        $expectedRanTenantMigrations = array_slice($canonical, 0, count($ranTenantMigrations));
+
+        if ($ranTenantMigrations !== $expectedRanTenantMigrations) {
+            throw $this->failure(
+                'ADOPTION_MIGRATIONS_PENDING',
+                'The source database has pending tenant migrations.',
+            );
+        }
+
+        $pending = array_slice($canonical, count($ranTenantMigrations));
 
         if ($pending === []) {
             return 'current';
         }
 
-        if ($pending === [self::MARKER_MIGRATION]) {
+        if ($pending[0] === self::MARKER_MIGRATION) {
             return 'marker-pending';
+        }
+
+        if (in_array(self::MARKER_MIGRATION, $ranTenantMigrations, true)) {
+            return 'migrations-pending';
         }
 
         throw $this->failure(
@@ -582,7 +608,7 @@ final readonly class AdoptExistingDatabase
         return false;
     }
 
-    /** @param 'current'|'marker-pending' $migrationStatus */
+    /** @param 'current'|'marker-pending'|'migrations-pending' $migrationStatus */
     private function assertMarkerState(
         Connection $connection,
         ?Shop $existingShop,
@@ -600,7 +626,7 @@ final readonly class AdoptExistingDatabase
             return;
         }
 
-        if ($migrationStatus === 'current'
+        if ($migrationStatus !== 'marker-pending'
             && ! $connection->getSchemaBuilder()->hasTable('tenant_installations')) {
             throw $this->failure(
                 'ADOPTION_MARKER_CONFLICT',
@@ -949,13 +975,13 @@ final readonly class AdoptExistingDatabase
      * @param array{
      *     driver: 'mysql'|'sqlite',
      *     required_table_count: int,
-     *     migration_status: 'current'|'marker-pending',
+     *     migration_status: 'current'|'marker-pending'|'migrations-pending',
      *     owner_username: string
      * } $inspection
      * @return array{
      *     driver: 'mysql'|'sqlite',
      *     required_table_count: int,
-     *     migration_status: 'current'|'marker-pending',
+     *     migration_status: 'current'|'marker-pending'|'migrations-pending',
      *     owner_username: string,
      *     adopted: bool,
      *     shop_id: string|null
