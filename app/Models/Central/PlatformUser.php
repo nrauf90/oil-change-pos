@@ -37,7 +37,28 @@ class PlatformUser extends Authenticatable implements FilamentUser
 
     public function activate(): void
     {
-        $this->forceFill(['is_active' => true])->save();
+        $connectionName = $this->getConnectionName() ?? 'central';
+        $attributes = $this->getConnection()->transaction(function () use ($connectionName): array {
+            $platformUser = static::on($connectionName)
+                ->whereKey($this->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if (! $platformUser->is_active) {
+                ShopAccessSession::endActiveForPlatformUser($platformUser);
+                $platformUser->setRememberToken(Str::random(60));
+                $platformUser->forceFill(['is_active' => true])->save();
+                app(PlatformSessionAuthentication::class)->revokePersistedSessions(
+                    $platformUser->getKey(),
+                    $connectionName,
+                );
+            }
+
+            return $platformUser->getAttributes();
+        });
+
+        $this->setRawAttributes($attributes, true);
+        app(PlatformSessionAuthentication::class)->forgetCurrentAuthentication($this->getKey());
     }
 
     public function canAccessPanel(Panel $panel): bool

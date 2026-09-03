@@ -215,9 +215,22 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
         });
         DB::connection('central')->table('sessions')->where('id', $expiredSessionId)->delete();
         $this->resetResolvedSessionAndGuards();
+        $guestSessionId = str_repeat('c', 40);
+        DB::connection('central')->table('sessions')->insert([
+            'id' => $guestSessionId,
+            'user_id' => null,
+            'ip_address' => '127.0.0.1',
+            'user_agent' => 'PHPUnit',
+            'payload' => $this->encodeSessionPayload([
+                '_token' => 'csrf-token',
+                InitializeTenancy::SESSION_SHOP_KEY => $otherShop->getKey(),
+            ]),
+            'last_activity' => now()->timestamp,
+        ]);
 
         $response = $this
             ->withCookies([
+                (string) config('session.cookie') => $guestSessionId,
                 $recallerName => $recaller->getValue(),
                 $tenantBindingName => $tenantBinding->getValue(),
             ])

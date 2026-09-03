@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Platform;
 
+use App\Actions\ManagePlatformUsers;
 use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 use App\Models\Central\ShopAccessSession;
@@ -346,6 +347,69 @@ class PlatformSessionRevocationTest extends PlatformTestCase
 
         $this->assertGuest('platform');
         $this->assertNotSame($oldRememberToken, $platformUser->fresh()->getRememberToken());
+    }
+
+    public function test_managed_reactivation_of_a_legacy_inactive_user_revokes_old_authentication(): void
+    {
+        $actor = PlatformUser::factory()->create();
+        $platformUser = PlatformUser::factory()->create();
+        $shop = Shop::factory()->create();
+        $orphanedAudit = ShopAccessSession::start($platformUser, $shop);
+        $platformGuard = Auth::guard('platform');
+        $webGuard = Auth::guard('web');
+        $oldRememberToken = $platformUser->getRememberToken();
+        $oldRememberCookie = implode('|', [
+            $platformUser->getAuthIdentifier(),
+            $oldRememberToken,
+            $platformGuard->hashPasswordForCookie($platformUser->getAuthPassword()),
+        ]);
+        $sessionId = 'legacy-inactive-platform-session';
+        DB::connection('central')->table('sessions')->insert([
+            'id' => $sessionId,
+            'user_id' => 731,
+            'ip_address' => '127.0.0.1',
+            'user_agent' => 'PHPUnit',
+            'payload' => $this->encodeSessionPayload([
+                '_token' => 'csrf-token',
+                $platformGuard->getName() => $platformUser->getKey(),
+                'auth_generation_platform' => 'legacy-generation',
+                SupportAccessManager::SESSION_KEY => [
+                    'audit_id' => $orphanedAudit->getKey(),
+                    'shop_id' => $shop->getKey(),
+                ],
+                $webGuard->getName() => 731,
+                'tenant.checkout.draft' => ['sale_id' => 91],
+            ]),
+            'last_activity' => now()->timestamp,
+        ]);
+        DB::connection('central')
+            ->table('platform_users')
+            ->where('id', $platformUser->getKey())
+            ->update(['is_active' => false]);
+        $platformUser->refresh();
+
+        resolve(ManagePlatformUsers::class)->update(
+            $actor,
+            $platformUser,
+            ['is_active' => true],
+        );
+
+        $this->assertTrue($platformUser->fresh()->is_active);
+        $this->assertNotSame($oldRememberToken, $platformUser->fresh()->getRememberToken());
+        $this->assertNotNull($orphanedAudit->fresh()->ended_at);
+        $payload = $this->persistedSessionPayload($sessionId);
+        $this->assertArrayNotHasKey($platformGuard->getName(), $payload);
+        $this->assertArrayNotHasKey('auth_generation_platform', $payload);
+        $this->assertArrayNotHasKey(SupportAccessManager::SESSION_KEY, $payload);
+        $this->assertSame(731, $payload[$webGuard->getName()]);
+        $this->assertSame(['sale_id' => 91], $payload['tenant.checkout.draft']);
+        Auth::forgetGuards();
+
+        $this->withCookie($platformGuard->getRecallerName(), $oldRememberCookie)
+            ->get('/platform')
+            ->assertRedirect('/platform/login');
+
+        $this->assertGuest('platform');
     }
 
     /** @param array<string, mixed> $payload */

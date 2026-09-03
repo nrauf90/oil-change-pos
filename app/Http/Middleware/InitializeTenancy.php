@@ -214,7 +214,7 @@ final readonly class InitializeTenancy
         $shopMatches = is_string($sessionShopId) && hash_equals($activeShopId, $sessionShopId);
         $tenantRecallerMatches = $this->sessionAuthentication->tenantRecallerMatches($request, $activeShopId);
         $shouldInvalidateAuthentication = ($hasSessionIdentity && ! $shopMatches)
-            || (! $hasSessionIdentity && $hasRecaller && ! $shopMatches && ! $tenantRecallerMatches);
+            || (! $hasSessionIdentity && $hasRecaller && ! $tenantRecallerMatches);
 
         if ($shouldInvalidateAuthentication) {
             $session->forget([
