@@ -85,6 +85,7 @@ abstract class TestCase extends BaseTestCase
         (new Filesystem)->ensureDirectoryExists($tenantRoot, 0700);
 
         config()->set('database.tenant_sqlite_root', $tenantRoot);
+        config()->set('database.tenant_sqlite_provisioning_root', $tenantRoot);
         config()->set('database.default', 'central');
         config()->set(
             'database.tenant_attestation_lock_path',

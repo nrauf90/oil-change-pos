@@ -47,9 +47,12 @@ final readonly class TenantMigrationRunner
                 $lease->heartbeat();
             }
         });
-        $events->listen(MigrationEnded::class, function (MigrationEnded $event) use ($lease): void {
+        $events->listen(MigrationEnded::class, function (MigrationEnded $event): void {
             if ($event->method === 'up') {
-                $lease->heartbeat();
+                $this->hook->reached(
+                    TenantProvisioningCheckpoint::AfterTenantMigrationDdlBeforeLog,
+                    $this->tenantContext->shop(),
+                );
             }
         });
         $migrator = new Migrator(

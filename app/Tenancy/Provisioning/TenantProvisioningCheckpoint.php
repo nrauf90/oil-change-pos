@@ -10,6 +10,7 @@ enum TenantProvisioningCheckpoint
     case AfterMarkerMigrationLoggedBeforeRow;
     case AfterMarkerRowBeforeManagerConnection;
     case BeforeTenantMigrationRun;
+    case AfterTenantMigrationDdlBeforeLog;
     case AfterTenantMigrations;
     case BeforeOwnerProvision;
     case BeforeAuthorizationSync;

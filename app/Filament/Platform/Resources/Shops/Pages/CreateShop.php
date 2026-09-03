@@ -103,7 +103,7 @@ class CreateShop extends CreateRecord
     private function databaseName(string $driver, string $slug): string
     {
         if ($driver === 'sqlite') {
-            return rtrim((string) config('database.tenant_sqlite_root'), '/\\')
+            return rtrim((string) config('database.tenant_sqlite_provisioning_root'), '/\\')
                 .DIRECTORY_SEPARATOR."{$slug}.sqlite";
         }
 

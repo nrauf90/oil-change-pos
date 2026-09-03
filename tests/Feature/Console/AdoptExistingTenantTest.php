@@ -2,14 +2,18 @@
 
 namespace Tests\Feature\Console;
 
+use App\Actions\Tenancy\ProvisionShop;
 use App\Enums\ShopLifecycleEvent;
 use App\Enums\ShopStatus;
+use App\Exceptions\TenantProvisioningException;
 use App\Models\Central\Shop;
 use App\Models\User;
+use App\Tenancy\NormalizedDatabaseTarget;
 use App\Tenancy\Provisioning\NullTenantProvisioningHook;
 use App\Tenancy\Provisioning\TenantProvisioningCheckpoint;
 use App\Tenancy\Provisioning\TenantProvisioningHook;
 use App\Tenancy\Provisioning\TenantProvisioningInterrupted;
+use App\Tenancy\TenantConnectionAttestationHook;
 use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
 use Illuminate\Database\Schema\Blueprint;
@@ -18,6 +22,8 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use PDO;
+use PDOException;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -92,6 +98,28 @@ class AdoptExistingTenantTest extends TestCase
 
     public function test_adoption_is_a_byte_for_byte_read_only_dry_run_by_default(): void
     {
+        $writeProbe = new class implements TenantConnectionAttestationHook
+        {
+            public bool $writeWasRejected = false;
+
+            public function beforeOpen(NormalizedDatabaseTarget $target): void {}
+
+            public function afterOpen(PDO $pdo, NormalizedDatabaseTarget $target): void
+            {
+                if ($target->driver !== 'sqlite') {
+                    return;
+                }
+
+                try {
+                    $pdo->exec('CREATE TABLE dry_run_write_probe (id INTEGER PRIMARY KEY)');
+                } catch (PDOException) {
+                    $this->writeWasRejected = true;
+                }
+            }
+
+            public function afterSqliteNonceWritten(PDO $pdo, NormalizedDatabaseTarget $target): void {}
+        };
+        $this->app->instance(TenantConnectionAttestationHook::class, $writeProbe);
         DB::purge('legacy');
         $beforeHash = hash_file('sha256', $this->legacyDatabase);
         $beforeTables = $this->sourceTableNames();
@@ -105,8 +133,12 @@ class AdoptExistingTenantTest extends TestCase
 
         DB::purge('legacy');
         clearstatcache(true, $this->legacyDatabase);
+        $this->assertTrue($writeProbe->writeWasRejected);
         $this->assertSame($beforeHash, hash_file('sha256', $this->legacyDatabase));
         $this->assertSame($beforeTables, $this->sourceTableNames());
+        $this->assertFileDoesNotExist($this->legacyDatabase.'-journal');
+        $this->assertFileDoesNotExist($this->legacyDatabase.'-wal');
+        $this->assertFileDoesNotExist($this->legacyDatabase.'-shm');
         $this->assertSame(0, Shop::query()->count());
         $this->assertDatabaseCount('shop_owners', 0, 'central');
         $this->assertDatabaseCount('shop_lifecycle_activities', 0, 'central');
@@ -172,14 +204,15 @@ class AdoptExistingTenantTest extends TestCase
         $beforeMigrations = $source->table('migrations')->orderBy('migration')->pluck('migration')->all();
         DB::purge('legacy');
 
-        $this->artisan('tenants:adopt-existing', [
+        $exitCode = Artisan::call('tenants:adopt-existing', [
             ...$this->adoptionOptions(),
             '--force' => true,
             '--no-interaction' => true,
-        ])
-            ->expectsOutputToContain('Existing database adopted')
-            ->doesntExpectOutputToContain($this->legacyDatabase)
-            ->assertSuccessful();
+        ]);
+        $output = Artisan::output();
+        $this->assertSame(0, $exitCode, $output);
+        $this->assertStringContainsString('Existing database adopted', $output);
+        $this->assertStringNotContainsString($this->legacyDatabase, $output);
 
         $shop = Shop::query()->where('slug', 'legacy-workshop')->firstOrFail();
         $this->assertSame(ShopStatus::Active, $shop->status);
@@ -286,6 +319,124 @@ class AdoptExistingTenantTest extends TestCase
             ShopStatus::Active,
             Shop::query()->where('slug', 'legacy-workshop')->firstOrFail()->status,
         );
+    }
+
+    public function test_adoption_recovers_after_role_description_ddl_before_migration_log(): void
+    {
+        $this->app->instance(TenantProvisioningHook::class, new class implements TenantProvisioningHook
+        {
+            private bool $interrupted = false;
+
+            public function reached(TenantProvisioningCheckpoint $checkpoint, Shop $shop): void
+            {
+                if ($checkpoint === TenantProvisioningCheckpoint::AfterTenantMigrationDdlBeforeLog
+                    && ! $this->interrupted) {
+                    $this->interrupted = true;
+
+                    throw new TenantProvisioningInterrupted;
+                }
+            }
+        });
+        $options = [
+            ...$this->adoptionOptions(),
+            '--force' => true,
+            '--no-interaction' => true,
+        ];
+
+        $this->artisan('tenants:adopt-existing', $options)
+            ->expectsOutputToContain('TENANT_MIGRATION_FAILED')
+            ->assertExitCode(1);
+
+        DB::purge('legacy');
+        $source = DB::connection('legacy');
+        $this->assertTrue($source->getSchemaBuilder()->hasColumn('roles', 'description'));
+        $this->assertSame(
+            0,
+            $source->table('migrations')->where('migration', self::ROLE_DESCRIPTION_MIGRATION)->count(),
+        );
+
+        $this->app->instance(TenantProvisioningHook::class, new NullTenantProvisioningHook);
+
+        $this->artisan('tenants:adopt-existing', $options)
+            ->expectsOutputToContain('Existing database adopted')
+            ->assertSuccessful();
+
+        DB::purge('legacy');
+        $source = DB::connection('legacy');
+        $description = collect($source->getSchemaBuilder()->getColumns('roles'))
+            ->firstWhere('name', 'description');
+        $this->assertIsArray($description);
+        $this->assertSame('text', $description['type_name']);
+        $this->assertTrue($description['nullable']);
+        $this->assertSame(
+            1,
+            $source->table('migrations')->where('migration', self::ROLE_DESCRIPTION_MIGRATION)->count(),
+        );
+        $this->assertSame(
+            ShopStatus::Active,
+            Shop::query()->where('slug', 'legacy-workshop')->firstOrFail()->status,
+        );
+    }
+
+    public function test_normal_provisioning_retry_cannot_take_over_an_interrupted_forced_adoption(): void
+    {
+        $this->app->instance(TenantProvisioningHook::class, new class implements TenantProvisioningHook
+        {
+            public function reached(TenantProvisioningCheckpoint $checkpoint, Shop $shop): void
+            {
+                if ($checkpoint === TenantProvisioningCheckpoint::BeforeTenantMigrationRun) {
+                    throw new TenantProvisioningInterrupted;
+                }
+            }
+        });
+        $options = [
+            ...$this->adoptionOptions(),
+            '--force' => true,
+            '--no-interaction' => true,
+        ];
+
+        $this->artisan('tenants:adopt-existing', $options)->assertExitCode(1);
+        $shop = Shop::query()->where('slug', 'legacy-workshop')->firstOrFail();
+        $beforeItems = DB::connection('legacy')->table('items')->count();
+        $this->app->instance(TenantProvisioningHook::class, new NullTenantProvisioningHook);
+
+        try {
+            app(ProvisionShop::class)->retry($shop, 'temporary-owner-password');
+            $this->fail('Normal provisioning must not take over a forced adoption.');
+        } catch (TenantProvisioningException $exception) {
+            $this->assertSame('SHOP_RESERVED_FOR_ADOPTION', $exception->errorCode);
+        }
+
+        $this->assertSame(ShopStatus::Provisioning, $shop->fresh()->status);
+        $this->assertSame($beforeItems, DB::connection('legacy')->table('items')->count());
+        $this->assertSame(0, $shop->lifecycleActivities()
+            ->whereIn('event', [
+                ShopLifecycleEvent::ProvisioningStarted->value,
+                ShopLifecycleEvent::ProvisioningFailed->value,
+                ShopLifecycleEvent::ProvisioningSucceeded->value,
+            ])
+            ->count());
+
+        $this->artisan('tenants:adopt-existing', $options)->assertSuccessful();
+        $this->assertSame(ShopStatus::Active, $shop->fresh()->status);
+        $this->assertSame(1, $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::ExistingDatabaseAdopted->value)
+            ->count());
+    }
+
+    public function test_adoption_rejects_wal_mode_sqlite_without_touching_database_files(): void
+    {
+        DB::connection('legacy')->select('PRAGMA journal_mode = WAL');
+        DB::purge('legacy');
+        $beforeFiles = $this->sqliteFileHashes();
+
+        $this->artisan('tenants:adopt-existing', $this->adoptionOptions())
+            ->expectsOutputToContain('ADOPTION_SQLITE_WAL_UNSAFE')
+            ->assertExitCode(1);
+
+        clearstatcache();
+        $this->assertSame($beforeFiles, $this->sqliteFileHashes());
+        $this->assertSame(0, Shop::query()->count());
     }
 
     public function test_successfully_adopted_database_cannot_be_adopted_twice(): void
@@ -444,5 +595,22 @@ class AdoptExistingTenantTest extends TestCase
         }
 
         fclose($handle);
+    }
+
+    /** @return array<string, string|null> */
+    private function sqliteFileHashes(): array
+    {
+        $files = [
+            $this->legacyDatabase,
+            $this->legacyDatabase.'-journal',
+            $this->legacyDatabase.'-wal',
+            $this->legacyDatabase.'-shm',
+        ];
+
+        return collect($files)
+            ->mapWithKeys(static fn (string $path): array => [
+                $path => is_file($path) ? hash_file('sha256', $path) : null,
+            ])
+            ->all();
     }
 }

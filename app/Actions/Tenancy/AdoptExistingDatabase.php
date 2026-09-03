@@ -33,6 +33,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use PDO;
 use Throwable;
 
 final readonly class AdoptExistingDatabase
@@ -200,6 +201,7 @@ final readonly class AdoptExistingDatabase
         try {
             $configuration = $this->sourceConfiguration();
             $target = $this->normalizedTarget($configuration);
+            $this->assertSqliteSourceSafeForReadOnlyInspection($target);
             $sourceConnectionName = 'tenant_adoption_source_'.str_replace('-', '', (string) Str::uuid());
             $connections = $this->config->get('database.connections');
 
@@ -344,7 +346,63 @@ final readonly class AdoptExistingDatabase
         $configuration['database'] = $target->database;
         unset($configuration['url'], $configuration['name']);
 
+        if ($target->driver === 'sqlite') {
+            $options = is_array($configuration['options'] ?? null)
+                ? $configuration['options']
+                : [];
+            $options[PDO::SQLITE_ATTR_OPEN_FLAGS] = PDO::SQLITE_OPEN_READONLY;
+            $configuration['options'] = $options;
+            unset(
+                $configuration['pragmas'],
+                $configuration['foreign_key_constraints'],
+                $configuration['journal_mode'],
+                $configuration['synchronous'],
+            );
+        }
+
         return $configuration;
+    }
+
+    private function assertSqliteSourceSafeForReadOnlyInspection(
+        #[\SensitiveParameter]
+        NormalizedDatabaseTarget $target,
+    ): void {
+        if ($target->driver !== 'sqlite') {
+            return;
+        }
+
+        foreach (['-journal', '-wal', '-shm'] as $suffix) {
+            if (is_file($target->database.$suffix)) {
+                throw $this->failure(
+                    'ADOPTION_SQLITE_WAL_UNSAFE',
+                    'The SQLite source must be offline, checkpointed, and free of journal sidecar files.',
+                );
+            }
+        }
+
+        $handle = @fopen($target->database, 'rb');
+
+        if (! is_resource($handle)) {
+            throw $this->failure(
+                'ADOPTION_SOURCE_INVALID',
+                'The configured source database could not be read.',
+            );
+        }
+
+        try {
+            $header = fread($handle, 20);
+        } finally {
+            fclose($handle);
+        }
+
+        if (is_string($header)
+            && strlen($header) >= 20
+            && (ord($header[18]) === 2 || ord($header[19]) === 2)) {
+            throw $this->failure(
+                'ADOPTION_SQLITE_WAL_UNSAFE',
+                'The SQLite source must use rollback-journal mode before adoption.',
+            );
+        }
     }
 
     private function assertRequiredTables(Connection $connection): void

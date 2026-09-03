@@ -16,6 +16,7 @@ use App\Modules\ModuleRegistry;
 use App\Tenancy\Migrations\TenantMigrationResult;
 use App\Tenancy\Migrations\TenantMigrationRunner;
 use App\Tenancy\Provisioning\DatabaseProvisioner;
+use App\Tenancy\Provisioning\TenantInstallationReason;
 use App\Tenancy\Provisioning\TenantOwnerProvisioner;
 use App\Tenancy\Provisioning\TenantProvisioningCheckpoint;
 use App\Tenancy\Provisioning\TenantProvisioningHook;
@@ -260,6 +261,14 @@ final readonly class ProvisionShop
                 );
             }
 
+            if ($this->hasForcedAdoptionReceipt($freshShop)) {
+                throw TenantProvisioningException::safe(
+                    'target',
+                    'SHOP_RESERVED_FOR_ADOPTION',
+                    'This shop belongs to an interrupted database adoption. Resume it with the adoption command.',
+                );
+            }
+
             if ($freshShop->status === ShopStatus::Failed) {
                 $lease->heartbeat();
                 $freshShop->retryProvisioning();
@@ -287,6 +296,35 @@ final readonly class ProvisionShop
 
             return [$freshShop->fresh(), $attempt];
         });
+    }
+
+    private function hasForcedAdoptionReceipt(Shop $shop): bool
+    {
+        $driver = (string) $shop->database_driver;
+        $targetFingerprint = (string) $shop->database_target_fingerprint;
+
+        if ($driver === '' || $targetFingerprint === '') {
+            return false;
+        }
+
+        $activities = $shop->lifecycleActivities()
+            ->where('event', ShopLifecycleEvent::TenantInstallationAuthorized->value)
+            ->latest('occurred_at')
+            ->get(['metadata']);
+
+        foreach ($activities as $activity) {
+            $metadata = $activity->metadata;
+
+            if (is_array($metadata)
+                && ($metadata['database_driver'] ?? null) === $driver
+                && ($metadata['reason_code'] ?? null) === TenantInstallationReason::ForcedAdoption->value
+                && is_string($metadata['target_fingerprint'] ?? null)
+                && hash_equals($targetFingerprint, $metadata['target_fingerprint'])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function runAttempt(

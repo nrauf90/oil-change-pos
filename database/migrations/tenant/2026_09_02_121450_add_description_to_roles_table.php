@@ -11,7 +11,23 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::connection('tenant')->table('roles', function (Blueprint $table): void {
+        $schema = Schema::connection('tenant');
+
+        if ($schema->hasColumn('roles', 'description')) {
+            $description = collect($schema->getColumns('roles'))->firstWhere('name', 'description');
+
+            if (! is_array($description)
+                || ($description['type_name'] ?? null) !== 'text'
+                || ($description['nullable'] ?? null) !== true) {
+                throw new RuntimeException(
+                    'The roles.description column is incompatible with the canonical tenant schema.',
+                );
+            }
+
+            return;
+        }
+
+        $schema->table('roles', function (Blueprint $table): void {
             $table->text('description')->nullable();
         });
     }
@@ -21,7 +37,13 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::connection('tenant')->table('roles', function (Blueprint $table): void {
+        $schema = Schema::connection('tenant');
+
+        if (! $schema->hasColumn('roles', 'description')) {
+            return;
+        }
+
+        $schema->table('roles', function (Blueprint $table): void {
             $table->dropColumn('description');
         });
     }

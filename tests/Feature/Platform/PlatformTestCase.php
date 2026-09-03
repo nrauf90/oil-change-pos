@@ -36,6 +36,7 @@ abstract class PlatformTestCase extends TestCase
         $this->centralDatabasePath = $centralDatabasePath;
 
         config()->set('database.tenant_sqlite_root', $this->tenantDatabaseRoot);
+        config()->set('database.tenant_sqlite_provisioning_root', $this->tenantDatabaseRoot);
         config()->set('database.connections.central', [
             'driver' => 'sqlite',
             'database' => $this->centralDatabasePath,

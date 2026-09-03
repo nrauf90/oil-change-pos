@@ -18,7 +18,12 @@ return [
 
     'default' => env('DB_CONNECTION', 'central'),
 
-    'tenant_sqlite_root' => env('TENANT_SQLITE_ROOT', database_path('tenants')),
+    'tenant_sqlite_root' => env('TENANT_SQLITE_ROOT', database_path()),
+
+    'tenant_sqlite_provisioning_root' => env(
+        'TENANT_SQLITE_PROVISIONING_ROOT',
+        database_path('tenants'),
+    ),
 
     'tenant_attestation_lock_path' => env(
         'TENANT_ATTESTATION_LOCK_PATH',
