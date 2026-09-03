@@ -15,7 +15,11 @@ class PlatformSessionAuthentication
 
     public function recordLogin(PlatformUser $platformUser): void
     {
-        $attributes = $platformUser->getConnection()->transaction(function () use ($platformUser): array {
+        $validatedPasswordHash = (string) $platformUser->getAuthPassword();
+        $attributes = $platformUser->getConnection()->transaction(function () use (
+            $platformUser,
+            $validatedPasswordHash,
+        ): array {
             $freshPlatformUser = PlatformUser::on($platformUser->getConnectionName())
                 ->whereKey($platformUser->getKey())
                 ->where('role', PlatformUser::ROLE_SUPER_ADMIN)
@@ -23,7 +27,8 @@ class PlatformSessionAuthentication
                 ->lockForUpdate()
                 ->first();
 
-            if (! $freshPlatformUser instanceof PlatformUser) {
+            if (! $freshPlatformUser instanceof PlatformUser
+                || ! hash_equals((string) $freshPlatformUser->getAuthPassword(), $validatedPasswordHash)) {
                 return [];
             }
 

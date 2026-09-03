@@ -66,7 +66,8 @@ final class ManageTenantUsers
             }
 
             $wasActive = (bool) $user->is_active;
-            $requiresCredentialRevocation = ! $wasActive || ! $willBeActive;
+            $passwordIsChanging = array_key_exists('password', $data);
+            $requiresCredentialRevocation = $passwordIsChanging || ! $wasActive || ! $willBeActive;
 
             if ($requiresCredentialRevocation) {
                 $user->setRememberToken(Str::random(60));

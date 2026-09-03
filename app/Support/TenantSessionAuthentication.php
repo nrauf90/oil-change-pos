@@ -38,6 +38,13 @@ final readonly class TenantSessionAuthentication
                 return [];
             }
 
+            if (! hash_equals(
+                (string) $user->getAuthPassword(),
+                (string) $freshUser->getAuthPassword(),
+            )) {
+                return [];
+            }
+
             if (blank($freshUser->getRememberToken())) {
                 $freshUser->setRememberToken(Str::random(60));
             }

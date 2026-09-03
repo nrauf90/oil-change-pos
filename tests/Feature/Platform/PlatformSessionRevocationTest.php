@@ -7,9 +7,11 @@ use App\Models\Central\PlatformUser;
 use App\Models\Central\Shop;
 use App\Models\Central\ShopAccessSession;
 use App\Tenancy\SupportAccessManager;
+use Illuminate\Auth\Events\Validated;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 
@@ -462,6 +464,55 @@ class PlatformSessionRevocationTest extends PlatformTestCase
         $this->assertArrayNotHasKey(SupportAccessManager::SESSION_KEY, $payload);
         $this->assertSame(731, $payload[$webGuard->getName()]);
         $this->assertSame(['sale_id' => 91], $payload['tenant.checkout.draft']);
+    }
+
+    public function test_password_change_after_validation_does_not_establish_a_platform_session(): void
+    {
+        $actor = PlatformUser::factory()->create();
+        $platformUser = PlatformUser::factory()->create([
+            'email' => 'password-race@example.test',
+            'password' => 'old-platform-password',
+        ]);
+        $platformGuard = Auth::guard('platform');
+        $passwordWasChanged = false;
+        Event::listen(
+            Validated::class,
+            static function (Validated $event) use ($actor, $platformUser, &$passwordWasChanged): void {
+                if ($event->guard !== 'platform'
+                    || (string) $event->user->getAuthIdentifier() !== (string) $platformUser->getKey()) {
+                    return;
+                }
+
+                resolve(ManagePlatformUsers::class)->update(
+                    $actor,
+                    $platformUser,
+                    ['password' => 'replacement-platform-password'],
+                );
+                $passwordWasChanged = true;
+            },
+        );
+
+        $platformGuard->attempt([
+            'email' => 'password-race@example.test',
+            'password' => 'old-platform-password',
+        ]);
+
+        $this->assertTrue($passwordWasChanged);
+        $this->assertTrue(Hash::check(
+            'replacement-platform-password',
+            $platformUser->fresh()->password,
+        ));
+        $this->assertFalse(session()->has($platformGuard->getName()));
+        $this->assertFalse(session()->has('auth_generation_platform'));
+        session()->save();
+        $sessionId = session()->getId();
+        Auth::forgetGuards();
+
+        $this->withCookie((string) config('session.cookie'), $sessionId)
+            ->get('/platform')
+            ->assertRedirect('/platform/login');
+
+        $this->assertGuest('platform');
     }
 
     /** @param array<string, mixed> $payload */

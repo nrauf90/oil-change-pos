@@ -15,6 +15,7 @@ use App\Tenancy\TenantConnectionManager;
 use App\Tenancy\TenantContext;
 use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
 use Filament\Http\Middleware\SetUpPanel;
+use Illuminate\Auth\Events\Validated;
 use Illuminate\Auth\Middleware\Authenticate;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
@@ -131,6 +132,46 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
             hash_hmac('sha256', (string) $user->getRememberToken(), (string) config('app.key')),
         );
 
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_password_rotation_between_validation_and_login_rejects_the_stale_tenant_credentials(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-login-password-race');
+        $credentialsRotated = false;
+
+        Event::listen(Validated::class, function (Validated $event) use ($user, &$credentialsRotated): void {
+            if ($credentialsRotated
+                || $event->guard !== 'web'
+                || (string) $event->user->getAuthIdentifier() !== (string) $user->getKey()) {
+                return;
+            }
+
+            User::query()->whereKey($user->getKey())->update([
+                'password' => Hash::make('replacement-tenant-password'),
+                'remember_token' => Str::random(60),
+            ]);
+            $credentialsRotated = true;
+        });
+
+        $response = $this->post($this->tenantUrl($shop, '/login'), [
+            'username' => $user->username,
+            'password' => 'secret-password',
+        ]);
+
+        $this->assertTrue($credentialsRotated);
+        $response
+            ->assertSessionHasErrors('username')
+            ->assertSessionMissing(Auth::guard('web')->getName())
+            ->assertSessionMissing(TenantSessionAuthentication::GENERATION_SESSION_KEY);
+        $this->assertGuest('web');
+        $this->assertTrue($this->manager->within(
+            $shop,
+            static fn (): bool => Hash::check(
+                'replacement-tenant-password',
+                User::query()->findOrFail($user->getKey())->password,
+            ),
+        ));
         $this->assertTenantStateIsRevoked();
     }
 
@@ -392,6 +433,88 @@ class TenantDatabaseSessionLifecycleTest extends TestCase
         $this->withCookie($recallerName, $oldRecaller->getValue())
             ->get($this->tenantUrl($shop, '/quick-items'))
             ->assertRedirect($this->tenantUrl($shop, '/login'));
+        $this->assertTenantStateIsRevoked();
+    }
+
+    public function test_password_change_revokes_active_tenant_sessions_and_remember_cookie(): void
+    {
+        [$shop, $user] = $this->createActiveTenantWithManager('database-tenant-password-change');
+        $actorId = $this->manager->within(
+            $shop,
+            static fn (): int => (int) User::factory()->admin()->create()->getKey(),
+        );
+        $webGuard = Auth::guard('web');
+        $recallerName = $webGuard->getRecallerName();
+        $tenantBindingName = $recallerName.'_tenant';
+        $loginResponse = $this->post($this->tenantUrl($shop, '/login'), [
+            'username' => $user->username,
+            'password' => 'secret-password',
+            'remember' => true,
+        ])->assertRedirect();
+        $oldRecaller = $loginResponse->getCookie($recallerName);
+        $tenantBinding = $loginResponse->getCookie($tenantBindingName);
+        $this->assertNotNull($oldRecaller);
+        $this->assertNotNull($tenantBinding);
+        $oldRememberToken = $this->manager->within(
+            $shop,
+            static fn (): ?string => User::query()->findOrFail($user->getKey())->getRememberToken(),
+        );
+        $this->resetResolvedSessionAndGuards();
+        $sessionId = str_repeat('d', 40);
+        DB::connection('central')->table('sessions')->insert([
+            'id' => $sessionId,
+            'user_id' => $user->getKey(),
+            'ip_address' => '127.0.0.1',
+            'user_agent' => 'PHPUnit',
+            'payload' => $this->encodeSessionPayload([
+                '_token' => 'csrf-token',
+                $webGuard->getName() => $user->getKey(),
+                TenantSessionAuthentication::GENERATION_SESSION_KEY => hash_hmac(
+                    'sha256',
+                    (string) $oldRememberToken,
+                    (string) config('app.key'),
+                ),
+                InitializeTenancy::SESSION_SHOP_KEY => $shop->getKey(),
+            ]),
+            'last_activity' => now()->timestamp,
+        ]);
+
+        $this->manager->within($shop, static function () use ($actorId, $user): void {
+            resolve(ManageTenantUsers::class)->update(
+                User::query()->findOrFail($actorId),
+                User::query()->findOrFail($user->getKey()),
+                ['password' => 'replacement-tenant-password'],
+                Role::Manager->value,
+            );
+        });
+
+        $freshCredentials = $this->manager->within(
+            $shop,
+            static function () use ($user): array {
+                $freshUser = User::query()->findOrFail($user->getKey());
+
+                return [
+                    'password' => $freshUser->password,
+                    'remember_token' => $freshUser->getRememberToken(),
+                ];
+            },
+        );
+        $this->assertTrue(Hash::check('replacement-tenant-password', $freshCredentials['password']));
+        $this->assertNotSame($oldRememberToken, $freshCredentials['remember_token']);
+        $payload = $this->persistedSessionPayload($sessionId);
+        $this->assertArrayNotHasKey($webGuard->getName(), $payload);
+        $this->assertArrayNotHasKey(TenantSessionAuthentication::GENERATION_SESSION_KEY, $payload);
+        $this->assertArrayNotHasKey(InitializeTenancy::SESSION_SHOP_KEY, $payload);
+        $this->resetResolvedSessionAndGuards();
+
+        $this->withCookies([
+            $recallerName => $oldRecaller->getValue(),
+            $tenantBindingName => $tenantBinding->getValue(),
+        ])
+            ->get($this->tenantUrl($shop, '/quick-items'))
+            ->assertRedirect($this->tenantUrl($shop, '/login'))
+            ->assertCookieExpired($recallerName)
+            ->assertCookieExpired($tenantBindingName);
         $this->assertTenantStateIsRevoked();
     }
 
