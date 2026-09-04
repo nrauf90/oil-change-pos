@@ -106,6 +106,7 @@ class AdminPanelTest extends TestCase
                 'name' => 'Ayesha Malik',
                 'username' => 'ayesha',
                 'password' => 'secret-password',
+                'password_confirmation' => 'secret-password',
                 'is_active' => true,
                 'role' => Role::Manager->value,
             ])
@@ -126,6 +127,7 @@ class AdminPanelTest extends TestCase
                 'name' => 'Ayesha Malik',
                 'username' => 'ayesha',
                 'password' => 'secret-password',
+                'password_confirmation' => 'secret-password',
                 'role' => Role::Technician->value,
             ])
             ->call('create')
@@ -147,6 +149,7 @@ class AdminPanelTest extends TestCase
                 'name' => 'Someone Else',
                 'username' => 'taken',
                 'password' => 'secret-password',
+                'password_confirmation' => 'secret-password',
                 'role' => Role::Manager->value,
             ])
             ->call('create')
@@ -181,6 +184,140 @@ class AdminPanelTest extends TestCase
 
         $this->assertSame('Renamed Person', $staff->name);
         $this->assertTrue(Hash::check('original-password', $staff->password));
+    }
+
+    /**
+     * Nothing is being changed on create, so there is no credential to re-authorise
+     * — asking for it would only train admins to type their password on a form that
+     * did not need it.
+     */
+    public function test_creating_a_staff_member_does_not_ask_for_the_current_password(): void
+    {
+        Livewire::actingAs($this->admin())
+            ->test(CreateUser::class)
+            ->fillForm([
+                'name' => 'Ayesha Malik',
+                'username' => 'ayesha',
+                'password' => 'secret-password',
+                'password_confirmation' => 'secret-password',
+                'role' => Role::Manager->value,
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        $this->assertTrue(Hash::check('secret-password', User::where('username', 'ayesha')->sole()->password));
+    }
+
+    public function test_a_mistyped_confirmation_is_rejected_on_create(): void
+    {
+        Livewire::actingAs($this->admin())
+            ->test(CreateUser::class)
+            ->fillForm([
+                'name' => 'Ayesha Malik',
+                'username' => 'ayesha',
+                'password' => 'secret-password',
+                'password_confirmation' => 'secret-passwrod',
+                'role' => Role::Manager->value,
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['password_confirmation']);
+
+        $this->assertFalse(User::where('username', 'ayesha')->exists());
+    }
+
+    /**
+     * A walked-away admin session is the realistic attack: without re-authentication
+     * anyone passing the counter can hand themselves a staff login.
+     */
+    public function test_changing_a_staff_password_requires_the_signed_in_admins_own_password(): void
+    {
+        $staff = User::factory()->manager()->create(['password' => Hash::make('original-password')]);
+
+        Livewire::actingAs($this->admin())
+            ->test(EditUser::class, ['record' => $staff->getKey()])
+            ->fillForm([
+                'password' => 'replacement-password',
+                'password_confirmation' => 'replacement-password',
+            ])
+            ->call('save')
+            ->assertHasFormErrors(['current_password']);
+
+        $this->assertTrue(Hash::check('original-password', $staff->refresh()->password));
+    }
+
+    public function test_a_wrong_current_password_does_not_change_a_staff_password(): void
+    {
+        $staff = User::factory()->manager()->create(['password' => Hash::make('original-password')]);
+
+        Livewire::actingAs($this->admin())
+            ->test(EditUser::class, ['record' => $staff->getKey()])
+            ->fillForm([
+                'current_password' => 'not-the-admins-password',
+                'password' => 'replacement-password',
+                'password_confirmation' => 'replacement-password',
+            ])
+            ->call('save')
+            ->assertHasFormErrors(['current_password']);
+
+        $this->assertTrue(Hash::check('original-password', $staff->refresh()->password));
+    }
+
+    /** The edited person's own old password is not the re-authentication secret. */
+    public function test_the_edited_staff_members_old_password_is_not_accepted_as_the_current_password(): void
+    {
+        $staff = User::factory()->manager()->create(['password' => Hash::make('original-password')]);
+
+        Livewire::actingAs($this->admin())
+            ->test(EditUser::class, ['record' => $staff->getKey()])
+            ->fillForm([
+                'current_password' => 'original-password',
+                'password' => 'replacement-password',
+                'password_confirmation' => 'replacement-password',
+            ])
+            ->call('save')
+            ->assertHasFormErrors(['current_password']);
+
+        $this->assertTrue(Hash::check('original-password', $staff->refresh()->password));
+    }
+
+    public function test_a_mistyped_confirmation_is_rejected_on_edit(): void
+    {
+        $admin = User::factory()->admin()->create(['password' => Hash::make('admin-password')]);
+        $staff = User::factory()->manager()->create(['password' => Hash::make('original-password')]);
+
+        Livewire::actingAs($admin)
+            ->test(EditUser::class, ['record' => $staff->getKey()])
+            ->fillForm([
+                'current_password' => 'admin-password',
+                'password' => 'replacement-password',
+                'password_confirmation' => 'replacement-passwrod',
+            ])
+            ->call('save')
+            ->assertHasFormErrors(['password_confirmation']);
+
+        $this->assertTrue(Hash::check('original-password', $staff->refresh()->password));
+    }
+
+    public function test_an_admin_who_re_authenticates_can_change_a_staff_password(): void
+    {
+        $admin = User::factory()->admin()->create(['password' => Hash::make('admin-password')]);
+        $staff = User::factory()->manager()->create(['password' => Hash::make('original-password')]);
+
+        Livewire::actingAs($admin)
+            ->test(EditUser::class, ['record' => $staff->getKey()])
+            ->fillForm([
+                'current_password' => 'admin-password',
+                'password' => 'replacement-password',
+                'password_confirmation' => 'replacement-password',
+            ])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        $this->assertTrue(Hash::check('replacement-password', $staff->refresh()->password));
+        $this->assertTrue(
+            Hash::check('admin-password', $admin->refresh()->password),
+            'the re-authentication field must never be written to the users table',
+        );
     }
 
     public function test_a_staff_member_can_be_deactivated_and_then_cannot_sign_in(): void

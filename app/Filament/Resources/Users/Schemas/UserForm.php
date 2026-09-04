@@ -12,6 +12,7 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Hash;
@@ -50,7 +51,26 @@ class UserForm
                         ->unique(ignoreRecord: true)
                         ->helperText('Optional. Only used for "Forgot your password?" — not for signing in.'),
 
+                    // Re-authentication, not the edited person's old password: an admin
+                    // resetting a forgotten staff password has no way to know that one.
+                    // What this stops is a walked-away session being used to hand out a
+                    // credential, so it is only asked for when a password is actually set.
+                    TextInput::make('current_password')
+                        ->label('Your current password')
+                        ->password()
+                        ->revealable()
+                        ->maxLength(255)
+                        // Creating an account changes nobody's credential, so there is
+                        // nothing here to re-authorise.
+                        ->visible(fn (string $operation): bool => $operation === 'edit')
+                        ->required(fn (Get $get): bool => filled($get('password')))
+                        ->rule('current_password', fn (Get $get): bool => filled($get('password')))
+                        // Form-only: there is no such column, and it must never be stored.
+                        ->dehydrated(false)
+                        ->helperText('Your own password, not theirs. Only needed if you set a new password below.'),
+
                     TextInput::make('password')
+                        ->label('New password')
                         ->password()
                         ->revealable()
                         ->rule(Password::defaults())
@@ -62,6 +82,18 @@ class UserForm
                         ->helperText(fn (string $operation): string => $operation === 'edit'
                             ? 'Leave blank to keep the current password.'
                             : 'At least 8 characters.'),
+
+                    // A typo here locks the member of staff out of a shop that has no
+                    // self-service reset unless they happened to give an email address.
+                    TextInput::make('password_confirmation')
+                        ->label('Confirm new password')
+                        ->password()
+                        ->revealable()
+                        ->maxLength(255)
+                        ->required(fn (Get $get): bool => filled($get('password')))
+                        ->same('password')
+                        ->dehydrated(false)
+                        ->helperText('Retype the new password exactly.'),
 
                     Toggle::make('is_active')
                         ->label('Active')
