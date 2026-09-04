@@ -48,7 +48,10 @@ class ShopResource extends Resource
     public static function infolist(Schema $schema): Schema
     {
         return $schema->components([
+            // The page schema itself is two columns (ViewRecord::configureInfolist),
+            // so without this the whole layout would sit in half the page.
             Grid::make(['default' => 1, 'lg' => 2])
+                ->columnSpanFull()
                 ->schema([
                     Section::make('Shop')
                         ->columns(['default' => 1, 'md' => 2])
