@@ -79,7 +79,16 @@
                     <td class="px-4 py-3">
                         <span class="pill {{ $expense->category->badgeClasses() }}">{{ $expense->category->label() }}</span>
                     </td>
-                    <td class="px-4 py-3 font-semibold">{{ $expense->description ?: '—' }}</td>
+                    <td class="px-4 py-3 font-semibold">
+                        {{ $expense->description ?: '—' }}
+                        @if ($expense->receipts_count > 0)
+                            <span class="pill ml-1 inline-flex items-center gap-1 bg-emerald-100 text-emerald-800"
+                                  title="{{ $expense->receipts_count }} receipt(s) on file">
+                                <x-heroicon-o-paper-clip class="h-3.5 w-3.5" aria-hidden="true"/>
+                                {{ $expense->receipts_count }}
+                            </span>
+                        @endif
+                    </td>
                     <td class="px-4 py-3 text-sm font-medium text-slate-500">{{ $expense->user?->name ?? 'Removed user' }}</td>
                     <td class="px-4 py-3 text-sm font-semibold text-slate-600">{{ $expense->payment_method?->label() ?? 'Cash' }}</td>
                     <td class="px-4 py-3 text-right font-mono text-lg font-bold tabular-nums text-red-700">

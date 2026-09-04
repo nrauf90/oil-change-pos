@@ -13,6 +13,9 @@ use Illuminate\Validation\Rule;
  */
 class ExpenseRequest extends FormRequest
 {
+    /** Enough for a fuel slip, a parts invoice and a stray till roll. */
+    public const MAX_RECEIPTS = 5;
+
     public function rules(): array
     {
         return [
@@ -20,6 +23,10 @@ class ExpenseRequest extends FormRequest
             'amount' => ['required', 'numeric', 'min:0', 'max:99999999'],
             'description' => ['nullable', 'string', 'max:500'],
             'spent_at' => ['nullable', 'date', 'before_or_equal:'.now()->endOfDay()->toDateTimeString()],
+            // Proof of where the money went. Optional, because a rickshaw fare
+            // rarely comes with paperwork.
+            'receipts' => ['nullable', 'array', 'max:'.self::MAX_RECEIPTS],
+            'receipts.*' => ['file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
         ];
     }
 
@@ -30,6 +37,9 @@ class ExpenseRequest extends FormRequest
             'amount.required' => 'Enter the amount that left the drawer.',
             'amount.min' => 'An expense cannot be a negative amount.',
             'spent_at.before_or_equal' => 'An expense cannot be logged in the future.',
+            'receipts.max' => 'Attach at most '.self::MAX_RECEIPTS.' receipts to one expense.',
+            'receipts.*.mimes' => 'A receipt must be a photo (JPG, PNG or WebP) or a PDF.',
+            'receipts.*.max' => 'Each receipt must be 5 MB or smaller.',
         ];
     }
 
@@ -43,6 +53,9 @@ class ExpenseRequest extends FormRequest
     public function payload(): array
     {
         $data = $this->validated();
+
+        // Uploads are written through the receipts relationship, never mass-assigned.
+        unset($data['receipts']);
 
         if (($data['spent_at'] ?? null) === null) {
             unset($data['spent_at']);

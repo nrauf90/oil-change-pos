@@ -8,6 +8,7 @@ use Database\Factories\ExpenseFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
 
 class Expense extends TenantModel
@@ -43,6 +44,17 @@ class Expense extends TenantModel
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * The paper trail behind the outlay. Ordered oldest first so the receipts
+     * read in the order the counter attached them.
+     *
+     * @return HasMany<ExpenseReceipt, $this>
+     */
+    public function receipts(): HasMany
+    {
+        return $this->hasMany(ExpenseReceipt::class)->orderBy('id');
     }
 
     /** @return BelongsTo<SupplierPayment, $this> */

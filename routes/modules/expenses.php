@@ -37,6 +37,17 @@ Route::middleware('module:expenses')->group(function (): void {
         ->middleware('permission:expenses.delete')->name('expenses.destroy');
 
     /*
+    | Receipt images. Proof lives on a private disk, so viewing one is a route,
+    | not a URL — anyone who may read the expense list may read its paperwork.
+    */
+    Route::get('/expenses/{expense}/receipts/{receipt}', [ExpenseController::class, 'receipt'])
+        ->middleware('permission:expenses.view_any')->name('expenses.receipts.show');
+
+    // Pulling proof back off an expense is an amendment, not a deletion of history.
+    Route::delete('/expenses/{expense}/receipts/{receipt}', [ExpenseController::class, 'destroyReceipt'])
+        ->middleware('permission:expenses.update')->name('expenses.receipts.destroy');
+
+    /*
     | Shift / day reconciliation. Technicians hold none of these permissions,
     | so the cash position never reaches the workshop floor.
     */

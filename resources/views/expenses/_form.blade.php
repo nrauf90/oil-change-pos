@@ -34,6 +34,17 @@
         @error('spent_at') <p class="mt-1 text-sm font-bold text-red-600">{{ $message }}</p> @enderror
     </div>
 
+    <div class="sm:col-span-2">
+        <label class="label" for="receipts">Receipts <span class="font-medium normal-case text-slate-400">(optional, up to {{ \App\Http\Requests\ExpenseRequest::MAX_RECEIPTS }})</span></label>
+        <input id="receipts" name="receipts[]" type="file" multiple
+               accept="image/jpeg,image/png,image/webp,application/pdf" class="field">
+        <p class="mt-1 text-xs font-medium text-slate-500">Photo of the bill or slip, or a PDF. 5 MB each.</p>
+        @error('receipts') <p class="mt-1 text-sm font-bold text-red-600">{{ $message }}</p> @enderror
+        @foreach ($errors->get('receipts.*') as $receiptErrors)
+            <p class="mt-1 text-sm font-bold text-red-600">{{ $receiptErrors[0] }}</p>
+        @endforeach
+    </div>
+
     <div>
         <span class="label">Logged by</span>
         <p class="field bg-slate-50 text-slate-600">{{ $expense?->user?->name ?? auth()->user()->name }}</p>

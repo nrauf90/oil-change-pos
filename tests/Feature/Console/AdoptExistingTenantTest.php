@@ -37,6 +37,8 @@ class AdoptExistingTenantTest extends TestCase
 
     private const PASSWORD_RESET_MIGRATION = '2026_09_04_115841_add_email_and_password_reset_tokens';
 
+    private const EXPENSE_RECEIPTS_MIGRATION = '2026_09_04_174631_create_expense_receipts_table';
+
     private const LEGACY_TENANT_MIGRATION_CUTOFF = '2026_09_01_135125_create_item_vehicle_compatibilities_table';
 
     private const LEGACY_NON_TENANT_MIGRATIONS = [
@@ -242,8 +244,11 @@ class AdoptExistingTenantTest extends TestCase
 
         $source = DB::connection('legacy');
         $afterTables = $this->sourceTableNames();
+        // Adoption runs the pending tenant migrations, so a legacy database
+        // gains the tables newer features need. Each one is additive and
+        // starts empty — nothing the customer already had is touched.
         $this->assertEqualsCanonicalizing(
-            [...$beforeTables, 'tenant_installations', 'password_reset_tokens'],
+            [...$beforeTables, 'tenant_installations', 'password_reset_tokens', 'expense_receipts'],
             $afterTables,
         );
         $this->assertSame($beforeColumns, $source->getSchemaBuilder()->getColumnListing('items'));
@@ -266,6 +271,7 @@ class AdoptExistingTenantTest extends TestCase
             self::ROLE_DESCRIPTION_MIGRATION,
             self::DROP_FINANCIALS_PERMISSION_MIGRATION,
             self::PASSWORD_RESET_MIGRATION,
+            self::EXPENSE_RECEIPTS_MIGRATION,
         ];
         sort($expectedMigrations);
 
