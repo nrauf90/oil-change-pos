@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\AddSecurityHeaders;
 use App\Http\Middleware\EnforceReadOnlySupportAccess;
 use App\Http\Middleware\EnsureCentralHost;
 use App\Http\Middleware\EnsureFilamentActionMatchesTenant;
@@ -39,6 +40,9 @@ return Application::configure(basePath: dirname(__DIR__))
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->trustHosts();
+        // Outermost, so the baseline headers also reach the 404 a wrong host
+        // gets and the 503 an unavailable shop gets, not just rendered pages.
+        $middleware->prepend(AddSecurityHeaders::class);
         $middleware->append(InitializeTenancy::class);
         $middleware->alias([
             'permission' => PermissionMiddleware::class,

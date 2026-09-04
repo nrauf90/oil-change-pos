@@ -9,7 +9,7 @@ Supplier payments automatically appear here as `Shop Supplies`. All supplier pay
 ## Data and code map
 
 - Routes: [`routes/modules/expenses.php`](../../routes/modules/expenses.php)
-- Expenses: [`ExpenseController`](../../app/Http/Controllers/ExpenseController.php), [`ExpenseRequest`](../../app/Http/Requests/ExpenseRequest.php), [`Expense`](../../app/Models/Expense.php), [`expenses migration`](../../database/migrations/2026_08_27_000210_create_expenses_table.php), [`expense views`](../../resources/views/expenses)
+- Expenses: [`ExpenseController`](../../app/Http/Controllers/ExpenseController.php), [`ExpenseRequest`](../../app/Http/Requests/ExpenseRequest.php), [`Expense`](../../app/Models/Expense.php), [`expenses migration`](../../database/migrations/tenant/2026_08_27_000210_create_expenses_table.php), [`expense views`](../../resources/views/expenses)
 - Drawer: [`CashDrawerController`](../../app/Http/Controllers/CashDrawerController.php), [`CashDrawer`](../../app/Support/CashDrawer.php), [`cash-drawer/index.blade.php`](../../resources/views/cash-drawer/index.blade.php)
 - Category/audit: [`ExpenseCategory`](../../app/Enums/ExpenseCategory.php), [`ExpenseObserver`](../../app/Observers/ExpenseObserver.php)
 - Tests: [`ExpenseTest`](../../tests/Feature/ExpenseTest.php), [`CashDrawerTest`](../../tests/Feature/CashDrawerTest.php), [`DestructiveActionTest`](../../tests/Feature/DestructiveActionTest.php)

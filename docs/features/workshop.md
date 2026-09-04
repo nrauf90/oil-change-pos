@@ -9,7 +9,7 @@ Staff look up prior vehicle visits by phone or plate. Technicians create multi-p
 - Routes: [`routes/modules/workshop.php`](../../routes/modules/workshop.php)
 - History: [`ServiceHistoryController`](../../app/Http/Controllers/ServiceHistoryController.php), [`ServiceHistory`](../../app/Support/ServiceHistory.php), [`service-history/index.blade.php`](../../resources/views/service-history/index.blade.php)
 - Inspections: [`InspectionController`](../../app/Http/Controllers/InspectionController.php), [`InspectionRequest`](../../app/Http/Requests/InspectionRequest.php), [`Inspection`](../../app/Models/Inspection.php), [`InspectionItem`](../../app/Models/InspectionItem.php), [`inspection views`](../../resources/views/inspections)
-- Schema/enums: [`inspections migration`](../../database/migrations/2026_08_27_000310_create_inspections_table.php), [`inspection items migration`](../../database/migrations/2026_08_27_000320_create_inspection_items_table.php), [`InspectionPoint`](../../app/Enums/InspectionPoint.php), [`InspectionStatus`](../../app/Enums/InspectionStatus.php)
+- Schema/enums: [`inspections migration`](../../database/migrations/tenant/2026_08_27_000310_create_inspections_table.php), [`inspection items migration`](../../database/migrations/tenant/2026_08_27_000320_create_inspection_items_table.php), [`InspectionPoint`](../../app/Enums/InspectionPoint.php), [`InspectionStatus`](../../app/Enums/InspectionStatus.php)
 - Audit: [`InspectionObserver`](../../app/Observers/InspectionObserver.php)
 - Tests: [`ServiceHistoryTest`](../../tests/Feature/ServiceHistoryTest.php), [`InspectionTest`](../../tests/Feature/InspectionTest.php)
 

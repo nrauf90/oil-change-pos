@@ -54,7 +54,10 @@ final class SalesReport
     public function __construct(?string $period = null, ?Carbon $now = null)
     {
         $this->period = self::normalisePeriod($period);
-        $this->now = ($now ?? Carbon::now())->copy();
+        // Headline cards bound the shop's day / week / month, so the clock is
+        // read in the shop's timezone; the card() helper converts each
+        // boundary back to storage for the query.
+        $this->now = ($now ?? Carbon::now())->copy()->setTimezone(ShopTimezone::current());
     }
 
     /** Anything unrecognised quietly becomes the daily default. */
@@ -263,7 +266,10 @@ final class SalesReport
     /** @return array{label: string, range: string, revenue: string, count: int} */
     private function card(string $label, Carbon $from, Carbon $to, string $range): array
     {
-        $totals = Sale::query()->between($from, $to)->pluck('total_amount');
+        $storage = ShopTimezone::storage();
+        $totals = Sale::query()
+            ->between($from->copy()->setTimezone($storage), $to->copy()->setTimezone($storage))
+            ->pluck('total_amount');
 
         return [
             'label' => $label,

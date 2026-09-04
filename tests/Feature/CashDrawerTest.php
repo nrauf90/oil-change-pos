@@ -4,12 +4,16 @@ namespace Tests\Feature;
 
 use App\Enums\ExpenseCategory;
 use App\Enums\PaymentMethod;
+use App\Models\Central\Shop;
 use App\Models\Expense;
 use App\Models\Sale;
 use App\Models\User;
 use App\Modules\ModuleRegistry;
 use App\Support\CashDrawer;
 use App\Support\SaleTotalCalculator;
+use App\Support\ShopTimezone;
+use App\Tenancy\TenantConnectionManager;
+use App\Tenancy\TenantContext;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Tests\TestCase;
@@ -152,6 +156,28 @@ class CashDrawerTest extends TestCase
         $this->assertFalse($response->viewData('hasActivity'));
     }
 
+    /**
+     * Regression: the drawer closes on the shop's midnight, not the storage
+     * timezone's. A Chicago shop reconciling at 20:00 local is already past
+     * UTC midnight, so a UTC day boundary silently drops the whole morning.
+     */
+    public function test_the_drawer_reconciles_the_shops_own_day_not_the_storage_day(): void
+    {
+        $this->relocateShopTo('America/Chicago');
+
+        $this->saleAt(Carbon::parse('2026-03-18 09:00', 'America/Chicago'), '1200.00');
+        $this->saleAt(Carbon::parse('2026-03-18 19:30', 'America/Chicago'), '300.00');
+
+        // 20:00 in Chicago is already 01:00 on the 19th in UTC.
+        $this->travelTo(Carbon::parse('2026-03-18 20:00', 'America/Chicago'));
+
+        $this->assertSame(
+            '1500.00',
+            $this->get(route('cash-drawer.index'))->viewData('cashIn'),
+            "the shop's morning takings fell outside its own business day",
+        );
+    }
+
     public function test_a_sale_at_one_minute_to_midnight_still_counts_for_that_day(): void
     {
         $this->saleAt($this->clock()->startOfDay(), '100.00');
@@ -285,9 +311,38 @@ class CashDrawerTest extends TestCase
 
     /* ---- Helpers ------------------------------------------------------- */
 
+    /**
+     * The reconciliation clock, read in the shop's timezone.
+     *
+     * `startOfDay()` / `endOfDay()` off this instant are the shop's business
+     * day — which is what a drawer reconciles. Parsing in the storage
+     * timezone instead would assert a UTC day against a shop that does not
+     * keep one.
+     */
+    /**
+     * Move the shop to another timezone for the rest of the test.
+     *
+     * `TenantRuntimeState` snapshots the shop when the connection is
+     * activated and `connect()` early-returns on a live lease, so the
+     * connection has to be cycled for the new timezone to be seen.
+     */
+    private function relocateShopTo(string $timezone): void
+    {
+        $shop = app(TenantContext::class)->shop();
+        $shop->timezone = $timezone;
+        $shop->save();
+
+        $manager = app(TenantConnectionManager::class);
+        $manager->disconnect();
+        $manager->connect(Shop::query()->findOrFail($shop->getKey()));
+
+        // Cycling the connection drops the authenticated session with it.
+        $this->actingAs(User::factory()->admin()->create());
+    }
+
     private function clock(): Carbon
     {
-        return Carbon::parse(self::CLOCK);
+        return Carbon::parse(self::CLOCK, ShopTimezone::current());
     }
 
     private function saleAt(Carbon $when, string $total): Sale

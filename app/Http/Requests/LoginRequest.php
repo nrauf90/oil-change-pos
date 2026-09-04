@@ -13,6 +13,10 @@ use Illuminate\Validation\ValidationException;
 
 class LoginRequest extends FormRequest
 {
+    private const MAX_ATTEMPTS_PER_USERNAME = 5;
+
+    private const MAX_ATTEMPTS_PER_ADDRESS = 20;
+
     public function rules(): array
     {
         return [
@@ -38,6 +42,7 @@ class LoginRequest extends FormRequest
 
         if (! Auth::attempt($credentials, $this->boolean('remember'))) {
             RateLimiter::hit($this->throttleKey());
+            RateLimiter::hit($this->addressThrottleKey());
 
             throw ValidationException::withMessages([
                 'username' => trans('auth.failed'),
@@ -45,6 +50,7 @@ class LoginRequest extends FormRequest
         }
 
         RateLimiter::clear($this->throttleKey());
+        RateLimiter::clear($this->addressThrottleKey());
     }
 
     /**
@@ -52,13 +58,19 @@ class LoginRequest extends FormRequest
      */
     protected function ensureIsNotRateLimited(): void
     {
-        if (! RateLimiter::tooManyAttempts($this->throttleKey(), 5)) {
+        $exhaustedKey = match (true) {
+            RateLimiter::tooManyAttempts($this->throttleKey(), self::MAX_ATTEMPTS_PER_USERNAME) => $this->throttleKey(),
+            RateLimiter::tooManyAttempts($this->addressThrottleKey(), self::MAX_ATTEMPTS_PER_ADDRESS) => $this->addressThrottleKey(),
+            default => null,
+        };
+
+        if ($exhaustedKey === null) {
             return;
         }
 
         Event::dispatch(new Lockout($this));
 
-        $seconds = RateLimiter::availableIn($this->throttleKey());
+        $seconds = RateLimiter::availableIn($exhaustedKey);
 
         throw ValidationException::withMessages([
             'username' => trans('auth.throttle', [
@@ -66,6 +78,18 @@ class LoginRequest extends FormRequest
                 'minutes' => ceil($seconds / 60),
             ]),
         ]);
+    }
+
+    /**
+     * A spray across many usernames from one address never exhausts the
+     * per-username bucket, because each fresh username starts its own. This
+     * second bucket is the one that stops it.
+     */
+    protected function addressThrottleKey(): string
+    {
+        return Str::transliterate(
+            'address|'.resolve(TenantContext::class)->id().'|'.$this->ip()
+        );
     }
 
     protected function throttleKey(): string

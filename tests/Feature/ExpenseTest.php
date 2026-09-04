@@ -6,6 +6,7 @@ use App\Enums\ExpenseCategory;
 use App\Models\Expense;
 use App\Models\User;
 use App\Modules\ModuleRegistry;
+use App\Support\ShopTimezone;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Tests\TestCase;
@@ -193,10 +194,19 @@ class ExpenseTest extends TestCase
 
     public function test_the_list_filters_by_date_range_and_totals_only_the_matches(): void
     {
-        Expense::factory()->amount('100.00')->spentAt('2026-03-10 09:00')->create(['description' => 'Too early']);
-        Expense::factory()->amount('250.50')->spentAt('2026-03-15 09:00')->create(['description' => 'In range one']);
-        Expense::factory()->amount('49.50')->spentAt('2026-03-17 23:30')->create(['description' => 'In range two']);
-        Expense::factory()->amount('900.00')->spentAt('2026-03-18 09:00')->create(['description' => 'Too late']);
+        // `?from=` / `?to=` bound the shop's business day, so the fixtures are
+        // stamped in the shop's timezone: 23:30 on the 17th is late on the
+        // 17th at the counter, which is what the filter has to catch.
+        // Eloquent writes a Carbon's wall-clock as-is, so convert to the
+        // storage timezone: the column holds the instant, the filter bounds
+        // the shop's day, and the two only line up after this conversion.
+        $shopTime = fn (string $when): Carbon => Carbon::parse($when, ShopTimezone::current())
+            ->setTimezone(ShopTimezone::storage());
+
+        Expense::factory()->amount('100.00')->spentAt($shopTime('2026-03-10 09:00'))->create(['description' => 'Too early']);
+        Expense::factory()->amount('250.50')->spentAt($shopTime('2026-03-15 09:00'))->create(['description' => 'In range one']);
+        Expense::factory()->amount('49.50')->spentAt($shopTime('2026-03-17 23:30'))->create(['description' => 'In range two']);
+        Expense::factory()->amount('900.00')->spentAt($shopTime('2026-03-18 09:00'))->create(['description' => 'Too late']);
 
         $response = $this->get(route('expenses.index', ['from' => '2026-03-15', 'to' => '2026-03-17']));
 

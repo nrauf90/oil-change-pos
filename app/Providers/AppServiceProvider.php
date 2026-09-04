@@ -55,14 +55,18 @@ use App\Tenancy\TenantSqliteAttestationLock;
 use App\Tenancy\TenantSqliteWitnessConnection;
 use Illuminate\Auth\EloquentUserProvider;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Validation\UncompromisedVerifier;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Events\ConnectionEstablished;
+use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Validation\NotPwnedVerifier;
+use Illuminate\Validation\Rules\Password;
 use Livewire\Facades\GenerateSignedUploadUrlFacade;
 use Livewire\Features\SupportFileUploads\FilePreviewController;
 use Livewire\Features\SupportFileUploads\FileUploadController;
@@ -157,6 +161,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        $this->registerDefaultPasswordPolicy();
         $this->registerTenantLivewireUploadBoundary();
         $this->registerTenantLivewireSnapshotBoundary();
 
@@ -271,6 +276,33 @@ class AppServiceProvider extends ServiceProvider
                 404,
             );
         });
+    }
+
+    /**
+     * One password policy for every screen that sets one: shop staff, the
+     * first shop owner and platform administrators.
+     *
+     * The breach check is production-only on purpose. It calls out to an
+     * external range API, and a counter terminal on a slow shop connection
+     * should not have a new staff account blocked on that — nor should the
+     * test suite reach the network to create a user.
+     */
+    private function registerDefaultPasswordPolicy(): void
+    {
+        Password::defaults(fn (): Password => $this->app->isProduction()
+            ? Password::min(8)->letters()->numbers()->uncompromised()
+            : Password::min(8));
+
+        // The breach lookup fails open, but on the stock 30 second timeout a
+        // shop with a dead line would sit on a spinner for half a minute
+        // before it did. Three seconds is plenty for a range query.
+        $this->app->bind(
+            UncompromisedVerifier::class,
+            static fn (Application $application): NotPwnedVerifier => new NotPwnedVerifier(
+                $application->make(HttpFactory::class),
+                timeout: 3,
+            ),
+        );
     }
 
     private function registerTenantLivewireUploadBoundary(): void

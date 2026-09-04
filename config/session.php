@@ -167,9 +167,17 @@ return [
     | to the server if the browser has a HTTPS connection. This will keep
     | the cookie from being sent to you when it can't be done securely.
     |
+    | Support access requires SESSION_DOMAIN to be the central host, so one
+    | cookie is valid on every shop subdomain. Defaulting to true outside
+    | local and testing keeps a single plaintext request from handing that
+    | cookie — and with it every shop — to anyone listening.
+    |
     */
 
-    'secure' => env('SESSION_SECURE_COOKIE'),
+    'secure' => (bool) env(
+        'SESSION_SECURE_COOKIE',
+        ! in_array(env('APP_ENV', 'production'), ['local', 'testing'], true),
+    ),
 
     /*
     |--------------------------------------------------------------------------

@@ -36,7 +36,6 @@ enum Permission: string
 
     /* ---- Reporting ------------------------------------------------- */
     case ViewDashboard = 'reports.view_dashboard';
-    case ViewFinancials = 'reports.view_financials';
     case ViewMargins = 'reports.view_margins';
 
     /* ---- Expenses & cash flow -------------------------------------- */

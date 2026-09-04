@@ -33,6 +33,8 @@ class AdoptExistingTenantTest extends TestCase
 
     private const ROLE_DESCRIPTION_MIGRATION = '2026_09_02_121450_add_description_to_roles_table';
 
+    private const DROP_FINANCIALS_PERMISSION_MIGRATION = '2026_09_03_081902_drop_reports_view_financials_permission';
+
     private const LEGACY_TENANT_MIGRATION_CUTOFF = '2026_09_01_135125_create_item_vehicle_compatibilities_table';
 
     private const LEGACY_NON_TENANT_MIGRATIONS = [
@@ -245,10 +247,14 @@ class AdoptExistingTenantTest extends TestCase
         $this->assertSame($beforeColumns, $source->getSchemaBuilder()->getColumnListing('items'));
         $this->assertSame($beforeItem, (array) $source->table('items')->where('name', 'Preserved filter')->first());
         $this->assertSame($beforeUser, (array) $source->table('users')->where('username', 'legacy-admin')->first());
+        // Every migration that lands after the marker runs against the
+        // customer's legacy production database during adoption, so each one
+        // must be re-runnable — see the idempotency test below.
         $expectedMigrations = [
             ...$beforeMigrations,
             self::MARKER_MIGRATION,
             self::ROLE_DESCRIPTION_MIGRATION,
+            self::DROP_FINANCIALS_PERMISSION_MIGRATION,
         ];
         sort($expectedMigrations);
 

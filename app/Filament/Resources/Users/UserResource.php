@@ -15,6 +15,7 @@ use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\Response;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 
@@ -49,26 +50,42 @@ class UserResource extends Resource
 
     /* -------- Authorization: one named permission per action -------- */
 
-    public static function canViewAny(): bool
+    /**
+     * Overriding the `*AuthorizationResponse()` methods rather than the
+     * `can*()` wrappers: Filament's action authorization calls the former
+     * directly, so gating only the wrappers leaves the buttons live.
+     */
+    private static function gate(bool $granted): Response
     {
-        return auth()->user()?->can(Permission::ViewAnyUser->value) ?? false;
+        return $granted ? Response::allow() : Response::deny();
     }
 
-    public static function canCreate(): bool
+    public static function getViewAnyAuthorizationResponse(): Response
     {
-        return auth()->user()?->can(Permission::CreateUser->value) ?? false;
+        return self::gate(auth()->user()?->can(Permission::ViewAnyUser->value) ?? false);
     }
 
-    public static function canEdit(Model $record): bool
+    public static function getCreateAuthorizationResponse(): Response
     {
-        return auth()->user()?->can(Permission::UpdateUser->value) ?? false;
+        return self::gate(auth()->user()?->can(Permission::CreateUser->value) ?? false);
     }
 
-    public static function canDelete(Model $record): bool
+    public static function getEditAuthorizationResponse(Model $record): Response
     {
-        return ! $record->is(auth()->user())
+        return self::gate(auth()->user()?->can(Permission::UpdateUser->value) ?? false);
+    }
+
+    public static function getDeleteAuthorizationResponse(Model $record): Response
+    {
+        return self::gate(! $record->is(auth()->user())
             && ! static::isLastAdmin($record)
-            && (auth()->user()?->can(Permission::DeleteUser->value) ?? false);
+            && (auth()->user()?->can(Permission::DeleteUser->value) ?? false));
+    }
+
+    /** No bulk delete is registered; gate it so adding one cannot bypass the last-admin guard. */
+    public static function getDeleteAnyAuthorizationResponse(): Response
+    {
+        return self::gate(false);
     }
 
     /**

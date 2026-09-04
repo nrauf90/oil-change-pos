@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Actions\DeleteSale;
 use App\Actions\RecordSale;
 use App\Http\Requests\StoreSaleRequest;
 use App\Models\Sale;
@@ -48,18 +49,25 @@ class SaleController extends Controller
 
     public function pdf(Sale $sale): Response
     {
+        // The invoice template pulls nothing off disk, so dompdf gets a chroot
+        // narrower than the default project root — which would otherwise put
+        // .env and the whole source tree inside its reach.
         $pdf = Pdf::loadView('sales.pdf', [
             'sale' => $sale->load(['lines', 'cashier:id,name']),
-        ])->setPaper('a4');
+        ])->setPaper('a4')->setOption('chroot', public_path());
 
         return $pdf->download("{$sale->invoice_number}.pdf");
     }
 
-    public function destroy(Sale $sale): RedirectResponse
+    public function destroy(Sale $sale, DeleteSale $deleteSale): RedirectResponse
     {
         $invoice = $sale->invoice_number;
-        $sale->delete();
 
-        return to_route('sales.index')->with('status', "Invoice {$invoice} deleted.");
+        // Deleting a bill means it never happened, so what it drew goes back
+        // on the shelf — otherwise stock drifts down with every mis-keyed
+        // invoice and the low-stock alert fires against goods still present.
+        $deleteSale->handle($sale);
+
+        return to_route('sales.index')->with('status', "Invoice {$invoice} deleted, and its stock returned.");
     }
 }

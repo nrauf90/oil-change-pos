@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Models\Item;
 use App\Models\SaleItem;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -90,7 +91,7 @@ class MarginReport
     private function build(): Collection
     {
         $lines = SaleItem::query()
-            ->with('item:id,unit_cost')
+            ->with('item:id,unit_cost,unit_of_measure,measure_per_unit')
             ->when(
                 $this->from && $this->to,
                 fn ($query) => $query->whereHas(
@@ -123,7 +124,7 @@ class MarginReport
 
                 $costTotal = $unitCost === null
                     ? null
-                    : $this->multiply((string) $unitCost, $quantity);
+                    : $this->costOf($first->item, (string) $unitCost, $quantity, $group);
 
                 $margin = $costTotal === null
                     ? null
@@ -145,6 +146,43 @@ class MarginReport
     }
 
     /** Repeated addition, so the multiply stays inside integer-cent maths. */
+    /**
+     * What the shop paid for what actually left the shelf.
+     *
+     * A measured item's `unit_cost` buys `measure_per_unit` of measure — a
+     * 4-litre bottle at 6,800 costs 1,700 per litre. Costing such a line by
+     * its piece `quantity` charges a whole bottle against a one-litre
+     * top-up, which reports a profitable sale as a heavy loss and files it
+     * under "sold below cost".
+     *
+     * @param  Collection<int, SaleItem>  $group
+     */
+    private function costOf(?Item $item, string $unitCost, int $quantity, Collection $group): string
+    {
+        $perUnitMeasure = (float) ($item?->measure_per_unit ?? 0);
+
+        if ($item === null || ! $item->isMeasured() || $perUnitMeasure <= 0.0) {
+            return $this->multiply($unitCost, $quantity);
+        }
+
+        $dispensed = (float) $group->sum(fn (SaleItem $line): float => (float) ($line->dispensed_quantity ?? 0));
+
+        return $this->scale($unitCost, $dispensed / $perUnitMeasure);
+    }
+
+    /**
+     * Scale a reference cost by a fractional factor, in whole paisa.
+     *
+     * Unlike a charged price this is a costing estimate, so rounding to the
+     * paisa here cannot move what a customer was billed.
+     */
+    private function scale(string $amount, float $factor): string
+    {
+        $paisa = (int) round((float) SaleTotalCalculator::amount($amount) * 100);
+
+        return SaleTotalCalculator::amount(number_format((int) round($paisa * $factor) / 100, 2, '.', ''));
+    }
+
     private function multiply(string $amount, int $times): string
     {
         return SaleTotalCalculator::lineSubtotal(array_fill(0, max($times, 0), $amount));

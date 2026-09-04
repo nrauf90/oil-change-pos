@@ -52,7 +52,6 @@ enum Role: string
                 Permission::ViewStock,
                 Permission::ManageStock,
                 Permission::ViewDashboard,
-                Permission::ViewFinancials,
                 Permission::ViewAnyExpense,
                 Permission::CreateExpense,
                 Permission::UpdateExpense,

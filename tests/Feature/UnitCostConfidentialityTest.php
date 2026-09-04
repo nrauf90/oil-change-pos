@@ -137,6 +137,63 @@ class UnitCostConfidentialityTest extends TestCase
         $this->assertSame('6800.00', $item->refresh()->unit_cost, 'a manager rewrote the owner costing');
     }
 
+    /**
+     * Regression: every other test here sends `unit_cost` in the body.
+     * `FormRequest::validationData()` returns `all()`, which merges the query
+     * string over the body bag, so a strip that only clears the request and
+     * JSON bags leaves `?unit_cost=` intact all the way into `validated()`.
+     */
+    public function test_a_manager_cannot_rewrite_the_unit_cost_through_the_query_string(): void
+    {
+        $item = $this->item();
+
+        $this->actingAs(User::factory()->manager()->create())
+            ->put(route('items.update', $item).'?unit_cost=1', [
+                'name' => 'ZIC X7 10W-40',
+                'type' => 'product',
+                'stock_level' => 10,
+            ]);
+
+        $this->assertSame('6800.00', $item->refresh()->unit_cost, 'a manager rewrote the owner costing via the query string');
+    }
+
+    public function test_a_manager_cannot_set_a_unit_cost_through_the_query_string_when_creating(): void
+    {
+        $this->actingAs(User::factory()->manager()->create())
+            ->post(route('items.store').'?unit_cost=999', [
+                'name' => 'Sneaky Query Filter',
+                'type' => 'product',
+            ]);
+
+        $this->assertNull(Item::where('name', 'Sneaky Query Filter')->sole()->unit_cost);
+    }
+
+    public function test_a_manager_cannot_set_a_unit_cost_through_quick_add_query_string(): void
+    {
+        $this->actingAs(User::factory()->manager()->create())
+            ->postJson(route('quick-items.store').'?unit_cost=999', [
+                'name' => 'Sneaky Quick Query Filter',
+                'type' => 'product',
+            ]);
+
+        $this->assertNull(Item::where('name', 'Sneaky Quick Query Filter')->sole()->unit_cost);
+    }
+
+    public function test_an_admin_can_still_set_the_unit_cost(): void
+    {
+        $item = $this->item();
+
+        $this->actingAs(User::factory()->admin()->create())
+            ->put(route('items.update', $item), [
+                'name' => 'ZIC X7 10W-40',
+                'type' => 'product',
+                'unit_cost' => '7200',
+                'stock_level' => 10,
+            ]);
+
+        $this->assertSame('7200.00', $item->refresh()->unit_cost);
+    }
+
     public function test_a_manager_may_still_edit_everything_else_about_an_item(): void
     {
         $item = $this->item();

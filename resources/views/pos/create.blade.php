@@ -468,11 +468,16 @@
                              this figure never reaches the customer's invoice. --}}
                         <div class="mt-2 flex items-center gap-2 rounded-lg bg-slate-50 px-2.5 py-2"
                              x-show="isMeasured(line)" x-cloak>
-                            <span class="shrink-0 text-[11px] font-bold tracking-wide text-slate-500 uppercase">Dispensed</span>
-                            <span class="shrink-0 text-[11px] font-medium text-slate-400">stock only</span>
+                            <span class="shrink-0 text-[11px] font-bold tracking-wide text-slate-500 uppercase">
+                                Dispensed<span x-show="needsDispensed(line)" class="text-rose-600">*</span>
+                            </span>
+                            <span class="shrink-0 text-[11px] font-medium text-slate-400"
+                                  x-text="needsDispensed(line) ? 'required for stock' : 'stock only'"></span>
                             <input type="text" inputmode="decimal" class="pos-input ml-auto w-20 shrink-0 text-right"
+                                   :class="needsDispensed(line) && ! line.dispensed ? 'ring-2 ring-rose-400' : ''"
                                    x-model="line.dispensed"
                                    :name="`lines[${index}][dispensed_quantity]`"
+                                   :required="needsDispensed(line)"
                                    placeholder="0.0"
                                    :aria-label="'Line ' + (index + 1) + ' amount used'">
                             <span class="w-5 shrink-0 text-xs font-bold text-slate-500" x-text="unitAbbrFor(line)"></span>
@@ -1209,6 +1214,19 @@
             /** Oil and gas are poured, so the counter records how much came out. */
             isMeasured(line) {
                 return this.optionFor(line)?.is_measured === true;
+            },
+
+            /**
+             * A stock-tracked measured line must say what left the drum, or the
+             * shelf drifts upward one forgotten top-up at a time. Untracked
+             * measured items have no shelf to drift, so they stay optional.
+             */
+            needsDispensed(line) {
+                const option = this.optionFor(line);
+
+                return option?.is_measured === true
+                    && option.stock_level !== null
+                    && option.stock_level !== undefined;
             },
 
             unitAbbrFor(line) {

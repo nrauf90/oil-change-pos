@@ -89,3 +89,12 @@
 # Swift
 # **/Tests/**/*.swift
 # **/Specs/**/*.swift
+
+# Tool scratch/trash from previous runs — never analyze these
+.trash-*/
+intermediate/
+tmp/
+config.json
+fingerprints.json
+knowledge-graph.json
+meta.json

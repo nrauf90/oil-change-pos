@@ -16,6 +16,8 @@ class AdminDashboardMetrics
      */
     public function comparison(DashboardPeriod $period, ?string $timezone = null): array
     {
+        $timezone ??= ShopTimezone::current();
+
         return [
             'current' => $this->metricsFor(...$this->rangeInStorageTimezone(
                 $period->currentRange($timezone),
@@ -32,10 +34,11 @@ class AdminDashboardMetrics
      *   previous: array{sales: array<int, float>, expenses: array<int, float>, margin: array<int, float>}
      * }
      */
-    public function trend(DashboardPeriod $period): array
+    public function trend(DashboardPeriod $period, ?string $timezone = null): array
     {
-        [$currentFrom, $currentTo] = $period->currentRange();
-        [$previousFrom, $previousTo] = $period->previousRange();
+        $timezone ??= ShopTimezone::current();
+        [$currentFrom, $currentTo] = $this->rangeInStorageTimezone($period->currentRange($timezone));
+        [$previousFrom, $previousTo] = $this->rangeInStorageTimezone($period->previousRange($timezone));
         $bucketCount = count($period->chartLabels());
         $sales = Sale::between($previousFrom, $currentTo)->get(['id', 'created_at', 'total_amount']);
         $expenses = Expense::between($previousFrom, $currentTo)->get(['id', 'spent_at', 'amount']);
@@ -60,8 +63,10 @@ class AdminDashboardMetrics
      */
     public function today(): array
     {
-        $from = now()->startOfDay();
-        $to = now()->endOfDay();
+        // The shop's day, not the storage timezone's — see ShopTimezone.
+        [$from, $to] = $this->rangeInStorageTimezone(
+            DashboardPeriod::Today->currentRange(ShopTimezone::current()),
+        );
         $sales = Sale::between($from, $to)->get(['id', 'total_amount']);
         $expenses = Expense::between($from, $to)->get(['id', 'amount']);
         $margin = new MarginReport($from, $to);

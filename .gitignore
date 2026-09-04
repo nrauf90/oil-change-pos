@@ -1,7 +1,7 @@
 *.log
 .DS_Store
 .env
-.env.backup
+.env.backup*
 .env.production
 .phpactor.json
 .phpunit.result.cache
@@ -28,3 +28,6 @@ _ide_helper.php
 Homestead.json
 Homestead.yaml
 Thumbs.db
+/.ua/intermediate/
+/.ua/tmp/
+/.ua/.trash-*/

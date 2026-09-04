@@ -105,17 +105,14 @@ class QuickItemRequest extends FormRequest
                 ? []
                 : $this->preparedCompatibilities();
         } else {
-            $this->request->remove('is_universal');
-            $this->json?->remove('is_universal');
-            $this->request->remove('compatibilities');
-            $this->json?->remove('compatibilities');
+            $this->forget('is_universal');
+            $this->forget('compatibilities');
         }
 
         if ($this->user()?->can(Permission::SetItemUnitCost->value) ?? false) {
             $normalised['unit_cost'] = $this->blankToNull($this->unit_cost);
         } else {
-            $this->request->remove('unit_cost');
-            $this->json?->remove('unit_cost');
+            $this->forget('unit_cost');
         }
 
         $this->merge($normalised);
@@ -235,6 +232,20 @@ class QuickItemRequest extends FormRequest
         $trimmed = trim($value);
 
         return $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
+     * Drop a field from every input bag.
+     *
+     * `FormRequest::validationData()` returns `all()`, which merges the query
+     * string over the body bag, so removing a key from the request and JSON
+     * bags alone still leaves `?field=value` reachable through `validated()`.
+     */
+    private function forget(string $key): void
+    {
+        $this->request->remove($key);
+        $this->json?->remove($key);
+        $this->query->remove($key);
     }
 
     private function blankToNull(mixed $value): mixed

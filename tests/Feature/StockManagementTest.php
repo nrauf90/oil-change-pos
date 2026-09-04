@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Enums\ItemType;
+use App\Enums\UnitOfMeasure;
 use App\Models\Item;
+use App\Models\Sale;
 use App\Models\User;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -353,5 +356,109 @@ class StockManagementTest extends TestCase
         ]))->assertRedirect();
 
         $this->assertSame('3.000', $item->refresh()->stock_level);
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* Deleting a bill returns what it took */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Deleting an invoice means it never happened, so the units it drew go
+     * back. Without this the shelf drifts downward with every mis-keyed bill
+     * and the low-stock alert fires against goods still physically present.
+     */
+    public function test_deleting_a_sale_returns_piece_stock_to_the_shelf(): void
+    {
+        $filter = Item::factory()->create([
+            'name' => 'Cabin Filter',
+            'type' => ItemType::Product,
+            'stock_level' => 10,
+        ]);
+
+        $this->actingAs(User::factory()->admin()->create());
+
+        $this->post(route('sales.store'), [
+            'customer_name' => 'Ali Raza',
+            'labor_charge' => '',
+            'misc_charge' => '',
+            'lines' => [[
+                'item_id' => $filter->id,
+                'item_name' => $filter->name,
+                'type' => 'product',
+                'quantity' => 3,
+                'manually_charged_price' => '2400',
+            ]],
+        ])->assertSessionHasNoErrors();
+
+        $this->assertSame('7.000', $filter->refresh()->stock_level);
+
+        $this->delete(route('sales.destroy', Sale::sole()))->assertRedirect();
+
+        $this->assertSame('10.000', $filter->refresh()->stock_level, 'the deleted bill did not return its stock');
+    }
+
+    public function test_deleting_a_sale_returns_only_what_was_dispensed_for_a_measured_line(): void
+    {
+        $oil = Item::factory()->create([
+            'name' => 'ZIC X7 10W-40',
+            'type' => ItemType::Product,
+            'unit_of_measure' => UnitOfMeasure::Litre,
+            'units_per_pack' => 4,
+            'measure_per_unit' => 4,
+            'stock_level' => 20,
+        ]);
+
+        $this->actingAs(User::factory()->admin()->create());
+
+        $this->post(route('sales.store'), [
+            'customer_name' => 'Ali Raza',
+            'labor_charge' => '',
+            'misc_charge' => '',
+            'lines' => [[
+                'item_id' => $oil->id,
+                'item_name' => $oil->name,
+                'type' => 'product',
+                'quantity' => 1,
+                'dispensed_quantity' => '3.5',
+                'manually_charged_price' => '2600',
+            ]],
+        ])->assertSessionHasNoErrors();
+
+        $this->assertSame('16.500', $oil->refresh()->stock_level);
+
+        $this->delete(route('sales.destroy', Sale::sole()))->assertRedirect();
+
+        $this->assertSame('20.000', $oil->refresh()->stock_level);
+    }
+
+    /** A repair never drew stock, so deleting its bill must not invent any. */
+    public function test_deleting_a_sale_with_a_repair_line_invents_no_stock(): void
+    {
+        $repair = Item::factory()->create([
+            'name' => 'Oil change labour',
+            'type' => ItemType::Repair,
+            'stock_level' => 5,
+        ]);
+
+        $this->actingAs(User::factory()->admin()->create());
+
+        $this->post(route('sales.store'), [
+            'customer_name' => 'Ali Raza',
+            'labor_charge' => '',
+            'misc_charge' => '',
+            'lines' => [[
+                'item_id' => $repair->id,
+                'item_name' => $repair->name,
+                'type' => 'repair',
+                'quantity' => 1,
+                'manually_charged_price' => '800',
+            ]],
+        ])->assertSessionHasNoErrors();
+
+        $this->assertSame('5.000', $repair->refresh()->stock_level);
+
+        $this->delete(route('sales.destroy', Sale::sole()))->assertRedirect();
+
+        $this->assertSame('5.000', $repair->refresh()->stock_level);
     }
 }

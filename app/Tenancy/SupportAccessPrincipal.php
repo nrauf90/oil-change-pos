@@ -26,7 +26,6 @@ final readonly class SupportAccessPrincipal implements Authenticatable, Authoriz
         'items.view_unit_cost',
         'items.view_stock',
         'reports.view_dashboard',
-        'reports.view_financials',
         'reports.view_margins',
         'expenses.view_any',
         'expenses.view_cash_drawer',
@@ -86,7 +85,15 @@ final readonly class SupportAccessPrincipal implements Authenticatable, Authoriz
 
     public function can($abilities, $arguments = []): bool
     {
-        foreach ($this->abilities($abilities) as $ability) {
+        $abilities = $this->abilities($abilities);
+
+        // An empty list would otherwise fall through the loop and grant, which
+        // is the wrong default for a principal that exists to withhold.
+        if ($abilities === []) {
+            return false;
+        }
+
+        foreach ($abilities as $ability) {
             if (! in_array($ability, self::READ_PERMISSIONS, true)) {
                 return false;
             }

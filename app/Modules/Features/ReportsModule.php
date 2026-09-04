@@ -36,7 +36,6 @@ class ReportsModule extends Module
     {
         return [
             Permission::ViewDashboard,
-            Permission::ViewFinancials,
             Permission::ViewMargins,
         ];
     }

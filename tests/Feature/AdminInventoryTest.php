@@ -185,6 +185,45 @@ class AdminInventoryTest extends TestCase
         $this->assertFalse(ItemResource::canDelete($item));
     }
 
+    /**
+     * Regression: `canDelete()` is only a wrapper over
+     * `getDeleteAuthorizationResponse()`, and `DeleteAction` resolves the
+     * response method directly. Asserting on `canDelete()` alone therefore
+     * passes while the button still deletes, so these mount the component.
+     */
+    public function test_a_manager_cannot_delete_an_item_from_the_inventory_table(): void
+    {
+        $item = Item::factory()->create();
+
+        Livewire::actingAs(User::factory()->manager()->create())
+            ->test(ListItems::class)
+            ->assertTableActionHidden('delete', $item);
+
+        $this->assertDatabaseHas('items', ['id' => $item->id], 'tenant');
+    }
+
+    public function test_a_manager_cannot_delete_an_item_from_the_edit_page_header(): void
+    {
+        $item = Item::factory()->create();
+
+        Livewire::actingAs(User::factory()->manager()->create())
+            ->test(EditItem::class, ['record' => $item->getRouteKey()])
+            ->assertActionHidden('delete');
+
+        $this->assertDatabaseHas('items', ['id' => $item->id], 'tenant');
+    }
+
+    public function test_an_admin_can_still_delete_an_item_from_the_inventory_table(): void
+    {
+        $item = Item::factory()->create();
+
+        Livewire::actingAs(User::factory()->admin()->create())
+            ->test(ListItems::class)
+            ->callTableAction('delete', $item);
+
+        $this->assertDatabaseMissing('items', ['id' => $item->id], 'tenant');
+    }
+
     public function test_a_technician_cannot_touch_inventory_at_all(): void
     {
         $item = Item::factory()->create();

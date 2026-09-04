@@ -4,6 +4,7 @@ namespace App\Filament\Widgets;
 
 use App\Enums\DashboardPeriod;
 use App\Enums\Permission;
+use App\Modules\ModuleRegistry;
 use App\Support\AdminDashboardMetrics;
 use App\Support\SaleTotalCalculator;
 use Filament\Widgets\Concerns\InteractsWithPageFilters;
@@ -21,9 +22,17 @@ class TodayFinancialStats extends StatsOverviewWidget
         return $this->period()->label().' overview';
     }
 
+    /**
+     * `reports.view_margins` is contributed by ReportsModule, which is not
+     * core, so the permission survives the module being switched off. Without
+     * the registry check this widget keeps rendering the very figures the
+     * entitlement sells after an operator disables Reporting for the shop —
+     * mirrors MarginReportPage::canAccess().
+     */
     public static function canView(): bool
     {
-        return auth()->user()?->can(Permission::ViewMargins->value) === true;
+        return app(ModuleRegistry::class)->enabled('reports')
+            && (auth()->user()?->can(Permission::ViewMargins->value) === true);
     }
 
     protected function getStats(): array

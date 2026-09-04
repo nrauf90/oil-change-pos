@@ -8,6 +8,7 @@ use App\Models\Sale;
 use App\Models\SaleItem;
 use App\Models\User;
 use App\Support\SaleTotalCalculator;
+use App\Support\ShopTimezone;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Tests\TestCase;
@@ -318,6 +319,8 @@ class DashboardTest extends TestCase
 
     private function clock(): Carbon
     {
-        return Carbon::parse(self::CLOCK);
+        // Read in the shop's timezone: the headline cards bound the shop's
+        // day / week / month, so startOfWeek() here must mean the shop's week.
+        return Carbon::parse(self::CLOCK, ShopTimezone::current());
     }
 }

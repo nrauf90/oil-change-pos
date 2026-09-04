@@ -15,6 +15,7 @@ use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\Response;
 use Illuminate\Database\Eloquent\Model;
 
 class ItemResource extends Resource
@@ -59,25 +60,50 @@ class ItemResource extends Resource
         return app(ModuleRegistry::class)->enabled('inventory');
     }
 
-    public static function canViewAny(): bool
+    /**
+     * Filament resolves each action's authorization through the
+     * `*AuthorizationResponse()` methods; `canViewAny()`, `canCreate()`,
+     * `canEdit()` and `canDelete()` are only wrappers over them. Gating the
+     * response methods covers the table row buttons and page headers as well
+     * as the navigation — overriding the wrappers alone leaves the buttons
+     * live, because `Resources\Pages\Page::getDefaultActionAuthorizationResponse()`
+     * never calls them.
+     */
+    private static function gate(bool $granted): Response
     {
-        return self::moduleEnabled()
-            && (auth()->user()?->can(Permission::ViewAnyItem->value) ?? false);
+        return $granted ? Response::allow() : Response::deny();
     }
 
-    public static function canCreate(): bool
+    public static function getViewAnyAuthorizationResponse(): Response
     {
-        return self::moduleEnabled()
-            && (auth()->user()?->can(Permission::CreateItem->value) ?? false);
+        return self::gate(self::moduleEnabled()
+            && (auth()->user()?->can(Permission::ViewAnyItem->value) ?? false));
     }
 
-    public static function canEdit(Model $record): bool
+    public static function getCreateAuthorizationResponse(): Response
     {
-        return self::moduleEnabled()
-            && (auth()->user()?->can(Permission::UpdateItem->value) ?? false);
+        return self::gate(self::moduleEnabled()
+            && (auth()->user()?->can(Permission::CreateItem->value) ?? false));
     }
 
-    public static function canDelete(Model $record): bool
+    public static function getEditAuthorizationResponse(Model $record): Response
+    {
+        return self::gate(self::moduleEnabled()
+            && (auth()->user()?->can(Permission::UpdateItem->value) ?? false));
+    }
+
+    public static function getDeleteAuthorizationResponse(Model $record): Response
+    {
+        return self::gate(self::deleteGranted());
+    }
+
+    /** Bulk delete is not registered today; gate it so adding one cannot reopen this. */
+    public static function getDeleteAnyAuthorizationResponse(): Response
+    {
+        return self::gate(self::deleteGranted());
+    }
+
+    private static function deleteGranted(): bool
     {
         return self::moduleEnabled()
             && (auth()->user()?->can(Permission::DeleteItem->value) ?? false);

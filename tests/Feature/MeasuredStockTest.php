@@ -241,9 +241,39 @@ class MeasuredStockTest extends TestCase
         $this->assertSame('19.000', $oil->refresh()->stock_level);
     }
 
-    public function test_a_measured_line_with_no_dispensed_amount_moves_no_stock(): void
+    /**
+     * A stock-tracked measured line must state what left the drum.
+     *
+     * This previously drew nothing at all when left blank, so the shelf drifted
+     * upward one forgotten top-up at a time and the low-stock alert never
+     * fired. The checkout now refuses the line instead of silently accepting an
+     * untracked draw.
+     */
+    public function test_a_measured_line_without_a_dispensed_amount_is_rejected(): void
     {
         $oil = $this->oil(['stock_level' => 20]);
+
+        $this->post(route('sales.store'), [
+            'customer_name' => 'Ali Raza',
+            'labor_charge' => '',
+            'misc_charge' => '',
+            'lines' => [[
+                'item_id' => $oil->id,
+                'item_name' => $oil->name,
+                'type' => 'product',
+                'quantity' => 1,
+                'manually_charged_price' => '900',
+            ]],
+        ])->assertSessionHasErrors('lines.0.dispensed_quantity');
+
+        $this->assertSame('20.000', $oil->refresh()->stock_level);
+        $this->assertSame(0, Sale::query()->count(), 'the bill was saved despite the untracked draw');
+    }
+
+    /** An untracked measured item has no shelf to drift, so it stays optional. */
+    public function test_a_measured_line_without_stock_tracking_still_needs_no_dispensed_amount(): void
+    {
+        $oil = $this->oil(['stock_level' => null]);
 
         $this->checkout([
             'item_id' => $oil->id,
@@ -253,7 +283,7 @@ class MeasuredStockTest extends TestCase
             'manually_charged_price' => '900',
         ]);
 
-        $this->assertSame('20.000', $oil->refresh()->stock_level);
+        $this->assertNull($oil->refresh()->stock_level);
     }
 
     public function test_the_dispensed_amount_is_stored_against_the_sale_line(): void

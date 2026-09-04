@@ -18,7 +18,15 @@ return [
 
     'default' => env('DB_CONNECTION', 'central'),
 
-    'tenant_sqlite_root' => env('TENANT_SQLITE_ROOT', database_path()),
+    /*
+     * Containment root for tenant SQLite files. Deliberately narrower than
+     * database_path(): the central control-plane database lives directly in
+     * database/, and widening this to the whole directory puts it inside the
+     * root that tenant targets are validated against. Adopting a legacy
+     * database that lives elsewhere means setting TENANT_SQLITE_ROOT for that
+     * run, which keeps the widening explicit and temporary.
+     */
+    'tenant_sqlite_root' => env('TENANT_SQLITE_ROOT', database_path('tenants')),
 
     'tenant_sqlite_provisioning_root' => env(
         'TENANT_SQLITE_PROVISIONING_ROOT',

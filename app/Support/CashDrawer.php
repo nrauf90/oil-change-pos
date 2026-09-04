@@ -34,14 +34,29 @@ final class CashDrawer
     /** @var EloquentCollection<int, Expense>|null */
     private ?EloquentCollection $expenses = null;
 
-    /** Defaults to today — the shift the counter is standing in. */
+    /**
+     * Defaults to today — the shift the counter is standing in.
+     *
+     * "Today" is the shop's day, not the storage timezone's. A shop in
+     * America/Chicago reconciling at 20:00 local is already past UTC midnight,
+     * so measuring the boundary in UTC would drop that whole morning's takings
+     * from the drawer. Boundaries are taken in the shop timezone and then
+     * converted to storage for the query.
+     */
     public function __construct(?Carbon $from = null, ?Carbon $to = null)
     {
-        $start = ($from ?? $to ?? Carbon::now())->copy()->startOfDay();
-        $end = ($to ?? $from ?? Carbon::now())->copy()->endOfDay();
+        $timezone = ShopTimezone::current();
+
+        $start = ($from ?? $to ?? Carbon::now($timezone))->copy()->setTimezone($timezone)->startOfDay();
+        $end = ($to ?? $from ?? Carbon::now($timezone))->copy()->setTimezone($timezone)->endOfDay();
 
         // A range typed back-to-front is a slip, not an empty drawer.
-        [$this->from, $this->to] = $end->lessThan($start) ? [$end->copy()->startOfDay(), $start->copy()->endOfDay()] : [$start, $end];
+        [$start, $end] = $end->lessThan($start)
+            ? [$end->copy()->startOfDay(), $start->copy()->endOfDay()]
+            : [$start, $end];
+
+        $storage = ShopTimezone::storage();
+        [$this->from, $this->to] = [$start->setTimezone($storage), $end->setTimezone($storage)];
     }
 
     /**
@@ -64,9 +79,11 @@ final class CashDrawer
      */
     public static function readFilters(Request $request): array
     {
+        $storage = ShopTimezone::storage();
+
         return [
-            'from' => self::parseDate($request->query('from'))?->startOfDay(),
-            'to' => self::parseDate($request->query('to'))?->endOfDay(),
+            'from' => self::parseDate($request->query('from'))?->startOfDay()->setTimezone($storage),
+            'to' => self::parseDate($request->query('to'))?->endOfDay()->setTimezone($storage),
             'category' => self::parseCategory($request->query('category')),
         ];
     }
@@ -89,7 +106,9 @@ final class CashDrawer
         }
 
         try {
-            return Carbon::parse(trim($value));
+            // A bare `2026-03-18` from the filter bar means that date at the
+            // shop, not that date in the storage timezone.
+            return Carbon::parse(trim($value), ShopTimezone::current());
         } catch (\Throwable) {
             return null;
         }

@@ -100,11 +100,30 @@ class AuthorizationTest extends TestCase
         foreach ([
             'pos.use', 'sales.create', 'sales.view_any', 'sales.view', 'pricing.view',
             'expenses.view_any', 'expenses.view_cash_drawer',
-            'reports.view_dashboard', 'reports.view_financials',
+            'reports.view_dashboard',
             'items.view_any', 'users.view_any',
         ] as $denied) {
             $this->assertFalse($technician->can($denied), "technician must NOT hold {$denied}");
         }
+    }
+
+    /**
+     * `reports.view_financials` was granted to Manager, seeded by three
+     * migrations and offered as a tickbox, while being read by no code — so
+     * unticking it revoked nothing. It was removed rather than given a new
+     * meaning; this pins it out of both the enum and every shop database.
+     */
+    public function test_the_unread_financials_permission_no_longer_exists(): void
+    {
+        $this->assertNull(
+            Permission::tryFrom('reports.view_financials'),
+            'the permission is back in the enum',
+        );
+
+        $this->assertDatabaseMissing('permissions', [
+            'name' => 'reports.view_financials',
+            'guard_name' => 'web',
+        ], 'tenant');
     }
 
     public function test_a_user_holds_exactly_one_role(): void

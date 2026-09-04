@@ -203,6 +203,12 @@ final readonly class SupportAccessManager
             return null;
         }
 
+        if ($this->hasOutlivedItsGrant($audit)) {
+            $this->invalidateLocalState($request, $audit);
+
+            return null;
+        }
+
         $shop = Shop::query()->whereKey($state['shop_id'])->first();
 
         if (! $shop instanceof Shop) {
@@ -222,6 +228,26 @@ final readonly class SupportAccessManager
         $this->context->activate($audit, $shop, $platformUser);
 
         return $this->context;
+    }
+
+    /**
+     * Has this grant run past its ceiling?
+     *
+     * An operator who closes the tab never exits, so nothing else would ever
+     * end the audit: the sliding session keeps read access alive and the row
+     * reads "Active" indefinitely, hiding a live session among stale ones.
+     */
+    private function hasOutlivedItsGrant(ShopAccessSession $audit): bool
+    {
+        $maxLifetime = (int) config('auth.support_access.max_lifetime_minutes');
+
+        if ($maxLifetime <= 0) {
+            return false;
+        }
+
+        $startedAt = $audit->started_at;
+
+        return $startedAt !== null && $startedAt->copy()->addMinutes($maxLifetime)->isPast();
     }
 
     /** @return array{PlatformUser, Shop} */

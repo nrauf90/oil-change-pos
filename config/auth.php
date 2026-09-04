@@ -16,6 +16,23 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Support Access
+    |--------------------------------------------------------------------------
+    |
+    | Ceiling on a single audited support session into a tenant shop. An
+    | operator who reads a shop and then closes the tab never exits, so
+    | without a ceiling the grant lives as long as the sliding session and the
+    | audit row reads "Active" forever — which is exactly the signal a second
+    | super-admin would use to spot a session that should be revoked.
+    |
+    */
+
+    'support_access' => [
+        'max_lifetime_minutes' => (int) env('SUPPORT_ACCESS_MAX_LIFETIME_MINUTES', 120),
+    ],
+
     'defaults' => [
         'guard' => env('AUTH_GUARD', 'web'),
         'passwords' => env('AUTH_PASSWORD_BROKER', 'users'),

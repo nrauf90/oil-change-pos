@@ -10,6 +10,7 @@ use App\Models\Item;
 use App\Models\Sale;
 use App\Models\SaleItem;
 use App\Models\User;
+use App\Modules\ModuleRegistry;
 use App\Support\AdminDashboardMetrics;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Livewire\Livewire;
@@ -136,5 +137,23 @@ class AdminDashboardWidgetTest extends TestCase
         $this->actingAs($manager);
         $this->assertFalse(TodayFinancialStats::canView());
         $this->assertFalse(MonthlyFinancialChart::canView());
+    }
+
+    /**
+     * Regression: the margin permission is contributed by the non-core
+     * ReportsModule and survives the module being switched off, so a
+     * permission-only gate keeps rendering the figures the entitlement sells.
+     */
+    public function test_disabling_the_reports_module_hides_the_financial_widgets(): void
+    {
+        $this->actingAs(User::factory()->admin()->create());
+
+        $this->assertTrue(TodayFinancialStats::canView());
+        $this->assertTrue(MonthlyFinancialChart::canView());
+
+        app(ModuleRegistry::class)->setEnabled('reports', false);
+
+        $this->assertFalse(TodayFinancialStats::canView(), 'the stats widget survived the reports module being disabled');
+        $this->assertFalse(MonthlyFinancialChart::canView(), 'the margin chart survived the reports module being disabled');
     }
 }

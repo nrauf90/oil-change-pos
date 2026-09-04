@@ -112,8 +112,7 @@ class ItemRequest extends FormRequest
         if ($this->user()?->can(Permission::SetItemUnitCost->value) ?? false) {
             $normalised['unit_cost'] = $this->blankToNull($this->unit_cost);
         } else {
-            $this->request->remove('unit_cost');
-            $this->json?->remove('unit_cost');
+            $this->forget('unit_cost');
         }
 
         $this->merge($normalised);
@@ -124,6 +123,20 @@ class ItemRequest extends FormRequest
         $value = $this->input('unit_of_measure');
 
         return is_string($value) ? UnitOfMeasure::tryFrom($value) : null;
+    }
+
+    /**
+     * Drop a field from every input bag.
+     *
+     * `FormRequest::validationData()` returns `all()`, which merges the query
+     * string over the body bag, so removing a key from the request and JSON
+     * bags alone still leaves `?field=value` reachable through `validated()`.
+     */
+    private function forget(string $key): void
+    {
+        $this->request->remove($key);
+        $this->json?->remove($key);
+        $this->query->remove($key);
     }
 
     private function blankToNull(mixed $value): mixed

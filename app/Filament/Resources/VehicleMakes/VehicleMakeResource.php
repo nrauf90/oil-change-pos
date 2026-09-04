@@ -18,6 +18,7 @@ use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\Response;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\HtmlString;
 
@@ -61,28 +62,45 @@ class VehicleMakeResource extends Resource
         return app(ModuleRegistry::class)->enabled('inventory');
     }
 
-    public static function canViewAny(): bool
+    /**
+     * Overriding the `*AuthorizationResponse()` methods rather than the
+     * `can*()` wrappers: Filament's action authorization calls the former
+     * directly, so gating only the wrappers leaves the buttons live.
+     */
+    private static function gate(bool $granted): Response
+    {
+        return $granted ? Response::allow() : Response::deny();
+    }
+
+    private static function adminOnly(): bool
     {
         return self::moduleEnabled()
             && (auth()->user()?->isAdmin() ?? false);
     }
 
-    public static function canCreate(): bool
+    public static function getViewAnyAuthorizationResponse(): Response
     {
-        return self::moduleEnabled()
-            && (auth()->user()?->isAdmin() ?? false);
+        return self::gate(self::adminOnly());
     }
 
-    public static function canEdit(Model $record): bool
+    public static function getCreateAuthorizationResponse(): Response
     {
-        return self::moduleEnabled()
-            && (auth()->user()?->isAdmin() ?? false);
+        return self::gate(self::adminOnly());
     }
 
-    public static function canDelete(Model $record): bool
+    public static function getEditAuthorizationResponse(Model $record): Response
     {
-        return self::moduleEnabled()
-            && (auth()->user()?->isAdmin() ?? false);
+        return self::gate(self::adminOnly());
+    }
+
+    public static function getDeleteAuthorizationResponse(Model $record): Response
+    {
+        return self::gate(self::adminOnly());
+    }
+
+    public static function getDeleteAnyAuthorizationResponse(): Response
+    {
+        return self::gate(self::adminOnly());
     }
 
     public static function makeDeleteAction(): DeleteAction

@@ -11,6 +11,7 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Illuminate\Validation\Rules\Password;
 
 class ShopForm
 {
@@ -74,7 +75,7 @@ class ShopForm
                             ->password()
                             ->revealable()
                             ->required()
-                            ->minLength(8)
+                            ->rule(Password::defaults())
                             ->maxLength(255)
                             ->same('temporary_owner_password_confirmation'),
 

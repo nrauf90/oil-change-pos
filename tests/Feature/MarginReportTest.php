@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\UnitOfMeasure;
 use App\Filament\Pages\MarginReportPage;
 use App\Models\Item;
 use App\Models\Sale;
@@ -31,6 +32,50 @@ class MarginReportTest extends TestCase
     /* ---------------------------------------------------------------- */
     /* The maths */
     /* ---------------------------------------------------------------- */
+
+    /**
+     * Regression: a measured item's `unit_cost` buys `measure_per_unit` of
+     * measure. Costing such a line by its piece `quantity` charges a whole
+     * 4-litre bottle against a one-litre top-up, turning a 200 profit into a
+     * 4,900 loss and filing a good sale under "sold below cost".
+     */
+    public function test_a_measured_line_is_costed_on_what_was_dispensed_not_the_piece_count(): void
+    {
+        $oil = Item::factory()->create([
+            'name' => 'ZIC X7 10W-40 (4L)',
+            'unit_cost' => 6800,
+            'unit_of_measure' => UnitOfMeasure::Litre,
+            'units_per_pack' => 4,
+            'measure_per_unit' => 4,
+            'stock_level' => 48,
+        ]);
+
+        $line = $this->sell($oil, '1900');
+        $line->update(['dispensed_quantity' => '1.000']);
+
+        $row = (new MarginReport)->rows()->firstWhere('item_name', 'ZIC X7 10W-40 (4L)');
+
+        $this->assertSame('1900.00', $row['revenue']);
+        $this->assertSame('1700.00', $row['cost'], 'one litre of a four-litre unit costs a quarter of it');
+        $this->assertSame('200.00', $row['margin']);
+        $this->assertFalse($row['below_cost'], 'a profitable top-up was reported as sold below cost');
+    }
+
+    public function test_a_piece_item_is_still_costed_by_quantity(): void
+    {
+        $filter = Item::factory()->create([
+            'name' => 'Cabin Filter',
+            'unit_cost' => 500,
+            'unit_of_measure' => UnitOfMeasure::Piece,
+        ]);
+
+        $this->sell($filter, '1600', 2);
+
+        $row = (new MarginReport)->rows()->firstWhere('item_name', 'Cabin Filter');
+
+        $this->assertSame('1000.00', $row['cost']);
+        $this->assertSame('600.00', $row['margin']);
+    }
 
     public function test_margin_is_the_manually_charged_price_less_the_unit_cost(): void
     {

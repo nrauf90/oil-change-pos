@@ -136,7 +136,7 @@ class StoreSaleRequest extends FormRequest
         $items = Item::query()
             ->whereIn('id', array_unique(array_values($linked)))
             ->where('is_active', true)
-            ->get(['id', 'name', 'type'])
+            ->get(['id', 'name', 'type', 'unit_of_measure', 'stock_level'])
             ->keyBy('id');
 
         foreach ($linked as $index => $itemId) {
@@ -158,7 +158,36 @@ class StoreSaleRequest extends FormRequest
                     'so this line cannot be billed as something else.'
                 );
             }
+
+            $this->requireDispensedAmount($validator, $index, $item, $lines[$index]);
         }
+    }
+
+    /**
+     * A stock-tracked measured product must say how much left the drum.
+     *
+     * Left blank it used to draw nothing at all, so the shelf drifted upward
+     * one forgotten top-up at a time and the low-stock alert never fired. The
+     * amount is a stock record only — it has never been, and still is not, a
+     * billing figure.
+     *
+     * @param  array<string, mixed>  $line
+     */
+    private function requireDispensedAmount(Validator $validator, int|string $index, Item $item, array $line): void
+    {
+        if (! $item->isMeasured() || $item->stock_level === null) {
+            return;
+        }
+
+        if (filled($line['dispensed_quantity'] ?? null)) {
+            return;
+        }
+
+        $validator->errors()->add(
+            "lines.{$index}.dispensed_quantity",
+            "Type how much \"{$item->name}\" was dispensed ({$item->unit_of_measure->label()}), ".
+            'so stock stays accurate.'
+        );
     }
 
     /**

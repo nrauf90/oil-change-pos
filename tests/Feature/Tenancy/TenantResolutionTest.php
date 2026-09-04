@@ -4,6 +4,7 @@ namespace Tests\Feature\Tenancy;
 
 use App\Enums\ShopStatus;
 use App\Http\Middleware\EnforceReadOnlySupportAccess;
+use App\Http\Middleware\EnsureCentralHost;
 use App\Http\Middleware\EnsureFilamentActionMatchesTenant;
 use App\Http\Middleware\EnsureLivewireUploadMatchesTenant;
 use App\Http\Middleware\EnsureModuleIsEnabled;
@@ -22,6 +23,7 @@ use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
 use Filament\Http\Middleware\AuthenticateSession as FilamentAuthenticateSession;
 use Filament\Http\Middleware\SetUpPanel;
 use Illuminate\Auth\Middleware\Authenticate;
+use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Database\Events\ConnectionEstablished;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\Request;
@@ -47,6 +49,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Spatie\Permission\Middleware\PermissionMiddleware;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Tests\TestCase;
 
 class TenantResolutionTest extends TestCase
@@ -260,6 +264,44 @@ class TenantResolutionTest extends TestCase
             'forwarded host' => ['X-Forwarded-Host', 'header-shop.pos.example.test'],
             'standard forwarded host' => ['Forwarded', 'for=192.0.2.10;host=header-shop.pos.example.test'],
         ];
+    }
+
+    /**
+     * Regression: the central-host gate and the tenant resolver must read the
+     * host from the same place.
+     *
+     * The gate used `$request->getHost()`, which honours `X-Forwarded-Host`
+     * whenever a proxy is trusted — and `TrustProxies` self-enables `'*'` on
+     * Laravel Cloud. Host separation is the only separation the platform panel
+     * has, so a forwarded header could serve the control plane on a
+     * tenant-owned hostname while the resolver still saw the tenant.
+     *
+     * This drives the middleware directly: routing the request through the
+     * kernel would let `TrustProxies` reset the trusted set from config, and
+     * the assertion would then pass for the wrong reason.
+     */
+    public function test_the_central_gate_reads_the_raw_host_not_a_forwarded_one(): void
+    {
+        config(['app.url' => 'https://pos.example.test']);
+
+        $request = Request::create('https://alpha-shop.pos.example.test/platform');
+        $request->headers->set('X-Forwarded-Host', 'pos.example.test');
+
+        Request::setTrustedProxies(['0.0.0.0/0'], Request::HEADER_X_FORWARDED_HOST);
+
+        try {
+            // Precondition: with the proxy trusted, Symfony resolves the
+            // forwarded host, so a gate reading getHost() would let this pass.
+            $this->assertSame('pos.example.test', $request->getHost());
+            $this->assertSame('alpha-shop.pos.example.test', $request->server->get('HTTP_HOST'));
+
+            $this->expectException(NotFoundHttpException::class);
+
+            (new EnsureCentralHost(app(ConfigRepository::class)))
+                ->handle($request, fn (): SymfonyResponse => new SymfonyResponse('reached the control plane'));
+        } finally {
+            Request::setTrustedProxies([], 0);
+        }
     }
 
     public function test_host_suffix_trick_cannot_select_a_shop(): void

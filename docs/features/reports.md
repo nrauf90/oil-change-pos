@@ -15,7 +15,7 @@ The reports screen summarizes actually charged revenue over daily, weekly, or mo
 
 ## Permissions and invariants
 
-- `reports.view_dashboard` opens reports; `reports.view_financials` and `reports.view_margins` protect sensitive breakdowns.
+- `reports.view_dashboard` opens reports; `reports.view_margins` protects cost and profit breakdowns. `reports.view_financials` was removed by [`2026_09_03_081902_drop_reports_view_financials_permission`](../../database/migrations/tenant/2026_09_03_081902_drop_reports_view_financials_permission.php) because no code ever read it — do not reintroduce it without a gate that means something.
 - Reports depend on the sales module and must use stored charged-price and cost snapshots, not current catalog values.
 - Date windows and timezone boundaries must remain consistent across headline, breakdown, and detail queries.
 - Uncosted revenue must be shown explicitly rather than treated as zero-cost profit.

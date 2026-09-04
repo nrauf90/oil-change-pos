@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\ItemController;
+use App\Http\Controllers\MarketingSiteController;
 use App\Http\Controllers\PosController;
 use App\Http\Controllers\QuickItemController;
 use App\Http\Controllers\ReportController;
@@ -13,6 +14,31 @@ use App\Modules\ModuleRegistry;
 use App\Tenancy\SupportAccessManager;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Route;
+
+/*
+| The public marketing site — the platform's shop window, not a tenant screen.
+|
+| It is constrained by DOMAIN rather than guarded by EnsureCentralHost, and that
+| distinction is load-bearing. Laravel matches a route by URI first and only then
+| runs its middleware, so a middleware-guarded "/" registered ahead of the tenant
+| group would match on a tenant hostname too and abort there — taking every
+| tenant's sign-in screen down with it. A domain constraint participates in
+| matching instead, so tenant hosts simply fall through to the group below.
+|
+| Locally the central host is the same host that serves the default tenant, so
+| a domain-constrained "/" would shadow the POS. There it lives at /site.
+*/
+if (app()->environment('local', 'testing')) {
+    Route::get('/site', MarketingSiteController::class)->name('marketing.home');
+} else {
+    $centralHost = parse_url((string) config('app.url'), PHP_URL_HOST);
+
+    if (is_string($centralHost) && trim($centralHost) !== '') {
+        Route::domain($centralHost)
+            ->get('/', MarketingSiteController::class)
+            ->name('marketing.home');
+    }
+}
 
 $tenantRoutes = static function (): void {
 

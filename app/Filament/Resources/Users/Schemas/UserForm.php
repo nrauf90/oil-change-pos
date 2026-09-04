@@ -16,6 +16,7 @@ use Filament\Schemas\Schema;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\HtmlString;
+use Illuminate\Validation\Rules\Password;
 
 class UserForm
 {
@@ -41,7 +42,7 @@ class UserForm
                     TextInput::make('password')
                         ->password()
                         ->revealable()
-                        ->minLength(8)
+                        ->rule(Password::defaults())
                         ->maxLength(255)
                         // Required when creating; on edit, an empty box means "leave it alone".
                         ->required(fn (string $operation): bool => $operation === 'create')

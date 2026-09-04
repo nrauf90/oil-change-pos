@@ -82,7 +82,9 @@ class TenantMigrationHistoryTest extends TestCase
         $this->assertSame(0, $exitCode, Artisan::output());
         $this->assertTrue(Schema::connection('tenant')->hasTable('users'));
         $this->assertTrue(Schema::connection('tenant')->hasTable('items'));
-        $this->assertSame(37, DB::connection('tenant')->table('permissions')->count());
+        // 36 after `reports.view_financials` was removed: it was granted and
+        // seeded while being read by no code, so unticking it revoked nothing.
+        $this->assertSame(36, DB::connection('tenant')->table('permissions')->count());
         $this->assertFalse(app(TenantContext::class)->initialized());
         $this->assertSame('central', config('database.default'));
     }
@@ -131,5 +133,46 @@ class TenantMigrationHistoryTest extends TestCase
         }
 
         fclose($handle);
+    }
+
+    /**
+     * The migration that removes `reports.view_financials` lands after the
+     * `tenant_installations` marker, so during adoption it runs against a
+     * customer's legacy production database in the window between the DDL and
+     * the migration-log write. A crash there re-runs it on retry, so it has to
+     * be re-runnable or the shop becomes permanently unadoptable.
+     */
+    public function test_dropping_the_financials_permission_is_re_runnable(): void
+    {
+        $exitCode = Artisan::call('migrate', [
+            '--database' => 'tenant',
+            '--path' => $this->tenantMigrationPath(),
+            '--realpath' => true,
+            '--no-interaction' => true,
+        ]);
+
+        $this->assertSame(0, $exitCode, Artisan::output());
+
+        $migration = (new Filesystem)->glob($this->tenantMigrationPath().DIRECTORY_SEPARATOR.'*drop_reports_view_financials_permission.php');
+        $this->assertCount(1, $migration, 'the migration under test is missing');
+
+        $before = DB::connection('tenant')->table('permissions')->count();
+
+        // Simulate the crash: the work landed, the log write did not.
+        DB::connection('tenant')->table('migrations')
+            ->where('migration', pathinfo($migration[0], PATHINFO_FILENAME))
+            ->delete();
+
+        $retry = Artisan::call('migrate', [
+            '--database' => 'tenant',
+            '--path' => $this->tenantMigrationPath(),
+            '--realpath' => true,
+            '--no-interaction' => true,
+        ]);
+
+        $this->assertSame(0, $retry, 'the migration is not re-runnable: '.Artisan::output());
+        $this->assertSame($before, DB::connection('tenant')->table('permissions')->count());
+        $this->assertSame(0, DB::connection('tenant')->table('permissions')
+            ->where('name', 'reports.view_financials')->count());
     }
 }

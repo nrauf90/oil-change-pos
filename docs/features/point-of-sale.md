@@ -9,7 +9,7 @@ The counter builds a sale from inventory or custom lines, types actual charged p
 - Screen/search: [`PosController`](../../app/Http/Controllers/PosController.php), [`pos/create.blade.php`](../../resources/views/pos/create.blade.php)
 - Checkout: [`SaleController`](../../app/Http/Controllers/SaleController.php), [`StoreSaleRequest`](../../app/Http/Requests/StoreSaleRequest.php), [`RecordSale`](../../app/Actions/RecordSale.php), [`SaleTotalCalculator`](../../app/Support/SaleTotalCalculator.php)
 - Quick-add inventory: [`QuickItemController`](../../app/Http/Controllers/QuickItemController.php), [`QuickItemRequest`](../../app/Http/Requests/QuickItemRequest.php)
-- Models/tables: [`CustomerVehicle`](../../app/Models/CustomerVehicle.php) / [`customer_vehicles`](../../database/migrations/2026_08_29_204229_create_customer_vehicles_table.php); [`Sale`](../../app/Models/Sale.php), [`SaleItem`](../../app/Models/SaleItem.php)
+- Models/tables: [`CustomerVehicle`](../../app/Models/CustomerVehicle.php) / [`customer_vehicles`](../../database/migrations/tenant/2026_08_29_204229_create_customer_vehicles_table.php); [`Sale`](../../app/Models/Sale.php), [`SaleItem`](../../app/Models/SaleItem.php)
 - Routes: `pos.create`, `customer-vehicles.index`, `sales.store`, `quick-items.*` in [`routes/web.php`](../../routes/web.php)
 - Tests: [`CheckoutTest`](../../tests/Feature/CheckoutTest.php), [`CustomerVehicleTest`](../../tests/Feature/CustomerVehicleTest.php), [`QuickAddItemTest`](../../tests/Feature/QuickAddItemTest.php), [`PosCategoryRailTest`](../../tests/Feature/PosCategoryRailTest.php), [`PosDispenseUiTest`](../../tests/Feature/PosDispenseUiTest.php), [`MoneyParityTest`](../../tests/Feature/MoneyParityTest.php)
 

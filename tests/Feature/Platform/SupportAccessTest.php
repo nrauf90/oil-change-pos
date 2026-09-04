@@ -400,6 +400,62 @@ class SupportAccessTest extends PlatformTestCase
         $this->assertGuest('web');
     }
 
+    /**
+     * A grant must not outlive its ceiling.
+     *
+     * An operator who reads a shop and then closes the tab never exits, so
+     * without a ceiling the sliding session kept read access alive for whoever
+     * held that browser profile, and the audit row read "Active" forever —
+     * defeating the one signal a second super-admin would use to spot a
+     * session that should be revoked.
+     */
+    public function test_a_support_grant_expires_once_it_outlives_its_ceiling(): void
+    {
+        config(['auth.support_access.max_lifetime_minutes' => 120]);
+        $this->travelTo('2026-09-02 09:00:00');
+
+        $platformUser = PlatformUser::factory()->create();
+        $shop = Shop::factory()->create(['status' => ShopStatus::Active]);
+        $this->actingAs($platformUser, 'platform');
+
+        $this->postJson('/__support-access/start/'.$shop->getKey(), [
+            'platform_user_id' => $platformUser->getKey(),
+            'reason' => 'Reads a shop, then walks away',
+        ])->assertSuccessful();
+
+        $audit = ShopAccessSession::query()->sole();
+
+        // Still inside the grant.
+        $this->travelTo('2026-09-02 10:59:00');
+        $this->get('/__support-access/status')->assertJsonPath('active', true);
+
+        // Past it. /status rather than /context: an inactive context has no
+        // audit to dereference.
+        $this->travelTo('2026-09-02 11:01:00');
+        $this->get('/__support-access/status')->assertJsonPath('active', false);
+
+        $this->assertNotNull($audit->fresh()->ended_at, 'the expired grant left its audit open');
+    }
+
+    /** An abandoned grant is never resumed, so only the sweep can close it. */
+    public function test_the_sweep_ends_grants_abandoned_without_a_further_request(): void
+    {
+        config(['auth.support_access.max_lifetime_minutes' => 120]);
+        $this->travelTo('2026-09-02 09:00:00');
+
+        $platformUser = PlatformUser::factory()->create();
+        $shop = Shop::factory()->create(['status' => ShopStatus::Active]);
+        $audit = ShopAccessSession::start($platformUser, $shop);
+
+        $this->travelTo('2026-09-02 10:00:00');
+        $this->artisan('support:sweep-stale-access')->assertExitCode(0);
+        $this->assertNull($audit->fresh()->ended_at, 'a grant still inside its ceiling was swept');
+
+        $this->travelTo('2026-09-02 11:30:00');
+        $this->artisan('support:sweep-stale-access')->assertExitCode(0);
+        $this->assertNotNull($audit->fresh()->ended_at, 'an abandoned grant was left reading Active');
+    }
+
     public function test_missing_support_tuple_preserves_an_ordinary_tenant_session(): void
     {
         $shop = Shop::factory()->create(['status' => ShopStatus::Active]);
