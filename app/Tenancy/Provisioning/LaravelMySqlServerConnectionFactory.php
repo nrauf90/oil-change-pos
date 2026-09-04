@@ -52,10 +52,41 @@ final readonly class LaravelMySqlServerConnectionFactory implements MySqlServerC
             );
         }
 
-        return new LaravelMySqlServerConnection(
-            $connection,
-            fn (): mixed => $this->removeConnection($connectionName),
-        );
+        $cleanup = fn (): mixed => $this->removeConnection($connectionName);
+
+        // Shared hosting withholds the global CREATE privilege, so on those
+        // deployments the database has to be created through the control panel
+        // instead of with CREATE DATABASE. Only the creation mechanism changes;
+        // the connection, the release gate and everything above are identical.
+        if ($this->config->get('database.tenant_mysql_creator') === 'cpanel') {
+            return new CpanelMySqlServerConnection(
+                $connection,
+                $cleanup,
+                (string) $this->config->get('database.cpanel_uapi_binary', '/usr/bin/uapi'),
+                $this->cpanelGrantUsers(),
+            );
+        }
+
+        return new LaravelMySqlServerConnection($connection, $cleanup);
+    }
+
+    /**
+     * Account MySQL users that must be granted on each new tenant database.
+     *
+     * cPanel creates a database with no grants at all, so without at least one
+     * user here the tenant connection could never open what was just created.
+     *
+     * @return list<string>
+     */
+    private function cpanelGrantUsers(): array
+    {
+        $configured = $this->config->get('database.cpanel_grant_users');
+
+        if (is_string($configured)) {
+            $configured = array_filter(array_map('trim', explode(',', $configured)));
+        }
+
+        return is_array($configured) ? array_values(array_filter($configured, 'is_string')) : [];
     }
 
     /** @param array<string, mixed> $configuration */

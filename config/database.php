@@ -51,6 +51,24 @@ return [
      */
     'tenant_database_name_prefix' => env('TENANT_DB_NAME_PREFIX', 'tenant_'),
 
+    /*
+     * How a MySQL tenant database is brought into existence.
+     *
+     * 'sql'    — CREATE DATABASE. Requires the global CREATE privilege.
+     * 'cpanel' — `uapi Mysql create_database`, for shared hosting that withholds
+     *            that privilege. cPanel creates a database with no grants, so
+     *            cpanel_grant_users must name the account MySQL user(s) the
+     *            tenant connection signs in as.
+     *
+     * Only the creation mechanism changes. Target claims, creation authorization
+     * receipts and attestation apply identically either way.
+     */
+    'tenant_mysql_creator' => env('TENANT_MYSQL_CREATOR', 'sql'),
+
+    'cpanel_uapi_binary' => env('CPANEL_UAPI_BINARY', '/usr/bin/uapi'),
+
+    'cpanel_grant_users' => env('CPANEL_GRANT_USERS', ''),
+
     'tenant_mysql_remote_provisioning_enabled' => env(
         'TENANT_MYSQL_REMOTE_PROVISIONING_ENABLED',
         false,
