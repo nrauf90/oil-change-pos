@@ -11,6 +11,7 @@ use App\Models\Central\PlatformUser;
 use App\Models\Expense;
 use App\Models\Inspection;
 use App\Models\Item;
+use App\Models\Order;
 use App\Models\Sale;
 use App\Models\Supplier;
 use App\Models\SupplierPayment;
@@ -20,6 +21,7 @@ use App\Modules\ModuleRegistry;
 use App\Observers\ExpenseObserver;
 use App\Observers\InspectionObserver;
 use App\Observers\ItemObserver;
+use App\Observers\OrderObserver;
 use App\Observers\SaleObserver;
 use App\Observers\SupplierObserver;
 use App\Observers\SupplierPaymentObserver;
@@ -236,6 +238,7 @@ class AppServiceProvider extends ServiceProvider
         | no code path that saves one of these rows without an entry.
         */
         Sale::observe(SaleObserver::class);
+        Order::observe(OrderObserver::class);
         Item::observe(ItemObserver::class);
         Expense::observe(ExpenseObserver::class);
         Inspection::observe(InspectionObserver::class);

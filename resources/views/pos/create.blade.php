@@ -7,7 +7,17 @@
 @php
     // Rebuild the cart from old input so a failed server-side validation never
     // wipes a bill the counter already typed out.
-    $initialLines = collect(old('lines', []))
+    $draftLines = ($draft ?? null)?->lines
+        ->map(fn ($line) => [
+            'item_id' => $line->item_id,
+            'item_name' => $line->item_name,
+            'type' => $line->type->value,
+            'quantity' => $line->quantity,
+            'dispensed_quantity' => $line->dispensed_quantity,
+            'manually_charged_price' => $line->manually_charged_price,
+        ])->all() ?? [];
+
+    $initialLines = collect(old('lines', $draftLines))
         ->map(fn ($line, $index) => [
             'uid' => 'restored-'.$index,
             'mode' => $line['type'] ?? 'product',
@@ -23,7 +33,9 @@
     $customerFields = ['customer_name', 'phone', 'vehicle_model', 'vehicle_plate', 'mileage', 'next_checkup_mileage', 'notes'];
 
     $customer = collect($customerFields)
-        ->mapWithKeys(fn (string $field) => [$field => (string) old($field, '')])
+        ->mapWithKeys(fn (string $field) => [
+            $field => (string) old($field, ($draft ?? null)?->{$field} ?? ''),
+        ])
         ->all();
 
     // The customer strip opens itself when there is something in it to read, or
@@ -41,8 +53,8 @@
           'vehicleYears' => range(2000, 2026),
           'currentYear' => 2026,
           'lines' => $initialLines,
-          'labor' => (string) old('labor_charge', ''),
-          'misc' => (string) old('misc_charge', ''),
+          'labor' => (string) old('labor_charge', ($draft ?? null)?->labor_charge ?? ''),
+          'misc' => (string) old('misc_charge', ($draft ?? null)?->misc_charge ?? ''),
           'customer' => $customer,
           'customerVehicles' => $customerVehicles,
           'customerVehicleSearchUrl' => route('customer-vehicles.index'),
@@ -54,6 +66,18 @@
       x-on:submit="submitting = true"
       class="flex min-h-0 flex-1 flex-col gap-3">
     @csrf
+    {{-- Empty unless a draft button sets it; Laravel ignores a blank _method. --}}
+    <input type="hidden" name="_method" x-model="methodOverride">
+    {{-- Set only by "Complete", so one request saves the latest cart and bills it.
+         Saving then completing as two requests would lose whatever was typed
+         between them. --}}
+    <input type="hidden" name="complete" x-model="completeDraft">
+    @if ($draft)
+        {{-- The copy of the bill this screen was opened from. If someone else
+             saves in the meantime, the save is refused rather than silently
+             overwriting their work. --}}
+        <input type="hidden" name="version" value="{{ $draft->version }}">
+    @endif
 
     @if ($errors->any())
         <div class="shrink-0 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
@@ -528,11 +552,39 @@
                     <p class="shrink-0 font-mono text-3xl leading-none font-black tabular-nums" x-text="money(totalCents)"></p>
                 </div>
 
-                <div class="p-3">
-                    <button type="submit" class="btn-primary w-full !py-3.5 !text-base" :disabled="submitting">
-                        <span x-show="! submitting">Charge &amp; print invoice</span>
+                <div class="space-y-2 p-3">
+                    <button type="submit" class="btn-primary w-full !py-3.5 !text-base"
+                            :disabled="submitting"
+                            @if ($draft)
+                                formaction="{{ route('orders.update', $draft) }}"
+                                x-on:click="methodOverride = 'PUT'; completeDraft = '1'"
+                            @else
+                                x-on:click="methodOverride = ''"
+                            @endif
+                            >
+                        <span x-show="! submitting">
+                            {{ $draft ? 'Complete &amp; print invoice' : 'Charge &amp; print invoice' }}
+                        </span>
                         <span x-show="submitting" x-cloak>Saving&hellip;</span>
                     </button>
+
+                    @can('draft_sales.create')
+                        {{-- Park the bill. Nothing is billed, no stock moves and no
+                             invoice exists until the work is finished. --}}
+                        <button type="submit"
+                                class="btn-ghost w-full !py-3 border border-slate-700 text-slate-200"
+                                :disabled="submitting"
+                                formaction="{{ $draft ? route('orders.update', $draft) : route('orders.store') }}"
+                                x-on:click="methodOverride = '{{ $draft ? 'PUT' : '' }}'; completeDraft = ''">
+                            {{ $draft ? 'Save changes to draft' : 'Save as draft' }}
+                        </button>
+                    @endcan
+
+                    @if ($draft)
+                        <p class="text-center text-[11px] font-medium text-slate-400">
+                            Draft &mdash; {{ $draft->displayLabel() }}. No invoice until it is completed.
+                        </p>
+                    @endif
                 </div>
             </div>
         </aside>
@@ -800,6 +852,9 @@
             lowStockOnly: false,
             ticketOpen: false,
             submitting: false,
+            // Blank for a normal POST; 'PUT' when saving over an existing draft.
+            methodOverride: '',
+            completeDraft: '',
             clearArmed: false,
             seq: 0,
             compatibilitySeq: 0,

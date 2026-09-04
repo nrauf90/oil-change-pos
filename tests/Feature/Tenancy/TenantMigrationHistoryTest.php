@@ -84,7 +84,8 @@ class TenantMigrationHistoryTest extends TestCase
         $this->assertTrue(Schema::connection('tenant')->hasTable('items'));
         // 36 after `reports.view_financials` was removed: it was granted and
         // seeded while being read by no code, so unticking it revoked nothing.
-        $this->assertSame(36, DB::connection('tenant')->table('permissions')->count());
+        // 40 once draft bills arrived with their own four.
+        $this->assertSame(40, DB::connection('tenant')->table('permissions')->count());
         $this->assertFalse(app(TenantContext::class)->initialized());
         $this->assertSame('central', config('database.default'));
     }

@@ -8,6 +8,7 @@ use App\Enums\UnitOfMeasure;
 use App\Models\CustomerVehicle;
 use App\Models\Item;
 use App\Models\ItemVehicleCompatibility;
+use App\Models\Order;
 use App\Models\VehicleMake;
 use App\Models\VehicleModel;
 use App\Support\ServiceHistory;
@@ -37,11 +38,20 @@ class PosController extends Controller
         ['key' => 'service', 'label' => 'Services', 'icon' => 'heroicon-o-wrench-screwdriver', 'accent' => 'violet'],
     ];
 
-    public function create(): View
+    /**
+     * The counter screen.
+     *
+     * An `order` on the query string reopens a draft bill: the workshop runs
+     * several bays at once, so a half-built bill is put down and picked up
+     * again. A completed order is not a draft and cannot be reopened here.
+     */
+    public function create(Request $request): View
     {
-        $showCost = request()->user()?->can(Permission::ViewItemUnitCost->value) ?? false;
+        $showCost = $request->user()?->can(Permission::ViewItemUnitCost->value) ?? false;
+        $draft = $this->resolveDraft($request);
 
         return view('pos.create', [
+            'draft' => $draft,
             'items' => Item::query()
                 ->with('vehicleCompatibilities.vehicleModel')
                 ->active()
@@ -74,6 +84,24 @@ class PosController extends Controller
                 ->limit(10)
                 ->get(['id', 'customer_name', 'phone', 'vehicle_model', 'vehicle_plate', 'mileage']),
         ]);
+    }
+
+    /**
+     * The draft the counter asked to reopen, if any. Reopening is gated on the
+     * same permission as saving one, and a bill that has already become a sale
+     * is no longer the counter's to change.
+     */
+    private function resolveDraft(Request $request): ?Order
+    {
+        $orderId = $request->query('order');
+
+        if ($orderId === null || ! $request->user()?->can(Permission::CreateDraftSale->value)) {
+            return null;
+        }
+
+        $order = Order::query()->with('lines')->find($orderId);
+
+        return $order?->isDraft() === true ? $order : null;
     }
 
     public function customerVehicles(Request $request): JsonResponse

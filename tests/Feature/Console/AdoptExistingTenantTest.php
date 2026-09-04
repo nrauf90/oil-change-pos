@@ -39,6 +39,12 @@ class AdoptExistingTenantTest extends TestCase
 
     private const EXPENSE_RECEIPTS_MIGRATION = '2026_09_04_174631_create_expense_receipts_table';
 
+    private const ORDERS_MIGRATION = '2026_09_04_203059_create_orders_table';
+
+    private const ORDER_LINES_MIGRATION = '2026_09_04_203111_create_order_lines_table';
+
+    private const DRAFT_SALE_PERMISSIONS_MIGRATION = '2026_09_04_203810_add_draft_sale_permissions';
+
     private const LEGACY_TENANT_MIGRATION_CUTOFF = '2026_09_01_135125_create_item_vehicle_compatibilities_table';
 
     private const LEGACY_NON_TENANT_MIGRATIONS = [
@@ -248,7 +254,7 @@ class AdoptExistingTenantTest extends TestCase
         // gains the tables newer features need. Each one is additive and
         // starts empty — nothing the customer already had is touched.
         $this->assertEqualsCanonicalizing(
-            [...$beforeTables, 'tenant_installations', 'password_reset_tokens', 'expense_receipts'],
+            [...$beforeTables, 'tenant_installations', 'password_reset_tokens', 'expense_receipts', 'orders', 'order_lines'],
             $afterTables,
         );
         $this->assertSame($beforeColumns, $source->getSchemaBuilder()->getColumnListing('items'));
@@ -272,6 +278,9 @@ class AdoptExistingTenantTest extends TestCase
             self::DROP_FINANCIALS_PERMISSION_MIGRATION,
             self::PASSWORD_RESET_MIGRATION,
             self::EXPENSE_RECEIPTS_MIGRATION,
+            self::ORDERS_MIGRATION,
+            self::ORDER_LINES_MIGRATION,
+            self::DRAFT_SALE_PERMISSIONS_MIGRATION,
         ];
         sort($expectedMigrations);
 

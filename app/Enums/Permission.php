@@ -20,6 +20,12 @@ enum Permission: string
     case DeleteSale = 'sales.delete';
     case ExportSalePdf = 'sales.export_pdf';
 
+    /* ---- Draft sales ----------------------------------------------- */
+    case ViewAnyDraftSale = 'draft_sales.view_any';
+    case CreateDraftSale = 'draft_sales.create';
+    case CompleteDraftSale = 'draft_sales.complete';
+    case DeleteDraftSale = 'draft_sales.delete';
+
     /* ---- Pricing --------------------------------------------------- */
     case ViewPricing = 'pricing.view';
 
@@ -85,7 +91,8 @@ enum Permission: string
     {
         return match (true) {
             str_starts_with($this->value, 'pos.') => 'Point of sale',
-            str_starts_with($this->value, 'sales.') => 'Sales',
+            str_starts_with($this->value, 'sales.'),
+            str_starts_with($this->value, 'draft_sales.') => 'Sales',
             str_starts_with($this->value, 'pricing.') => 'Pricing',
             str_starts_with($this->value, 'items.') => 'Inventory',
             str_starts_with($this->value, 'reports.') => 'Reporting',

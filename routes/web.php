@@ -4,6 +4,7 @@ use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\ItemController;
 use App\Http\Controllers\MarketingSiteController;
+use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PosController;
 use App\Http\Controllers\QuickItemController;
 use App\Http\Controllers\ReportController;
@@ -116,6 +117,27 @@ $tenantRoutes = static function (): void {
 
             Route::delete('/sales/{sale}', [SaleController::class, 'destroy'])
                 ->middleware('permission:sales.delete')->name('sales.destroy');
+
+            /*
+            | Draft bills. The workshop runs several bays at once, so several
+            | bills stay open at once. Nothing here can be printed — an invoice
+            | exists only once a draft has been completed into a sale.
+            */
+            Route::get('/orders', [OrderController::class, 'index'])
+                ->middleware('permission:draft_sales.view_any')->name('orders.index');
+
+            Route::post('/orders', [OrderController::class, 'store'])
+                ->middleware(['permission:draft_sales.create', 'throttle:60,1'])->name('orders.store');
+
+            Route::put('/orders/{order}', [OrderController::class, 'update'])
+                ->middleware(['permission:draft_sales.create', 'throttle:60,1'])->name('orders.update');
+
+            Route::post('/orders/{order}/complete', [OrderController::class, 'complete'])
+                ->middleware(['permission:draft_sales.complete', 'throttle:60,1'])->name('orders.complete');
+
+            // Discarding someone's work is an owner's call.
+            Route::delete('/orders/{order}', [OrderController::class, 'destroy'])
+                ->middleware('permission:draft_sales.delete')->name('orders.destroy');
         });
 
         /*

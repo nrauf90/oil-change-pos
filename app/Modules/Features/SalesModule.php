@@ -45,6 +45,10 @@ class SalesModule extends Module
             Permission::ViewSale,
             Permission::CreateSale,
             Permission::DeleteSale,
+            Permission::ViewAnyDraftSale,
+            Permission::CreateDraftSale,
+            Permission::CompleteDraftSale,
+            Permission::DeleteDraftSale,
             Permission::ExportSalePdf,
             Permission::ViewPricing,
         ];
@@ -54,6 +58,7 @@ class SalesModule extends Module
     {
         return [
             ['route' => 'pos.create', 'pattern' => 'pos*', 'label' => 'New Sale', 'permission' => Permission::UsePos, 'icon' => 'heroicon-o-shopping-cart'],
+            ['route' => 'orders.index', 'pattern' => 'orders*', 'label' => 'Drafts', 'permission' => Permission::ViewAnyDraftSale, 'icon' => 'heroicon-o-clipboard-document-list'],
             ['route' => 'sales.index', 'pattern' => 'sales*', 'label' => 'Sales', 'permission' => Permission::ViewAnySale, 'icon' => 'heroicon-o-receipt-percent'],
         ];
     }
