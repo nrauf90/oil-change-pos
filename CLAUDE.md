@@ -40,6 +40,14 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 
 - You must only create documentation files if explicitly requested by the user.
 
+## Keep Everything Local (no external uploads)
+
+- Never create Artifacts and never upload anything from this project to claude.ai or any other external service. This includes plans, designs, audits, reports, screenshots, code and data.
+- Written deliverables are markdown files inside `docs/`, committed with the code and reviewable in a normal diff. After writing one, tell the user the path and ask them to review it.
+- Follow the existing layout: `docs/features/<feature>.md` for feature docs, `docs/superpowers/plans/YYYY-MM-DD-<slug>.md` for implementation plans, `docs/superpowers/specs/YYYY-MM-DD-<slug>-design.md` for designs, and `docs/YYYY-MM-DD-<slug>.md` for one-off audits.
+- Write scratch files to the session scratchpad, never outside the project otherwise. Anything the user is meant to keep belongs in the repository.
+- This section is the explicit request that satisfies the rule above: writing these docs does not need asking first.
+
 ## Replies
 
 - Be concise in your explanations - focus on what's important rather than explaining obvious details.
