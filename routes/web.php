@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Auth\LoginController;
+use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\ItemController;
 use App\Http\Controllers\MarketingSiteController;
 use App\Http\Controllers\PosController;
@@ -48,6 +49,26 @@ $tenantRoutes = static function (): void {
     Route::middleware('guest')->group(function (): void {
         Route::get('/login', [LoginController::class, 'create'])->name('login');
         Route::post('/login', [LoginController::class, 'store'])->name('login.store');
+
+        /*
+        | Self-service password reset, for staff who have an email address.
+        |
+        | Throttled hard: the send endpoint is the one that costs money and can
+        | be pointed at someone else's inbox, and the reset endpoint is the one
+        | worth guessing tokens against. The broker's own 60s per-address
+        | throttle does not limit a caller cycling through many addresses.
+        */
+        Route::get('/forgot-password', [PasswordResetController::class, 'request'])
+            ->name('password.request');
+
+        Route::post('/forgot-password', [PasswordResetController::class, 'email'])
+            ->middleware('throttle:6,1')->name('password.email');
+
+        Route::get('/reset-password/{token}', [PasswordResetController::class, 'reset'])
+            ->name('password.reset');
+
+        Route::post('/reset-password', [PasswordResetController::class, 'update'])
+            ->middleware('throttle:6,1')->name('password.update');
     });
 
     Route::post('/logout', [LoginController::class, 'destroy'])

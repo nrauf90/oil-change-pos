@@ -35,6 +35,8 @@ class AdoptExistingTenantTest extends TestCase
 
     private const DROP_FINANCIALS_PERMISSION_MIGRATION = '2026_09_03_081902_drop_reports_view_financials_permission';
 
+    private const PASSWORD_RESET_MIGRATION = '2026_09_04_115841_add_email_and_password_reset_tokens';
+
     private const LEGACY_TENANT_MIGRATION_CUTOFF = '2026_09_01_135125_create_item_vehicle_compatibilities_table';
 
     private const LEGACY_NON_TENANT_MIGRATIONS = [
@@ -241,12 +243,20 @@ class AdoptExistingTenantTest extends TestCase
         $source = DB::connection('legacy');
         $afterTables = $this->sourceTableNames();
         $this->assertEqualsCanonicalizing(
-            [...$beforeTables, 'tenant_installations'],
+            [...$beforeTables, 'tenant_installations', 'password_reset_tokens'],
             $afterTables,
         );
         $this->assertSame($beforeColumns, $source->getSchemaBuilder()->getColumnListing('items'));
         $this->assertSame($beforeItem, (array) $source->table('items')->where('name', 'Preserved filter')->first());
-        $this->assertSame($beforeUser, (array) $source->table('users')->where('username', 'legacy-admin')->first());
+
+        // Self-service password reset adds a nullable users.email during
+        // adoption. The point of this test is that adoption never *alters*
+        // a customer's operational data, so the row must be unchanged apart
+        // from that column arriving empty.
+        $afterUser = (array) $source->table('users')->where('username', 'legacy-admin')->first();
+        $this->assertNull($afterUser['email']);
+        unset($afterUser['email']);
+        $this->assertSame($beforeUser, $afterUser);
         // Every migration that lands after the marker runs against the
         // customer's legacy production database during adoption, so each one
         // must be re-runnable — see the idempotency test below.
@@ -255,6 +265,7 @@ class AdoptExistingTenantTest extends TestCase
             self::MARKER_MIGRATION,
             self::ROLE_DESCRIPTION_MIGRATION,
             self::DROP_FINANCIALS_PERMISSION_MIGRATION,
+            self::PASSWORD_RESET_MIGRATION,
         ];
         sort($expectedMigrations);
 

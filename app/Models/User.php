@@ -20,7 +20,7 @@ class User extends Authenticatable implements FilamentUser, TenantScoped
     /** @use HasFactory<UserFactory> */
     use HasFactory, HasRoles, Notifiable, UsesTenantConnection;
 
-    protected $fillable = ['name', 'username', 'password', 'is_active'];
+    protected $fillable = ['name', 'username', 'email', 'password', 'is_active'];
 
     protected $hidden = ['password', 'remember_token'];
 

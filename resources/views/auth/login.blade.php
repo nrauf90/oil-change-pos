@@ -22,6 +22,12 @@
 
         <h2 class="text-lg font-black tracking-tight">Sign in</h2>
 
+        @if (session('status'))
+            <div class="rounded-lg border-2 border-emerald-300 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
+                {{ session('status') }}
+            </div>
+        @endif
+
         @if ($errors->any())
             <div class="rounded-lg border-2 border-red-300 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
                 {{ $errors->first() }}
@@ -46,6 +52,11 @@
         </label>
 
         <button type="submit" class="btn-primary w-full !py-3">Sign in</button>
+
+        <p class="text-center">
+            <a href="{{ route('password.request') }}"
+               class="text-sm font-bold text-amber-700 hover:underline">Forgot your password?</a>
+        </p>
     </form>
 
     <p class="mt-4 text-center text-xs font-medium text-slate-500">

@@ -39,6 +39,17 @@ class UserForm
                         ->unique(ignoreRecord: true)
                         ->helperText('Lowercase, no spaces. This is what they type to sign in.'),
 
+                    // Optional, and never used to sign in. Its only job is to
+                    // let this person reset their own password without asking
+                    // an admin — which matters most for the owner, who has
+                    // nobody above them to ask.
+                    TextInput::make('email')
+                        ->label('Email address')
+                        ->email()
+                        ->maxLength(255)
+                        ->unique(ignoreRecord: true)
+                        ->helperText('Optional. Only used for "Forgot your password?" — not for signing in.'),
+
                     TextInput::make('password')
                         ->password()
                         ->revealable()

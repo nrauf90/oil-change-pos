@@ -123,6 +123,11 @@ return [
     'passwords' => [
         'users' => [
             'provider' => 'users',
+            // Tokens belong to one shop's users table, so they are written on
+            // the tenant connection. Left on the default connection they would
+            // land in the central control plane, where two shops sharing an
+            // address would overwrite each other's tokens.
+            'connection' => 'tenant',
             'table' => env('AUTH_PASSWORD_RESET_TOKEN_TABLE', 'password_reset_tokens'),
             'expire' => 60,
             'throttle' => 60,
