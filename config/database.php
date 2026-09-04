@@ -63,7 +63,12 @@ return [
         'options' => extension_loaded('pdo_mysql') ? array_filter([
             PDO::MYSQL_ATTR_SSL_CA => env('TENANT_MYSQL_ATTR_SSL_CA', env('MYSQL_ATTR_SSL_CA')),
             PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT => env('TENANT_MYSQL_VERIFY_SERVER_CERT', true),
-        ], static fn (mixed $value): bool => $value !== null) : [],
+        ], static fn (mixed $value): bool => $value !== null) + [
+            // Matched-row UPDATE counts — see the note on the central
+            // connection. Keeps a MySQL-backed tenant behaving like the
+            // SQLite the application is tested against.
+            PDO::MYSQL_ATTR_FOUND_ROWS => true,
+        ] : [],
     ],
 
     /*
@@ -109,7 +114,22 @@ return [
             'foreign_key_constraints' => env('CENTRAL_DB_FOREIGN_KEYS', env('DB_FOREIGN_KEYS', true)),
             'options' => extension_loaded('pdo_mysql') ? array_filter([
                 PDO::MYSQL_ATTR_SSL_CA => env('CENTRAL_MYSQL_ATTR_SSL_CA', env('MYSQL_ATTR_SSL_CA')),
-            ]) : [],
+            ]) + [
+                // Report MATCHED rows from UPDATE, not CHANGED rows.
+                //
+                // Illuminate\Cache\DatabaseLock::refresh() renews a lock with
+                // `->update(['expiration' => now + seconds]) >= 1`. Under MySQL's
+                // default changed-row counting, renewing inside the same second
+                // that the lock was taken writes an identical expiration, so zero
+                // rows "change", refresh() returns false, and the holder concludes
+                // it lost a lock it still owns — surfacing as PROVISIONING_LOCK_LOST
+                // during shop provisioning.
+                //
+                // SQLite already counts matched rows, and the suite runs on SQLite,
+                // so this aligns MySQL with the semantics the application is
+                // written and tested against rather than introducing new ones.
+                PDO::MYSQL_ATTR_FOUND_ROWS => true,
+            ] : [],
         ],
 
         'mysql' => [
@@ -129,7 +149,11 @@ return [
             'engine' => null,
             'options' => extension_loaded('pdo_mysql') ? array_filter([
                 PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
-            ]) : [],
+            ]) + [
+                // Matched-row UPDATE counts — see the note on the central
+                // connection. Required for Illuminate\Cache\DatabaseLock.
+                PDO::MYSQL_ATTR_FOUND_ROWS => true,
+            ] : [],
         ],
 
         'mariadb' => [
@@ -149,7 +173,11 @@ return [
             'engine' => null,
             'options' => extension_loaded('pdo_mysql') ? array_filter([
                 PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
-            ]) : [],
+            ]) + [
+                // Matched-row UPDATE counts — see the note on the central
+                // connection. Required for Illuminate\Cache\DatabaseLock.
+                PDO::MYSQL_ATTR_FOUND_ROWS => true,
+            ] : [],
         ],
 
         'pgsql' => [
