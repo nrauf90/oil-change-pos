@@ -14,6 +14,7 @@ use App\Models\Central\Shop;
 use App\Modules\Module;
 use App\Modules\ModuleRegistry;
 use BackedEnum;
+use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
@@ -21,6 +22,7 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\FontWeight;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
@@ -121,8 +123,70 @@ class ShopResource extends Resource
                                     DashboardPeriod::cases(),
                                 )),
                         ]),
+
+                    Section::make('Staff')
+                        ->description(
+                            'Who can sign in to this shop. Read-only — changing a staff account '
+                            .'means starting a support access session, which is audited.'
+                        )
+                        ->columnSpan(['default' => 1, 'lg' => 2])
+                        ->schema([
+                            TextEntry::make('staff_summary')
+                                ->hiddenLabel()
+                                ->state(static fn (ViewShop $livewire): string => self::staffSummary($livewire)),
+
+                            RepeatableEntry::make('staff')
+                                ->hiddenLabel()
+                                ->state(static fn (ViewShop $livewire): array => $livewire->tenantUsers['users'] ?? [])
+                                ->columns(['default' => 1, 'md' => 3, 'xl' => 5])
+                                ->schema([
+                                    TextEntry::make('username')->label('Username')->weight(FontWeight::Bold),
+                                    TextEntry::make('name')->label('Full name'),
+                                    TextEntry::make('roles')->label('Roles')->placeholder('None'),
+                                    TextEntry::make('email')
+                                        ->label('Email')
+                                        ->placeholder('Not provided')
+                                        ->copyable(),
+                                    TextEntry::make('is_active')
+                                        ->label('Status')
+                                        ->badge()
+                                        ->formatStateUsing(
+                                            static fn (bool $state): string => $state ? 'Active' : 'Disabled'
+                                        )
+                                        ->color(static fn (bool $state): string => $state ? 'success' : 'gray'),
+                                    TextEntry::make('last_login_at')
+                                        ->label('Last signed in')
+                                        ->dateTime('d M Y, g:i A')
+                                        ->placeholder('Never'),
+                                ]),
+                        ]),
                 ]),
         ]);
+    }
+
+    /**
+     * Why the staff list might be empty is worth saying out loud: an operator
+     * looking at a blank list needs to know whether the shop has no staff or
+     * whether its database simply could not be read.
+     */
+    private static function staffSummary(ViewShop $livewire): string
+    {
+        $collected = $livewire->tenantUsers;
+
+        if ($collected === []) {
+            return 'Staff could not be read from this shop right now.';
+        }
+
+        $total = (int) ($collected['total'] ?? 0);
+        $shown = (int) ($collected['shown'] ?? 0);
+
+        if ($total === 0) {
+            return 'This shop has no staff accounts yet.';
+        }
+
+        return $shown < $total
+            ? sprintf('Showing the first %d of %d staff accounts.', $shown, $total)
+            : sprintf('%d staff %s.', $total, $total === 1 ? 'account' : 'accounts');
     }
 
     public static function table(Table $table): Table

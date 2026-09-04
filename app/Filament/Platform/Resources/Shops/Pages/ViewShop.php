@@ -4,6 +4,7 @@ namespace App\Filament\Platform\Resources\Shops\Pages;
 
 use App\Actions\Tenancy\CollectShopHealth;
 use App\Actions\Tenancy\CollectTenantStatistics;
+use App\Actions\Tenancy\CollectTenantUsers;
 use App\Actions\Tenancy\RotateShopDatabaseEndpoint;
 use App\Actions\Tenancy\UpdateShopFeatureEntitlements;
 use App\Enums\DashboardPeriod;
@@ -40,6 +41,9 @@ class ViewShop extends ViewRecord
     /** @var array<string, array<string, int|string|null>> */
     public array $tenantStatistics = [];
 
+    /** @var array{total: int, shown: int, users: list<array<string, mixed>>}|array{} */
+    public array $tenantUsers = [];
+
     public function mount(int|string $record): void
     {
         parent::mount($record);
@@ -70,6 +74,16 @@ class ViewShop extends ViewRecord
                     }
                 } catch (Throwable) {
                     $this->tenantStatistics = [];
+                }
+
+                // Collected separately from the statistics: a shop whose
+                // metrics fail to gather is exactly the shop an operator most
+                // wants the staff list for, so one failing must not blank the
+                // other.
+                try {
+                    $this->tenantUsers = resolve(CollectTenantUsers::class)->handle($shop);
+                } catch (Throwable) {
+                    $this->tenantUsers = [];
                 }
             }
         } finally {
