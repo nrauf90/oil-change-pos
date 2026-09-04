@@ -40,6 +40,17 @@ return [
 
     'tenant_provisioning_lock_seconds' => env('TENANT_PROVISIONING_LOCK_SECONDS', 900),
 
+    /*
+     * Prefix for a MySQL tenant database name, applied to the shop slug.
+     *
+     * Shared hosting control panels (cPanel among them) refuse to create a
+     * database whose name does not begin with the account's own prefix, so a
+     * hardcoded 'tenant_' makes provisioning impossible there. Deployments on
+     * such a host set this to 'accountname_tenant_'. SQLite targets are files
+     * and ignore this entirely.
+     */
+    'tenant_database_name_prefix' => env('TENANT_DB_NAME_PREFIX', 'tenant_'),
+
     'tenant_mysql_remote_provisioning_enabled' => env(
         'TENANT_MYSQL_REMOTE_PROVISIONING_ENABLED',
         false,

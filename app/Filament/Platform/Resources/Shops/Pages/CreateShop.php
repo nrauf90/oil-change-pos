@@ -107,7 +107,18 @@ class CreateShop extends CreateRecord
                 .DIRECTORY_SEPARATOR."{$slug}.sqlite";
         }
 
-        return 'tenant_'.str_replace('-', '_', $slug);
+        return $this->tenantDatabasePrefix().str_replace('-', '_', $slug);
+    }
+
+    /**
+     * The account prefix a shared-hosting control panel forces onto every
+     * database it creates. Defaults to the plain 'tenant_' convention.
+     */
+    private function tenantDatabasePrefix(): string
+    {
+        $prefix = config('database.tenant_database_name_prefix', 'tenant_');
+
+        return is_string($prefix) && $prefix !== '' ? $prefix : 'tenant_';
     }
 
     private function provisioningFailureBody(TenantProvisioningException $exception): string
