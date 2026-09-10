@@ -54,6 +54,19 @@ class DraftSaleCompletionTest extends TestCase
         $this->assertSame('450.00', $sale->total_amount);
     }
 
+    public function test_completing_carries_the_drafts_discount_onto_the_sale(): void
+    {
+        $order = $this->draftWithLine();
+        $order->update(['discount' => '50.00']);
+
+        $this->post(route('orders.complete', $order))->assertRedirect();
+
+        $sale = Sale::sole();
+
+        $this->assertSame('50.00', $sale->discount);
+        $this->assertSame('400.00', $sale->total_amount);
+    }
+
     public function test_a_completed_order_points_at_the_sale_it_produced(): void
     {
         $order = $this->draftWithLine();

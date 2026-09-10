@@ -27,6 +27,7 @@ class StoreSaleRequest extends FormRequest
             // calculator refuses — without it that row bills silently as zero.
             'labor_charge' => ['nullable', 'regex:'.SaleTotalCalculator::PATTERN, 'numeric', 'min:0', 'max:99999999'],
             'misc_charge' => ['nullable', 'regex:'.SaleTotalCalculator::PATTERN, 'numeric', 'min:0', 'max:99999999'],
+            'discount' => ['nullable', 'regex:'.SaleTotalCalculator::PATTERN, 'numeric', 'min:0', 'max:99999999'],
 
             'lines' => ['present', 'array', 'max:200'],
             // Existence, availability and type are checked in bulk in after():
@@ -57,6 +58,7 @@ class StoreSaleRequest extends FormRequest
             'lines.*.dispensed_quantity.numeric' => 'The dispensed amount must be a number.',
             'labor_charge.regex' => 'The labor charge must be a number.',
             'misc_charge.regex' => 'The miscellaneous charge must be a number.',
+            'discount.regex' => 'The discount must be a number.',
         ];
     }
 
@@ -68,6 +70,7 @@ class StoreSaleRequest extends FormRequest
             'next_checkup_mileage' => $this->blankToNull($this->input('next_checkup_mileage')),
             'labor_charge' => $this->money($this->input('labor_charge')),
             'misc_charge' => $this->money($this->input('misc_charge')),
+            'discount' => $this->money($this->input('discount')),
             'lines' => $this->normaliseLines($this->input('lines')),
         ]);
     }

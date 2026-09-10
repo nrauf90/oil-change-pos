@@ -95,14 +95,14 @@ final class SaleTotalCalculator
     }
 
     /**
-     * Final payable amount: manual lines + manual labor + manual misc.
+     * Final payable amount: manual lines + manual labor + manual misc, less any discount.
      *
      * @param  iterable<mixed>  $prices
      */
-    public static function total(iterable $prices, mixed $laborCharge, mixed $miscCharge): string
+    public static function total(iterable $prices, mixed $laborCharge, mixed $miscCharge, mixed $discount = null): string
     {
         return self::format(
-            self::sumToCents($prices) + self::toCents($laborCharge) + self::toCents($miscCharge)
+            self::sumToCents($prices) + self::toCents($laborCharge) + self::toCents($miscCharge) - self::toCents($discount)
         );
     }
 

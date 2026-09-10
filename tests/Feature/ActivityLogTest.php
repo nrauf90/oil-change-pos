@@ -82,6 +82,17 @@ class ActivityLogTest extends TestCase
         $this->assertSame($cashier->id, $entry->user_id);
     }
 
+    public function test_a_sale_entry_captures_the_discount_that_was_applied(): void
+    {
+        $this->actingAs(User::factory()->manager()->create());
+
+        $this->post(route('sales.store'), $this->salePayload(['discount' => '150']));
+
+        $entry = $this->logFor('sale.created', Sale::latest('id')->firstOrFail());
+
+        $this->assertSame('150.00', $entry->properties['discount']);
+    }
+
     public function test_a_sale_entry_counts_the_lines_that_were_billed(): void
     {
         $this->actingAs(User::factory()->manager()->create());

@@ -194,6 +194,30 @@ class CheckoutTest extends TestCase
         $this->assertSame('0.00', $sale->misc_charge);
     }
 
+    public function test_a_discount_is_stored_and_subtracted_from_the_total(): void
+    {
+        $this->post(route('sales.store'), $this->payload([
+            'labor_charge' => '500',
+            'misc_charge' => '250.50',
+            'discount' => '100',
+            'lines' => [
+                ['item_id' => null, 'item_name' => 'Oil', 'type' => 'product', 'manually_charged_price' => '4200'],
+            ],
+        ]))->assertRedirect();
+
+        $sale = Sale::sole();
+
+        $this->assertSame('100.00', $sale->discount);
+        $this->assertSame('4850.50', $sale->total_amount);
+    }
+
+    public function test_a_blank_discount_is_stored_as_zero(): void
+    {
+        $this->post(route('sales.store'), $this->payload());
+
+        $this->assertSame('0.00', Sale::sole()->discount);
+    }
+
     public function test_an_entirely_empty_sale_is_rejected(): void
     {
         $this->post(route('sales.store'), $this->payload([

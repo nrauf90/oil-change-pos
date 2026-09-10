@@ -82,6 +82,31 @@ class SaleTotalCalculatorTest extends TestCase
         $this->assertSame('900.00', SaleTotalCalculator::total([1000, -100], 0, 0));
     }
 
+    public function test_the_discount_parameter_is_subtracted_from_the_total(): void
+    {
+        $total = SaleTotalCalculator::total(
+            prices: [1000],
+            laborCharge: 350,
+            miscCharge: 125.50,
+            discount: 200,
+        );
+
+        $this->assertSame('1275.50', $total);
+    }
+
+    public function test_omitting_the_discount_parameter_behaves_exactly_as_before(): void
+    {
+        $this->assertSame(
+            SaleTotalCalculator::total([1000], 350, 125.50),
+            SaleTotalCalculator::total([1000], 350, 125.50, null),
+        );
+    }
+
+    public function test_a_blank_discount_counts_as_zero(): void
+    {
+        $this->assertSame('1000.00', SaleTotalCalculator::total([1000], 0, 0, ''));
+    }
+
     public function test_it_can_report_the_line_subtotal_separately_from_the_total(): void
     {
         $this->assertSame('1800.00', SaleTotalCalculator::lineSubtotal([1000, 800]));

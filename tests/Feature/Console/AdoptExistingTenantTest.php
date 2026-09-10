@@ -45,6 +45,10 @@ class AdoptExistingTenantTest extends TestCase
 
     private const DRAFT_SALE_PERMISSIONS_MIGRATION = '2026_09_04_203810_add_draft_sale_permissions';
 
+    private const DISCOUNT_TO_SALES_MIGRATION = '2026_09_10_000101_add_discount_to_sales_table';
+
+    private const DISCOUNT_TO_ORDERS_MIGRATION = '2026_09_10_000102_add_discount_to_orders_table';
+
     private const LEGACY_TENANT_MIGRATION_CUTOFF = '2026_09_01_135125_create_item_vehicle_compatibilities_table';
 
     private const LEGACY_NON_TENANT_MIGRATIONS = [
@@ -281,6 +285,8 @@ class AdoptExistingTenantTest extends TestCase
             self::ORDERS_MIGRATION,
             self::ORDER_LINES_MIGRATION,
             self::DRAFT_SALE_PERMISSIONS_MIGRATION,
+            self::DISCOUNT_TO_SALES_MIGRATION,
+            self::DISCOUNT_TO_ORDERS_MIGRATION,
         ];
         sort($expectedMigrations);
 
