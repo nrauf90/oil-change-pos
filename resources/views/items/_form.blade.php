@@ -1,4 +1,4 @@
-@props(['item' => null, 'types'])
+@props(['item' => null, 'types', 'categories' => []])
 
 @php
     use App\Enums\UnitOfMeasure;
@@ -38,6 +38,30 @@
             @endforeach
         </div>
         @error('type') <p class="mt-1 text-sm font-semibold text-red-600">{{ $message }}</p> @enderror
+    </div>
+
+    <div>
+        <label class="label" for="category_id">Category <span class="normal-case text-slate-400">(optional)</span></label>
+        <select id="category_id" name="category_id" class="field @error('category_id') border-red-500 @enderror">
+            <option value="">&mdash; No category &mdash;</option>
+            @foreach ($categories as $category)
+                <option value="{{ $category->id }}" @selected((string) old('category_id', $item?->category_id) === (string) $category->id)>
+                    {{ $category->name }}
+                </option>
+            @endforeach
+        </select>
+        @error('category_id') <p class="mt-1 text-sm font-semibold text-red-600">{{ $message }}</p> @enderror
+    </div>
+
+    <div>
+        <label class="label" for="selling_price">Selling price <span class="normal-case text-slate-400">(optional)</span></label>
+        <input id="selling_price" name="selling_price" type="text" inputmode="decimal"
+               class="field-money @error('selling_price') border-red-500 @enderror"
+               placeholder="0.00" value="{{ old('selling_price', $item?->selling_price) }}">
+        <p class="mt-1 text-xs font-medium text-slate-500">
+            What the counter charges for this item.
+        </p>
+        @error('selling_price') <p class="mt-1 text-sm font-semibold text-red-600">{{ $message }}</p> @enderror
     </div>
 
     @can('items.view_unit_cost')

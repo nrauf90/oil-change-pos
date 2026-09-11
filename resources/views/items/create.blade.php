@@ -7,7 +7,7 @@
 
     <form method="POST" action="{{ route('items.store') }}" class="card p-6">
         @csrf
-        @include('items._form', ['item' => null, 'types' => $types])
+        @include('items._form', ['item' => null, 'types' => $types, 'categories' => $categories])
 
         <div class="mt-6 flex gap-3">
             <button type="submit" class="btn-primary">Save item</button>

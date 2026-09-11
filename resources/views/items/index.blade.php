@@ -32,8 +32,17 @@
             <option value="inactive" @selected($activeStatus === 'inactive')>Retired only</option>
         </select>
     </div>
+    <div>
+        <label class="label" for="category">Category</label>
+        <select id="category" name="category" class="field">
+            <option value="">All categories</option>
+            @foreach ($categories as $category)
+                <option value="{{ $category->id }}" @selected((string) $activeCategory === (string) $category->id)>{{ $category->name }}</option>
+            @endforeach
+        </select>
+    </div>
     <button type="submit" class="btn-dark">Filter</button>
-    @if ($search || $activeType || $activeStatus)
+    @if ($search || $activeType || $activeStatus || $activeCategory)
         <a href="{{ route('items.index') }}" class="btn-ghost">Clear</a>
     @endif
 </form>
@@ -44,7 +53,8 @@
             <tr>
                 <th class="px-4 py-3">Item</th>
                 <th class="px-4 py-3">Type</th>
-                <th class="px-4 py-3 text-right">Unit cost</th>
+                <th class="px-4 py-3">Category</th>
+                <th class="px-4 py-3 text-right">Selling price</th>
                 <th class="px-4 py-3 text-right">Stock</th>
                 <th class="px-4 py-3 text-right">Actions</th>
             </tr>
@@ -64,11 +74,12 @@
                             {{ $item->type->label() }}
                         </span>
                     </td>
-                    @can('items.view_unit_cost')
-                        <td class="px-4 py-3 text-right font-mono tabular-nums text-slate-500">
-                            {{ $item->unit_cost !== null ? number_format((float) $item->unit_cost, 2) : '—' }}
-                        </td>
-                    @endcan
+                    <td class="px-4 py-3 text-sm font-medium text-slate-600">
+                        {{ $item->category?->name ?? '—' }}
+                    </td>
+                    <td class="px-4 py-3 text-right font-mono tabular-nums text-slate-500">
+                        {{ $item->selling_price !== null ? number_format((float) $item->selling_price, 2) : '—' }}
+                    </td>
                     <td class="px-4 py-3 text-right">
                         @if ($item->stockLabel() === null)
                             <span class="text-slate-400">Not tracked</span>
@@ -95,7 +106,7 @@
                 </tr>
             @empty
                 <tr>
-                    <td colspan="5" class="px-4 py-12 text-center font-semibold text-slate-400">
+                    <td colspan="6" class="px-4 py-12 text-center font-semibold text-slate-400">
                         No items yet. Add one, or quick-add from the sale screen.
                     </td>
                 </tr>

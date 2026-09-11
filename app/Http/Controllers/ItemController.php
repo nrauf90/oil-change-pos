@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Enums\ItemType;
 use App\Http\Requests\ItemRequest;
+use App\Models\Category;
 use App\Models\Item;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -19,11 +20,14 @@ class ItemController extends Controller
         $search = $this->queryString($request, 'q');
         $type = $this->queryString($request, 'type');
         $status = $this->queryString($request, 'status');
+        $categoryId = $this->queryInt($request, 'category');
 
         $items = Item::query()
+            ->with('category')
             ->ofType($type)
             ->status($status)
             ->search($search)
+            ->when($categoryId, fn ($query) => $query->where('category_id', $categoryId))
             ->orderBy('name')
             ->paginate(25)
             ->withQueryString();
@@ -31,15 +35,20 @@ class ItemController extends Controller
         return view('items.index', [
             'items' => $items,
             'types' => ItemType::cases(),
+            'categories' => Category::query()->orderBy('name')->get(),
             'activeType' => $type ?? '',
             'activeStatus' => $status ?? '',
+            'activeCategory' => $categoryId ?? '',
             'search' => $search ?? '',
         ]);
     }
 
     public function create(): View
     {
-        return view('items.create', ['types' => ItemType::cases()]);
+        return view('items.create', [
+            'types' => ItemType::cases(),
+            'categories' => Category::query()->orderBy('name')->get(),
+        ]);
     }
 
     public function store(ItemRequest $request): RedirectResponse
@@ -51,7 +60,11 @@ class ItemController extends Controller
 
     public function edit(Item $item): View
     {
-        return view('items.edit', ['item' => $item, 'types' => ItemType::cases()]);
+        return view('items.edit', [
+            'item' => $item,
+            'types' => ItemType::cases(),
+            'categories' => Category::query()->orderBy('name')->get(),
+        ]);
     }
 
     public function update(ItemRequest $request, Item $item): RedirectResponse
@@ -74,5 +87,12 @@ class ItemController extends Controller
         $value = $request->query($key);
 
         return is_string($value) ? $value : null;
+    }
+
+    private function queryInt(Request $request, string $key): ?int
+    {
+        $value = $this->queryString($request, $key);
+
+        return $value !== null && $value !== '' && ctype_digit($value) ? (int) $value : null;
     }
 }
