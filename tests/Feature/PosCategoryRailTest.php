@@ -200,4 +200,47 @@ class PosCategoryRailTest extends TestCase
             ->assertSee('year_from', false)
             ->assertSee((string) now()->year, false);
     }
+
+    /**
+     * Labor/Misc were replaced by a single flat Discount field — the counter
+     * never posts the old fields, and the Alpine config carries no trace of
+     * them either.
+     */
+    public function test_the_sale_screen_offers_a_discount_field_instead_of_labor_and_misc(): void
+    {
+        $response = $this->get(route('pos.create'))->assertOk();
+
+        $response
+            ->assertSee('name="discount"', false)
+            ->assertDontSee('name="labor_charge"', false)
+            ->assertDontSee('name="misc_charge"', false)
+            ->assertSee('"discount"', false)
+            ->assertDontSee('"labor"', false)
+            ->assertDontSee('"misc"', false);
+    }
+
+    /**
+     * The Custom line button used to live in the category rail. It now lives
+     * once, in the ticket pane, above the list of lines already on the bill.
+     */
+    public function test_the_custom_line_button_sits_once_in_the_ticket_pane_above_the_lines(): void
+    {
+        $html = (string) $this->get(route('pos.create'))->assertOk()->getContent();
+
+        // "Custom line" also names a line's *type* elsewhere on the page (the
+        // small-print under a hand-typed line); the button itself is the only
+        // place "+ Custom line" (its literal visible text) appears.
+        $this->assertSame(1, substr_count($html, '+ Custom line'));
+
+        $ticketStart = strpos($html, 'aria-label="Current ticket"');
+        $customLinePosition = strpos($html, '+ Custom line');
+        $ticketLinesStart = strpos($html, 'pos-scroll divide-y divide-slate-100');
+
+        $this->assertNotFalse($ticketStart);
+        $this->assertNotFalse($customLinePosition);
+        $this->assertNotFalse($ticketLinesStart);
+
+        $this->assertGreaterThan($ticketStart, $customLinePosition, 'Custom line should be inside the ticket pane, not the category rail.');
+        $this->assertLessThan($ticketLinesStart, $customLinePosition, 'Custom line should sit above the list of ticket lines.');
+    }
 }

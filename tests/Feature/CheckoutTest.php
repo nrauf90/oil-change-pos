@@ -553,8 +553,7 @@ class CheckoutTest extends TestCase
             'vehicle_plate' => 'ABC-123',
             'mileage' => 84500,
             'next_checkup_mileage' => 91234,
-            'labor_charge' => '750',
-            'misc_charge' => '125.50',
+            'discount' => '150',
             'lines' => [
                 ['item_id' => $oil->id, 'item_name' => 'ZIC 10W-40', 'type' => 'product', 'manually_charged_price' => '4200'],
                 ['item_id' => null, 'item_name' => '', 'type' => 'custom', 'manually_charged_price' => '900'],
@@ -571,8 +570,7 @@ class CheckoutTest extends TestCase
             ->assertSee('ABC-123', false)
             ->assertSee('84500', false)
             ->assertSee('next_checkup_mileage\\u0022:\\u002291234\\u0022', false)
-            ->assertSee('750', false)
-            ->assertSee('125.50', false)
+            ->assertSee('150', false)
             ->assertSee('4200', false)
             ->assertSee('900', false);
     }
