@@ -1,6 +1,7 @@
-@props(['item' => null, 'types'])
+@props(['item' => null, 'types', 'categories' => [], 'vehicleMakes' => [], 'vehicleModels' => []])
 
 @php
+    use App\Enums\ItemType;
     use App\Enums\UnitOfMeasure;
 
     $units = UnitOfMeasure::cases();
@@ -11,6 +12,17 @@
     $packLabel = old('pack_label', $item?->pack_label);
     $unitsPerPack = old('units_per_pack', $item?->units_per_pack);
     $measurePerUnit = old('measure_per_unit', $item?->measure_per_unit);
+
+    $selectedType = (string) old('type', $item?->type?->value ?? '');
+    $isUniversal = (bool) old('is_universal', $item?->is_universal ?? true);
+    $compatibilityRows = old('vehicle_compatibilities', $item?->vehicleCompatibilities
+        ->map(fn ($compatibility) => [
+            'vehicle_make_id' => (string) $compatibility->vehicleModel->vehicle_make_id,
+            'vehicle_model_id' => (string) $compatibility->vehicle_model_id,
+            'year_from' => (string) ($compatibility->year_from ?? ''),
+            'year_to' => (string) ($compatibility->year_to ?? ''),
+        ])
+        ->all() ?? []);
 @endphp
 
 <div class="grid gap-5 sm:grid-cols-2">
@@ -23,21 +35,149 @@
         @error('name') <p class="mt-1 text-sm font-semibold text-red-600">{{ $message }}</p> @enderror
     </div>
 
-    <div>
-        <span class="label">Type</span>
-        <div class="grid grid-cols-2 gap-2">
-            @foreach ($types as $type)
-                <label class="cursor-pointer">
-                    <input type="radio" name="type" value="{{ $type->value }}" class="peer sr-only"
-                           @checked(old('type', $item?->type?->value) === $type->value)>
-                    <span class="block rounded-lg border-2 border-slate-300 bg-white px-3 py-2.5 text-center text-sm font-bold
-                                 peer-checked:border-amber-500 peer-checked:bg-amber-100 peer-checked:text-amber-900">
-                        {{ $type->label() }}
-                    </span>
+    <div class="sm:col-span-2">
+        <label class="label" for="image">Photo <span class="normal-case text-slate-400">(optional)</span></label>
+        @if ($item?->image_path)
+            <div class="mb-2 flex items-center gap-3">
+                <img src="{{ route('items.image', $item) }}" alt="{{ $item->name }}"
+                     class="size-16 rounded-lg border-2 border-slate-300 object-cover">
+                <label class="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-600">
+                    <input type="checkbox" name="remove_image" value="1" class="size-4">
+                    Remove image
                 </label>
-            @endforeach
+            </div>
+        @endif
+        <input id="image" name="image" type="file" accept="image/*"
+               class="field @error('image') border-red-500 @enderror">
+        @error('image') <p class="mt-1 text-sm font-semibold text-red-600">{{ $message }}</p> @enderror
+    </div>
+
+    <div class="sm:col-span-2 grid gap-5 sm:grid-cols-2"
+         x-data="{
+             type: @js($selectedType),
+             isUniversal: @js($isUniversal),
+             vehicleMakes: @js($vehicleMakes->map(fn ($make) => ['id' => (string) $make->id, 'name' => $make->name])->values()),
+             vehicleModels: @js($vehicleModels->map(fn ($model) => ['id' => (string) $model->id, 'vehicle_make_id' => (string) $model->vehicle_make_id, 'name' => $model->name])->values()),
+             compatibilities: @js(count($compatibilityRows) > 0 ? array_values($compatibilityRows) : [['vehicle_make_id' => '', 'vehicle_model_id' => '', 'year_from' => '', 'year_to' => '']]),
+             get isProduct() { return this.type === @js(ItemType::Product->value) },
+             modelsForMake(makeId) {
+                 return this.vehicleModels.filter(model => model.vehicle_make_id === makeId);
+             },
+             addCompatibilityRow() {
+                 this.compatibilities.push({ vehicle_make_id: '', vehicle_model_id: '', year_from: '', year_to: '' });
+             },
+             removeCompatibilityRow(index) {
+                 this.compatibilities.splice(index, 1);
+             },
+         }">
+        <div>
+            <span class="label">Type</span>
+            <div class="grid grid-cols-2 gap-2">
+                @foreach ($types as $type)
+                    <label class="cursor-pointer">
+                        <input type="radio" name="type" value="{{ $type->value }}" class="peer sr-only" x-model="type"
+                               @checked(old('type', $item?->type?->value) === $type->value)>
+                        <span class="block rounded-lg border-2 border-slate-300 bg-white px-3 py-2.5 text-center text-sm font-bold
+                                     peer-checked:border-amber-500 peer-checked:bg-amber-100 peer-checked:text-amber-900">
+                            {{ $type->label() }}
+                        </span>
+                    </label>
+                @endforeach
+            </div>
+            @error('type') <p class="mt-1 text-sm font-semibold text-red-600">{{ $message }}</p> @enderror
         </div>
-        @error('type') <p class="mt-1 text-sm font-semibold text-red-600">{{ $message }}</p> @enderror
+
+        <div x-show="isProduct" x-cloak>
+            <span class="label">Vehicle fit</span>
+            <label class="flex cursor-pointer items-center gap-3 rounded-lg border-2 border-slate-300 bg-white px-4 py-3">
+                <input type="hidden" name="is_universal" value="0">
+                <input id="is_universal" name="is_universal" type="checkbox" value="1" class="size-5" x-model="isUniversal">
+                <span class="text-sm font-bold">Universal &mdash; fits every vehicle</span>
+            </label>
+            <p class="mt-1 text-xs font-medium text-slate-500">
+                Untick to specify the exact makes, models, and model years this part fits.
+            </p>
+        </div>
+
+        <div class="sm:col-span-2 space-y-3 rounded-xl border-2 border-dashed border-slate-300 p-4"
+             x-show="isProduct && ! isUniversal" x-cloak>
+            <div class="flex items-center justify-between gap-3">
+                <div>
+                    <p class="text-sm font-bold text-slate-900">Compatible vehicles</p>
+                    <p class="text-xs font-medium text-slate-500">Choose the make, model, and model years this part fits.</p>
+                </div>
+                <button type="button" class="btn-ghost !py-2" @click="addCompatibilityRow()">+ Add vehicle</button>
+            </div>
+
+            <template x-for="(row, index) in compatibilities" :key="index">
+                <div class="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:grid-cols-4">
+                    <div>
+                        <label class="label">Make</label>
+                        <select class="field !py-2" x-model="row.vehicle_make_id" @change="row.vehicle_model_id = ''">
+                            <option value="">Choose make</option>
+                            <template x-for="make in vehicleMakes" :key="make.id">
+                                <option :value="make.id" x-text="make.name"></option>
+                            </template>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="label">Model</label>
+                        <select class="field !py-2" x-model="row.vehicle_model_id"
+                                :name="'vehicle_compatibilities[' + index + '][vehicle_model_id]'"
+                                :disabled="modelsForMake(row.vehicle_make_id).length === 0">
+                            <option value="">Choose model</option>
+                            <template x-for="model in modelsForMake(row.vehicle_make_id)" :key="model.id">
+                                <option :value="model.id" x-text="model.name"></option>
+                            </template>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="label">Year from</label>
+                        <input type="text" inputmode="numeric" class="field !py-2" x-model="row.year_from"
+                               :name="'vehicle_compatibilities[' + index + '][year_from]'" placeholder="2000">
+                    </div>
+
+                    <div class="flex items-end gap-2">
+                        <div class="flex-1">
+                            <label class="label">Year to</label>
+                            <input type="text" inputmode="numeric" class="field !py-2" x-model="row.year_to"
+                                   :name="'vehicle_compatibilities[' + index + '][year_to]'" placeholder="2026">
+                        </div>
+                        <button type="button" class="btn-ghost !px-3 !py-1.5" x-show="compatibilities.length > 1"
+                                @click="removeCompatibilityRow(index)">
+                            Remove
+                        </button>
+                    </div>
+                </div>
+            </template>
+            @error('vehicle_compatibilities') <p class="text-sm font-semibold text-red-600">{{ $message }}</p> @enderror
+        </div>
+    </div>
+
+    <div>
+        <label class="label" for="category_id">Category <span class="normal-case text-slate-400">(optional)</span></label>
+        <select id="category_id" name="category_id" class="field @error('category_id') border-red-500 @enderror">
+            <option value="">&mdash; No category &mdash;</option>
+            @foreach ($categories as $category)
+                <option value="{{ $category->id }}" @selected((string) old('category_id', $item?->category_id) === (string) $category->id)>
+                    {{ $category->name }}
+                </option>
+            @endforeach
+        </select>
+        @error('category_id') <p class="mt-1 text-sm font-semibold text-red-600">{{ $message }}</p> @enderror
+    </div>
+
+    <div>
+        <label class="label" for="selling_price">Selling price <span class="normal-case text-slate-400">(optional)</span></label>
+        <input id="selling_price" name="selling_price" type="text" inputmode="decimal"
+               class="field-money @error('selling_price') border-red-500 @enderror"
+               placeholder="0.00" value="{{ old('selling_price', $item?->selling_price) }}">
+        <p class="mt-1 text-xs font-medium text-slate-500">
+            What the counter charges for this item.
+        </p>
+        @error('selling_price') <p class="mt-1 text-sm font-semibold text-red-600">{{ $message }}</p> @enderror
     </div>
 
     @can('items.view_unit_cost')

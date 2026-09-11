@@ -49,6 +49,10 @@ class AdoptExistingTenantTest extends TestCase
 
     private const DISCOUNT_TO_ORDERS_MIGRATION = '2026_09_10_000102_add_discount_to_orders_table';
 
+    private const CATEGORIES_MIGRATION = '2026_09_10_120000_create_categories_table';
+
+    private const ITEM_SELLING_PRICE_CATEGORY_IMAGE_MIGRATION = '2026_09_10_120100_add_selling_price_category_and_image_to_items_table';
+
     private const LEGACY_TENANT_MIGRATION_CUTOFF = '2026_09_01_135125_create_item_vehicle_compatibilities_table';
 
     private const LEGACY_NON_TENANT_MIGRATIONS = [
@@ -258,11 +262,28 @@ class AdoptExistingTenantTest extends TestCase
         // gains the tables newer features need. Each one is additive and
         // starts empty — nothing the customer already had is touched.
         $this->assertEqualsCanonicalizing(
-            [...$beforeTables, 'tenant_installations', 'password_reset_tokens', 'expense_receipts', 'orders', 'order_lines'],
+            [...$beforeTables, 'tenant_installations', 'password_reset_tokens', 'expense_receipts', 'orders', 'order_lines', 'categories'],
             $afterTables,
         );
-        $this->assertSame($beforeColumns, $source->getSchemaBuilder()->getColumnListing('items'));
-        $this->assertSame($beforeItem, (array) $source->table('items')->where('name', 'Preserved filter')->first());
+        // Adoption also runs the new inventory columns' migration, so the
+        // items table gains selling_price/category_id/image columns — still
+        // additive, still starting empty for every existing row.
+        $this->assertEqualsCanonicalizing(
+            [...$beforeColumns, 'selling_price', 'category_id', 'image_path', 'image_original_name', 'image_mime_type'],
+            $source->getSchemaBuilder()->getColumnListing('items'),
+        );
+        $afterItem = (array) $source->table('items')->where('name', 'Preserved filter')->first();
+        $this->assertSame(
+            [
+                'selling_price' => null,
+                'category_id' => null,
+                'image_path' => null,
+                'image_original_name' => null,
+                'image_mime_type' => null,
+            ],
+            array_intersect_key($afterItem, array_flip(['selling_price', 'category_id', 'image_path', 'image_original_name', 'image_mime_type'])),
+        );
+        $this->assertSame($beforeItem, array_diff_key($afterItem, array_flip(['selling_price', 'category_id', 'image_path', 'image_original_name', 'image_mime_type'])));
 
         // Self-service password reset adds a nullable users.email during
         // adoption. The point of this test is that adoption never *alters*
@@ -287,6 +308,8 @@ class AdoptExistingTenantTest extends TestCase
             self::DRAFT_SALE_PERMISSIONS_MIGRATION,
             self::DISCOUNT_TO_SALES_MIGRATION,
             self::DISCOUNT_TO_ORDERS_MIGRATION,
+            self::CATEGORIES_MIGRATION,
+            self::ITEM_SELLING_PRICE_CATEGORY_IMAGE_MIGRATION,
         ];
         sort($expectedMigrations);
 

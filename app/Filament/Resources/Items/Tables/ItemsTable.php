@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Items\Tables;
 use App\Enums\ItemType;
 use App\Enums\Permission;
 use App\Filament\Resources\Items\ItemResource;
+use App\Models\Category;
 use App\Models\Item;
 use App\Models\VehicleMake;
 use App\Models\VehicleModel;
@@ -37,6 +38,7 @@ class ItemsTable
     {
         return $table
             ->modifyQueryUsing(fn (Builder $query): Builder => $query->with([
+                'category',
                 'vehicleCompatibilities.vehicleModel.vehicleMake',
             ]))
             ->columns([
@@ -51,6 +53,11 @@ class ItemsTable
                     ->badge()
                     ->formatStateUsing(fn (ItemType $state): string => $state->label())
                     ->color(fn (ItemType $state): string => $state === ItemType::Product ? 'info' : 'warning')
+                    ->sortable(),
+
+                TextColumn::make('category.name')
+                    ->label('Category')
+                    ->placeholder('—')
                     ->sortable(),
 
                 TextColumn::make('compatibility_summary')
@@ -91,6 +98,10 @@ class ItemsTable
                     ->options(collect(ItemType::cases())->mapWithKeys(
                         fn (ItemType $type) => [$type->value => $type->label()]
                     )),
+
+                SelectFilter::make('category_id')
+                    ->label('Category')
+                    ->options(fn (): array => Category::query()->orderBy('name')->pluck('name', 'id')->all()),
 
                 TernaryFilter::make('is_active')
                     ->label('On the sale screen')

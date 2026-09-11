@@ -7,7 +7,9 @@ namespace App\Http\Requests;
 use App\Enums\ItemType;
 use App\Enums\Permission;
 use App\Enums\UnitOfMeasure;
+use App\Models\Category;
 use App\Models\Item;
+use App\Models\VehicleModel;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -28,10 +30,19 @@ class ItemRequest extends FormRequest
             'units_per_pack' => ['nullable', 'integer', 'min:1', 'max:9999'],
             'measure_per_unit' => ['nullable', 'numeric', 'min:0', 'max:99999'],
             'unit_cost' => ['nullable', 'numeric', 'min:0', 'max:99999999'],
+            'selling_price' => ['nullable', 'numeric', 'min:0', 'max:99999999'],
+            'category_id' => ['nullable', Rule::exists(Category::class, 'id')],
+            'image' => ['nullable', 'image', 'mimes:jpeg,jpg,png,webp', 'max:4096'],
+            'remove_image' => ['sometimes', 'boolean'],
             // Decimal, not integer: half a litre of oil is a real amount of stock.
             'stock_level' => ['nullable', 'numeric', 'min:0', 'max:99999999'],
             'low_stock_alert' => ['nullable', 'numeric', 'min:0', 'max:99999999'],
             'is_active' => ['sometimes', 'boolean'],
+            'is_universal' => ['sometimes', 'boolean'],
+            'vehicle_compatibilities' => ['array'],
+            'vehicle_compatibilities.*.vehicle_model_id' => ['nullable', 'integer', Rule::exists(VehicleModel::class, 'id')],
+            'vehicle_compatibilities.*.year_from' => ['nullable', 'integer', 'min:2000', 'max:2026'],
+            'vehicle_compatibilities.*.year_to' => ['nullable', 'integer', 'min:2000', 'max:2026'],
         ];
     }
 
@@ -86,6 +97,8 @@ class ItemRequest extends FormRequest
             'unit_of_measure' => $unit,
             'stock_level' => $this->blankToNull($this->stock_level),
             'low_stock_alert' => $this->blankToNull($this->low_stock_alert),
+            'selling_price' => $this->blankToNull($this->selling_price),
+            'category_id' => $this->blankToNull($this->category_id),
             'pack_label' => is_string($this->pack_label) ? trim($this->pack_label) : $this->pack_label,
             'units_per_pack' => $this->blankToNull($this->units_per_pack),
             'measure_per_unit' => $this->blankToNull($this->measure_per_unit),
