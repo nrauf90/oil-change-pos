@@ -4,7 +4,10 @@ namespace Tests\Feature;
 
 use App\Models\Category;
 use App\Models\Item;
+use App\Models\ItemVehicleCompatibility;
 use App\Models\User;
+use App\Models\VehicleMake;
+use App\Models\VehicleModel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -250,5 +253,85 @@ class ItemInventoryEnhancementsTest extends TestCase
         $response->assertOk()
             ->assertSee('Brake Fluid')
             ->assertDontSee('Engine Oil');
+    }
+
+    public function test_creating_a_non_universal_product_persists_its_vehicle_compatibility_rows(): void
+    {
+        $make = VehicleMake::factory()->create(['name' => 'Toyota']);
+        $model = VehicleModel::factory()->for($make)->create(['name' => 'Corolla']);
+
+        $this->post(route('items.store'), [
+            'name' => 'Corolla Brake Pad',
+            'type' => 'product',
+            'is_universal' => '0',
+            'vehicle_compatibilities' => [
+                ['vehicle_model_id' => $model->id, 'year_from' => '2010', 'year_to' => '2015'],
+            ],
+        ])->assertRedirect(route('items.index'));
+
+        $item = Item::sole();
+        $this->assertFalse($item->is_universal);
+        $this->assertDatabaseHas('item_vehicle_compatibilities', [
+            'item_id' => $item->id,
+            'vehicle_model_id' => $model->id,
+            'year_from' => 2010,
+            'year_to' => 2015,
+        ], 'tenant');
+    }
+
+    public function test_switching_an_item_to_universal_on_update_clears_existing_compatibility_rows(): void
+    {
+        $make = VehicleMake::factory()->create();
+        $model = VehicleModel::factory()->for($make)->create();
+        $item = Item::factory()->create(['is_universal' => false]);
+        ItemVehicleCompatibility::factory()->for($item)->for($model)->create();
+
+        $this->put(route('items.update', $item), [
+            'name' => $item->name,
+            'type' => 'product',
+            'is_universal' => '1',
+        ])->assertRedirect(route('items.index'));
+
+        $this->assertDatabaseCount('item_vehicle_compatibilities', 0, 'tenant');
+        $this->assertTrue($item->refresh()->is_universal);
+    }
+
+    public function test_submitting_an_invalid_vehicle_model_id_is_rejected(): void
+    {
+        $this->post(route('items.store'), [
+            'name' => 'Mystery Compatible Part',
+            'type' => 'product',
+            'is_universal' => '0',
+            'vehicle_compatibilities' => [
+                ['vehicle_model_id' => 999999, 'year_from' => '2010', 'year_to' => '2015'],
+            ],
+        ])->assertSessionHasErrors('vehicle_compatibilities.0.vehicle_model_id');
+
+        $this->assertDatabaseCount('items', 0, 'tenant');
+    }
+
+    public function test_a_duplicate_compatibility_row_within_one_submission_surfaces_a_validation_error_not_a_500(): void
+    {
+        $make = VehicleMake::factory()->create();
+        $model = VehicleModel::factory()->for($make)->create();
+
+        // Both rows are individually valid, so Laravel's form-request
+        // validation passes them through — it is `ItemVehicleCompatibility`'s
+        // own `booted()` duplicate guard that has to catch the repeat, and
+        // its `ValidationException` has to redirect back with errors rather
+        // than bubble up as an unhandled 500.
+        $response = $this->from(route('items.create'))->post(route('items.store'), [
+            'name' => 'Duplicate Row Part',
+            'type' => 'product',
+            'is_universal' => '0',
+            'vehicle_compatibilities' => [
+                ['vehicle_model_id' => $model->id, 'year_from' => '2010', 'year_to' => '2015'],
+                ['vehicle_model_id' => $model->id, 'year_from' => '2010', 'year_to' => '2015'],
+            ],
+        ]);
+
+        $response->assertRedirect(route('items.create'))
+            ->assertSessionHasErrors('vehicle_model_id');
+        $this->assertDatabaseCount('item_vehicle_compatibilities', 1, 'tenant');
     }
 }

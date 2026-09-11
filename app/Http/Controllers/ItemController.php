@@ -7,6 +7,8 @@ use App\Enums\ItemType;
 use App\Http\Requests\ItemRequest;
 use App\Models\Category;
 use App\Models\Item;
+use App\Models\VehicleMake;
+use App\Models\VehicleModel;
 use App\Tenancy\TenantStoragePath;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -60,6 +62,8 @@ class ItemController extends Controller
         return view('items.create', [
             'types' => ItemType::cases(),
             'categories' => Category::query()->orderBy('name')->get(),
+            'vehicleMakes' => VehicleMake::query()->orderBy('name')->get(),
+            'vehicleModels' => VehicleModel::query()->orderBy('name')->get(['id', 'vehicle_make_id', 'name']),
         ]);
     }
 
@@ -68,6 +72,7 @@ class ItemController extends Controller
         $item = Item::create($request->validated());
 
         $attachImage($item, $request->file('image'), $request->boolean('remove_image'));
+        $this->syncVehicleCompatibilities($item, $request);
 
         return to_route('items.index')->with('status', "\"{$item->name}\" added to inventory.");
     }
@@ -75,9 +80,11 @@ class ItemController extends Controller
     public function edit(Item $item): View
     {
         return view('items.edit', [
-            'item' => $item,
+            'item' => $item->load('vehicleCompatibilities.vehicleModel.vehicleMake'),
             'types' => ItemType::cases(),
             'categories' => Category::query()->orderBy('name')->get(),
+            'vehicleMakes' => VehicleMake::query()->orderBy('name')->get(),
+            'vehicleModels' => VehicleModel::query()->orderBy('name')->get(['id', 'vehicle_make_id', 'name']),
         ]);
     }
 
@@ -86,6 +93,7 @@ class ItemController extends Controller
         $item->update($request->validated());
 
         $attachImage($item, $request->file('image'), $request->boolean('remove_image'));
+        $this->syncVehicleCompatibilities($item, $request);
 
         return to_route('items.index')->with('status', "\"{$item->name}\" updated.");
     }
@@ -115,6 +123,39 @@ class ItemController extends Controller
             $item->image_original_name,
             ['X-Content-Type-Options' => 'nosniff', 'Content-Type' => $item->image_mime_type],
         );
+    }
+
+    /**
+     * Replaces an item's vehicle compatibility rows wholesale — delete all,
+     * then recreate from the submitted set. Only a non-universal Product
+     * carries any; a blank trailing row from the form is skipped, not an
+     * error. `ItemVehicleCompatibility::booted()` still enforces the year
+     * range, duplicate, and product-only invariants on each insert.
+     */
+    private function syncVehicleCompatibilities(Item $item, Request $request): void
+    {
+        $item->vehicleCompatibilities()->delete();
+
+        if ($item->type !== ItemType::Product || $item->is_universal) {
+            return;
+        }
+
+        /** @var array<int, array<string, mixed>> $rows */
+        $rows = $request->input('vehicle_compatibilities', []);
+
+        foreach ($rows as $row) {
+            $vehicleModelId = $row['vehicle_model_id'] ?? null;
+
+            if ($vehicleModelId === null || $vehicleModelId === '') {
+                continue;
+            }
+
+            $item->vehicleCompatibilities()->create([
+                'vehicle_model_id' => $vehicleModelId,
+                'year_from' => $row['year_from'] ?: null,
+                'year_to' => $row['year_to'] ?: null,
+            ]);
+        }
     }
 
     private function queryString(Request $request, string $key): ?string

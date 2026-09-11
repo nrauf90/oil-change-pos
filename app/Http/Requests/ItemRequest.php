@@ -9,6 +9,7 @@ use App\Enums\Permission;
 use App\Enums\UnitOfMeasure;
 use App\Models\Category;
 use App\Models\Item;
+use App\Models\VehicleModel;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -37,6 +38,11 @@ class ItemRequest extends FormRequest
             'stock_level' => ['nullable', 'numeric', 'min:0', 'max:99999999'],
             'low_stock_alert' => ['nullable', 'numeric', 'min:0', 'max:99999999'],
             'is_active' => ['sometimes', 'boolean'],
+            'is_universal' => ['sometimes', 'boolean'],
+            'vehicle_compatibilities' => ['array'],
+            'vehicle_compatibilities.*.vehicle_model_id' => ['nullable', 'integer', Rule::exists(VehicleModel::class, 'id')],
+            'vehicle_compatibilities.*.year_from' => ['nullable', 'integer', 'min:2000', 'max:2026'],
+            'vehicle_compatibilities.*.year_to' => ['nullable', 'integer', 'min:2000', 'max:2026'],
         ];
     }
 

@@ -7,7 +7,13 @@
 
     <form method="POST" action="{{ route('items.update', $item) }}" enctype="multipart/form-data" class="card p-6">
         @csrf @method('PUT')
-        @include('items._form', ['item' => $item, 'types' => $types, 'categories' => $categories])
+        @include('items._form', [
+            'item' => $item,
+            'types' => $types,
+            'categories' => $categories,
+            'vehicleMakes' => $vehicleMakes,
+            'vehicleModels' => $vehicleModels,
+        ])
 
         <div class="mt-6 flex gap-3">
             <button type="submit" class="btn-primary">Save changes</button>
