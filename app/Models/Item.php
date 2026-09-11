@@ -9,6 +9,7 @@ use App\Enums\UnitOfMeasure;
 use Database\Factories\ItemFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Item extends TenantModel
@@ -20,8 +21,9 @@ class Item extends TenantModel
     protected $attributes = ['unit_of_measure' => 'piece'];
 
     protected $fillable = [
-        'name', 'type', 'is_universal', 'unit_cost', 'unit_of_measure', 'pack_label',
-        'units_per_pack', 'measure_per_unit', 'stock_level', 'low_stock_alert', 'is_active',
+        'name', 'type', 'is_universal', 'unit_cost', 'selling_price', 'category_id',
+        'unit_of_measure', 'pack_label', 'units_per_pack', 'measure_per_unit', 'stock_level',
+        'low_stock_alert', 'is_active',
     ];
 
     /** @return array<string, string> */
@@ -34,6 +36,7 @@ class Item extends TenantModel
             'units_per_pack' => 'integer',
             'measure_per_unit' => 'decimal:3',
             'unit_cost' => 'decimal:2',
+            'selling_price' => 'decimal:2',
             'stock_level' => 'decimal:3',
             'low_stock_alert' => 'decimal:3',
             'is_active' => 'boolean',
@@ -44,6 +47,12 @@ class Item extends TenantModel
     public function saleItems(): HasMany
     {
         return $this->hasMany(SaleItem::class);
+    }
+
+    /** @return BelongsTo<Category, $this> */
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(Category::class);
     }
 
     /** @return HasMany<ItemVehicleCompatibility, $this> */
