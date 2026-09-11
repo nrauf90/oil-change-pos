@@ -44,14 +44,21 @@ class UnitCostConfidentialityTest extends TestCase
             ->assertDontSee('6800.00');
     }
 
-    public function test_the_inventory_list_shows_unit_cost_to_an_admin(): void
+    /**
+     * Unit cost was dropped from the inventory list entirely — for every
+     * viewer, admin included — in favour of the selling price column. It
+     * still shows on the item form, gated as before; see
+     * `test_the_item_form_shows_the_unit_cost_field_to_an_admin` below.
+     */
+    public function test_the_inventory_list_hides_unit_cost_from_an_admin_too(): void
     {
         $this->item();
 
         $this->actingAs(User::factory()->admin()->create())
             ->get(route('items.index'))
             ->assertOk()
-            ->assertSee('6,800.00');
+            ->assertDontSee('6,800.00')
+            ->assertDontSee('6800.00');
     }
 
     public function test_the_item_form_hides_the_unit_cost_field_from_a_manager(): void
