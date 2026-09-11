@@ -217,4 +217,38 @@ class ItemInventoryEnhancementsTest extends TestCase
 
         Storage::disk('local')->assertMissing($path);
     }
+
+    public function test_a_plain_request_to_the_inventory_index_returns_the_full_page(): void
+    {
+        Item::factory()->create(['name' => 'Brake Fluid']);
+
+        $this->get(route('items.index'))
+            ->assertOk()
+            ->assertSee('<h1', false)
+            ->assertSee('Inventory')
+            ->assertSee('Brake Fluid');
+    }
+
+    public function test_a_live_search_request_returns_only_the_results_fragment(): void
+    {
+        Item::factory()->create(['name' => 'Brake Fluid']);
+
+        $response = $this->get(route('items.index'), ['X-Inventory-Search' => '1']);
+
+        $response->assertOk()
+            ->assertSee('Brake Fluid')
+            ->assertDontSee('<h1', false);
+    }
+
+    public function test_a_live_search_request_filters_by_the_search_term(): void
+    {
+        Item::factory()->create(['name' => 'Brake Fluid']);
+        Item::factory()->create(['name' => 'Engine Oil']);
+
+        $response = $this->get(route('items.index', ['q' => 'Brake']), ['X-Inventory-Search' => '1']);
+
+        $response->assertOk()
+            ->assertSee('Brake Fluid')
+            ->assertDontSee('Engine Oil');
+    }
 }

@@ -10,13 +10,14 @@ use App\Models\Item;
 use App\Tenancy\TenantStoragePath;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ItemController extends Controller
 {
-    public function index(Request $request): View
+    public function index(Request $request): View|Response
     {
         // $request->string() on an array parameter (?q[]=a) warns and then
         // searches for the literal "Array". Take the query value only when it
@@ -35,6 +36,13 @@ class ItemController extends Controller
             ->orderBy('name')
             ->paginate(25)
             ->withQueryString();
+
+        // The live-search filter bar fetches just the results fragment so
+        // typing never reloads the whole page. A normal request still gets
+        // the full page, which itself includes the very same partial.
+        if ($request->header('X-Inventory-Search') === '1') {
+            return response(view('items._results', ['items' => $items])->render());
+        }
 
         return view('items.index', [
             'items' => $items,
