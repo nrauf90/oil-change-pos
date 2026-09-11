@@ -2,13 +2,17 @@
 
 namespace App\Http\Controllers;
 
+use App\Actions\AttachItemImage;
 use App\Enums\ItemType;
 use App\Http\Requests\ItemRequest;
 use App\Models\Category;
 use App\Models\Item;
+use App\Tenancy\TenantStoragePath;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ItemController extends Controller
 {
@@ -51,9 +55,11 @@ class ItemController extends Controller
         ]);
     }
 
-    public function store(ItemRequest $request): RedirectResponse
+    public function store(ItemRequest $request, AttachItemImage $attachImage): RedirectResponse
     {
         $item = Item::create($request->validated());
+
+        $attachImage($item, $request->file('image'), $request->boolean('remove_image'));
 
         return to_route('items.index')->with('status', "\"{$item->name}\" added to inventory.");
     }
@@ -67,19 +73,40 @@ class ItemController extends Controller
         ]);
     }
 
-    public function update(ItemRequest $request, Item $item): RedirectResponse
+    public function update(ItemRequest $request, Item $item, AttachItemImage $attachImage): RedirectResponse
     {
         $item->update($request->validated());
+
+        $attachImage($item, $request->file('image'), $request->boolean('remove_image'));
 
         return to_route('items.index')->with('status', "\"{$item->name}\" updated.");
     }
 
-    public function destroy(Item $item): RedirectResponse
+    public function destroy(Item $item, AttachItemImage $attachImage): RedirectResponse
     {
         $name = $item->name;
+
+        // The file goes before the row, so nothing orphaned is left on disk.
+        $attachImage($item, null, remove: true);
         $item->delete();
 
         return to_route('items.index')->with('status', "\"{$name}\" removed from inventory.");
+    }
+
+    /**
+     * Streams an item's photo back from the private disk. Nothing is ever
+     * served by URL — this route is the only way in.
+     */
+    public function image(Item $item, TenantStoragePath $storagePaths): StreamedResponse
+    {
+        $path = $storagePaths->readablePath($item->image_path, AttachItemImage::DIRECTORY);
+        abort_if($path === null, 404);
+
+        return Storage::disk('local')->response(
+            $path,
+            $item->image_original_name,
+            ['X-Content-Type-Options' => 'nosniff', 'Content-Type' => $item->image_mime_type],
+        );
     }
 
     private function queryString(Request $request, string $key): ?string

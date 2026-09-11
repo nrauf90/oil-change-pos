@@ -31,6 +31,8 @@ class ItemRequest extends FormRequest
             'unit_cost' => ['nullable', 'numeric', 'min:0', 'max:99999999'],
             'selling_price' => ['nullable', 'numeric', 'min:0', 'max:99999999'],
             'category_id' => ['nullable', Rule::exists(Category::class, 'id')],
+            'image' => ['nullable', 'image', 'mimes:jpeg,jpg,png,webp', 'max:4096'],
+            'remove_image' => ['sometimes', 'boolean'],
             // Decimal, not integer: half a litre of oil is a real amount of stock.
             'stock_level' => ['nullable', 'numeric', 'min:0', 'max:99999999'],
             'low_stock_alert' => ['nullable', 'numeric', 'min:0', 'max:99999999'],

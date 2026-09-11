@@ -5,7 +5,7 @@
 <div class="mx-auto max-w-2xl">
     <h1 class="mb-5 text-3xl font-black tracking-tight">New inventory item</h1>
 
-    <form method="POST" action="{{ route('items.store') }}" class="card p-6">
+    <form method="POST" action="{{ route('items.store') }}" enctype="multipart/form-data" class="card p-6">
         @csrf
         @include('items._form', ['item' => null, 'types' => $types, 'categories' => $categories])
 

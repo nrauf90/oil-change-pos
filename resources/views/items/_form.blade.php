@@ -23,6 +23,23 @@
         @error('name') <p class="mt-1 text-sm font-semibold text-red-600">{{ $message }}</p> @enderror
     </div>
 
+    <div class="sm:col-span-2">
+        <label class="label" for="image">Photo <span class="normal-case text-slate-400">(optional)</span></label>
+        @if ($item?->image_path)
+            <div class="mb-2 flex items-center gap-3">
+                <img src="{{ route('items.image', $item) }}" alt="{{ $item->name }}"
+                     class="size-16 rounded-lg border-2 border-slate-300 object-cover">
+                <label class="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-600">
+                    <input type="checkbox" name="remove_image" value="1" class="size-4">
+                    Remove image
+                </label>
+            </div>
+        @endif
+        <input id="image" name="image" type="file" accept="image/*"
+               class="field @error('image') border-red-500 @enderror">
+        @error('image') <p class="mt-1 text-sm font-semibold text-red-600">{{ $message }}</p> @enderror
+    </div>
+
     <div>
         <span class="label">Type</span>
         <div class="grid grid-cols-2 gap-2">

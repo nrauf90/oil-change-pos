@@ -63,11 +63,21 @@
             @forelse ($items as $item)
                 <tr class="hover:bg-amber-50/60">
                     <td class="px-4 py-3 text-base font-bold">
-                        {{ $item->name }}
-                        @unless ($item->is_active)
-                            <span data-status-badge="inactive" class="pill ml-1 bg-slate-200 text-slate-600"
-                                  title="Hidden from the sale screen">Inactive</span>
-                        @endunless
+                        <div class="flex items-center gap-3">
+                            @if ($item->image_path)
+                                <img src="{{ route('items.image', $item) }}" alt="{{ $item->name }}"
+                                     class="size-10 shrink-0 rounded-lg border border-slate-200 object-cover">
+                            @else
+                                <span class="flex size-10 shrink-0 items-center justify-center rounded-lg border border-dashed border-slate-300 text-slate-300">—</span>
+                            @endif
+                            <span>
+                                {{ $item->name }}
+                                @unless ($item->is_active)
+                                    <span data-status-badge="inactive" class="pill ml-1 bg-slate-200 text-slate-600"
+                                          title="Hidden from the sale screen">Inactive</span>
+                                @endunless
+                            </span>
+                        </div>
                     </td>
                     <td class="px-4 py-3">
                         <span class="pill {{ $item->type === \App\Enums\ItemType::Product ? 'bg-sky-100 text-sky-800' : 'bg-violet-100 text-violet-800' }}">

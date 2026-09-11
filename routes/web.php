@@ -173,6 +173,11 @@ $tenantRoutes = static function (): void {
 
             Route::delete('/items/{item}', [ItemController::class, 'destroy'])
                 ->middleware('permission:items.delete')->name('items.destroy');
+
+            // Never served by URL — a photo is streamed back the same way a
+            // receipt is, through an authenticated route.
+            Route::get('/items/{item}/image', [ItemController::class, 'image'])
+                ->middleware('permission:items.view_any')->name('items.image');
         });
 
         /*
