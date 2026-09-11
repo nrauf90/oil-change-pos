@@ -348,7 +348,7 @@
             </div>
 
             <div class="pos-scroll p-3">
-                <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-3 min-[1440px]:grid-cols-4">
                     <template x-for="item in visibleItems" :key="item.id">
                         <button type="button" class="pos-tile"
                                 :class="poppedId === item.id ? 'pos-popped border-amber-500 ring-2 ring-amber-300' : ''"
@@ -397,7 +397,7 @@
         {{-- ------------------------------------------------------------ --}}
         {{-- B3. The ticket                                               --}}
         {{-- ------------------------------------------------------------ --}}
-        <aside class="pos-pane inset-0 z-40 w-full shrink-0 lg:static lg:z-auto lg:w-80 xl:w-[22rem]"
+        <aside class="pos-pane inset-0 z-40 w-full shrink-0 lg:static lg:z-auto lg:w-[26rem] xl:w-[30rem] 2xl:w-[32rem]"
                :class="ticketOpen ? 'fixed flex rounded-none lg:static lg:rounded-2xl' : 'hidden lg:flex'"
                aria-label="Current ticket">
 
