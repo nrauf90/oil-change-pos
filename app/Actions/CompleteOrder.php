@@ -66,6 +66,7 @@ class CompleteOrder
             'notes' => $order->notes,
             'labor_charge' => $order->labor_charge,
             'misc_charge' => $order->misc_charge,
+            'discount' => $order->discount,
             'lines' => $order->lines->map(fn ($line): array => [
                 'item_id' => $line->item_id,
                 'item_name' => $line->item_name,

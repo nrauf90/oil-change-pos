@@ -25,7 +25,7 @@ class Order extends TenantModel
 
     protected $fillable = [
         'label', 'customer_name', 'phone', 'vehicle_model', 'vehicle_plate',
-        'mileage', 'next_checkup_mileage', 'notes', 'labor_charge', 'misc_charge',
+        'mileage', 'next_checkup_mileage', 'notes', 'labor_charge', 'misc_charge', 'discount',
     ];
 
     protected function casts(): array
@@ -34,6 +34,7 @@ class Order extends TenantModel
             'status' => OrderStatus::class,
             'labor_charge' => 'decimal:2',
             'misc_charge' => 'decimal:2',
+            'discount' => 'decimal:2',
             'version' => 'integer',
         ];
     }

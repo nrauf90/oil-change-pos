@@ -36,6 +36,7 @@ class RecordSale
                 'notes' => $data['notes'] ?? null,
                 'labor_charge' => SaleTotalCalculator::amount($data['labor_charge'] ?? null),
                 'misc_charge' => SaleTotalCalculator::amount($data['misc_charge'] ?? null),
+                'discount' => SaleTotalCalculator::amount($data['discount'] ?? null),
             ]);
 
             // Not mass-assignable on purpose: attribution comes from the session,
@@ -47,6 +48,7 @@ class RecordSale
                 array_column($lines, 'manually_charged_price'),
                 $data['labor_charge'] ?? null,
                 $data['misc_charge'] ?? null,
+                $data['discount'] ?? null,
             );
 
             $sale->save();

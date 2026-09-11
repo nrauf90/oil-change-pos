@@ -134,12 +134,21 @@
 
                             @can('pricing.view')
                                 <footer class="flex flex-wrap justify-end gap-x-8 gap-y-1 border-t border-slate-200 bg-slate-100 px-5 py-3 text-sm font-bold">
-                                    <span class="text-slate-600">Labor
-                                        <span class="ml-2 font-mono tabular-nums text-slate-900">{{ number_format((float) $visit->labor_charge, 2) }}</span>
-                                    </span>
-                                    <span class="text-slate-600">Misc
-                                        <span class="ml-2 font-mono tabular-nums text-slate-900">{{ number_format((float) $visit->misc_charge, 2) }}</span>
-                                    </span>
+                                    @if ((float) $visit->labor_charge > 0)
+                                        <span class="text-slate-600">Labor
+                                            <span class="ml-2 font-mono tabular-nums text-slate-900">{{ number_format((float) $visit->labor_charge, 2) }}</span>
+                                        </span>
+                                    @endif
+                                    @if ((float) $visit->misc_charge > 0)
+                                        <span class="text-slate-600">Misc
+                                            <span class="ml-2 font-mono tabular-nums text-slate-900">{{ number_format((float) $visit->misc_charge, 2) }}</span>
+                                        </span>
+                                    @endif
+                                    @if ((float) $visit->discount > 0)
+                                        <span class="text-slate-600">Discount
+                                            <span class="ml-2 font-mono tabular-nums text-slate-900">{{ number_format((float) $visit->discount, 2) }}</span>
+                                        </span>
+                                    @endif
                                     <span class="text-slate-900">Total
                                         <span class="ml-2 font-mono text-base tabular-nums">{{ number_format((float) $visit->total_amount, 2) }}</span>
                                     </span>

@@ -194,6 +194,30 @@ class CheckoutTest extends TestCase
         $this->assertSame('0.00', $sale->misc_charge);
     }
 
+    public function test_a_discount_is_stored_and_subtracted_from_the_total(): void
+    {
+        $this->post(route('sales.store'), $this->payload([
+            'labor_charge' => '500',
+            'misc_charge' => '250.50',
+            'discount' => '100',
+            'lines' => [
+                ['item_id' => null, 'item_name' => 'Oil', 'type' => 'product', 'manually_charged_price' => '4200'],
+            ],
+        ]))->assertRedirect();
+
+        $sale = Sale::sole();
+
+        $this->assertSame('100.00', $sale->discount);
+        $this->assertSame('4850.50', $sale->total_amount);
+    }
+
+    public function test_a_blank_discount_is_stored_as_zero(): void
+    {
+        $this->post(route('sales.store'), $this->payload());
+
+        $this->assertSame('0.00', Sale::sole()->discount);
+    }
+
     public function test_an_entirely_empty_sale_is_rejected(): void
     {
         $this->post(route('sales.store'), $this->payload([
@@ -529,8 +553,7 @@ class CheckoutTest extends TestCase
             'vehicle_plate' => 'ABC-123',
             'mileage' => 84500,
             'next_checkup_mileage' => 91234,
-            'labor_charge' => '750',
-            'misc_charge' => '125.50',
+            'discount' => '150',
             'lines' => [
                 ['item_id' => $oil->id, 'item_name' => 'ZIC 10W-40', 'type' => 'product', 'manually_charged_price' => '4200'],
                 ['item_id' => null, 'item_name' => '', 'type' => 'custom', 'manually_charged_price' => '900'],
@@ -547,8 +570,7 @@ class CheckoutTest extends TestCase
             ->assertSee('ABC-123', false)
             ->assertSee('84500', false)
             ->assertSee('next_checkup_mileage\\u0022:\\u002291234\\u0022', false)
-            ->assertSee('750', false)
-            ->assertSee('125.50', false)
+            ->assertSee('150', false)
             ->assertSee('4200', false)
             ->assertSee('900', false);
     }

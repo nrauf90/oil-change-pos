@@ -84,14 +84,24 @@
                 <span>Items &amp; repairs</span>
                 <span class="font-mono tabular-nums">{{ number_format((float) $sale->lineSubtotal(), 2) }}</span>
             </div>
-            <div class="flex justify-between text-slate-600">
-                <span>Labor</span>
-                <span class="font-mono tabular-nums">{{ number_format((float) $sale->labor_charge, 2) }}</span>
-            </div>
-            <div class="flex justify-between text-slate-600">
-                <span>Miscellaneous</span>
-                <span class="font-mono tabular-nums">{{ number_format((float) $sale->misc_charge, 2) }}</span>
-            </div>
+            @if ((float) $sale->labor_charge > 0)
+                <div class="flex justify-between text-slate-600">
+                    <span>Labor</span>
+                    <span class="font-mono tabular-nums">{{ number_format((float) $sale->labor_charge, 2) }}</span>
+                </div>
+            @endif
+            @if ((float) $sale->misc_charge > 0)
+                <div class="flex justify-between text-slate-600">
+                    <span>Miscellaneous</span>
+                    <span class="font-mono tabular-nums">{{ number_format((float) $sale->misc_charge, 2) }}</span>
+                </div>
+            @endif
+            @if ((float) $sale->discount > 0)
+                <div class="flex justify-between text-slate-600">
+                    <span>Discount</span>
+                    <span class="font-mono tabular-nums">{{ number_format((float) $sale->discount, 2) }}</span>
+                </div>
+            @endif
             <div class="flex items-baseline justify-between border-t-4 border-slate-900 pt-3">
                 <span class="text-base font-black uppercase tracking-wide">Total paid</span>
                 <span class="font-mono text-3xl font-black tabular-nums">{{ number_format((float) $sale->total_amount, 2) }}</span>

@@ -44,7 +44,7 @@ final class ServiceHistory
     ];
 
     /** @var array<int, string> */
-    private const SALE_MONEY_COLUMNS = ['labor_charge', 'misc_charge', 'total_amount'];
+    private const SALE_MONEY_COLUMNS = ['labor_charge', 'misc_charge', 'discount', 'total_amount'];
 
     /** @var array<int, string> Includes sale_id so the hasMany can still match rows up. */
     private const LINE_COLUMNS = ['id', 'sale_id', 'item_name', 'type'];

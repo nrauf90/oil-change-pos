@@ -53,8 +53,7 @@
           'vehicleYears' => range(2000, 2026),
           'currentYear' => 2026,
           'lines' => $initialLines,
-          'labor' => (string) old('labor_charge', ($draft ?? null)?->labor_charge ?? ''),
-          'misc' => (string) old('misc_charge', ($draft ?? null)?->misc_charge ?? ''),
+          'discount' => (string) old('discount', ($draft ?? null)?->discount ?? ''),
           'customer' => $customer,
           'customerVehicles' => $customerVehicles,
           'customerVehicleSearchUrl' => route('customer-vehicles.index'),
@@ -242,13 +241,6 @@
                           x-text="lowStockCount"></span>
                 </button>
 
-                <button type="button" class="pos-rail-btn" @click="addCustomLine()">
-                    <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-slate-200 text-slate-600">
-                        <x-filament::icon icon="heroicon-o-pencil-square" class="size-5" />
-                    </span>
-                    <span class="min-w-0 flex-1 truncate">Custom line</span>
-                </button>
-
                 {{-- Docked here rather than floating: a button hovering over the
                      bottom-right corner would sit on top of the Charge button. --}}
                 <x-counter-scripts :floating="false" label="Counter scripts" class="block"
@@ -405,7 +397,7 @@
         {{-- ------------------------------------------------------------ --}}
         {{-- B3. The ticket                                               --}}
         {{-- ------------------------------------------------------------ --}}
-        <aside class="pos-pane inset-0 z-40 w-full shrink-0 lg:static lg:z-auto lg:w-[23rem] xl:w-[26rem]"
+        <aside class="pos-pane inset-0 z-40 w-full shrink-0 lg:static lg:z-auto lg:w-80 xl:w-[22rem]"
                :class="ticketOpen ? 'fixed flex rounded-none lg:static lg:rounded-2xl' : 'hidden lg:flex'"
                aria-label="Current ticket">
 
@@ -425,6 +417,13 @@
                             aria-label="Back to products">&times;</button>
                 </div>
             </div>
+
+            <button type="button"
+                    class="flex w-full items-center gap-2 border-b border-slate-200 px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50"
+                    @click="addCustomLine()">
+                <x-filament::icon icon="heroicon-o-pencil-square" class="size-4 shrink-0" />
+                + Custom line
+            </button>
 
             {{-- Ticket lines --}}
             <div class="pos-scroll divide-y divide-slate-100">
@@ -532,15 +531,9 @@
                     </div>
 
                     <div class="flex h-9 items-center justify-between gap-3">
-                        <label class="text-sm font-semibold text-slate-500" for="labor_charge">Labor</label>
-                        <input id="labor_charge" name="labor_charge" type="text" inputmode="decimal"
-                               class="pos-input-money w-32" placeholder="0.00" x-model="labor">
-                    </div>
-
-                    <div class="flex h-9 items-center justify-between gap-3">
-                        <label class="text-sm font-semibold text-slate-500" for="misc_charge">Miscellaneous</label>
-                        <input id="misc_charge" name="misc_charge" type="text" inputmode="decimal"
-                               class="pos-input-money w-32" placeholder="0.00" x-model="misc">
+                        <label class="text-sm font-semibold text-slate-500" for="discount">Discount</label>
+                        <input id="discount" name="discount" type="text" inputmode="decimal"
+                               class="pos-input-money w-32" placeholder="0.00" x-model="discount">
                     </div>
                 </div>
 
@@ -833,8 +826,7 @@
             vehicleYears: config.vehicleYears || [],
             currentYear: config.currentYear,
             lines: config.lines,
-            labor: config.labor,
-            misc: config.misc,
+            discount: config.discount,
             customer: config.customer,
             customerVehicles: config.customerVehicles,
             recentCustomerVehicles: config.customerVehicles,
@@ -1410,7 +1402,7 @@
             },
 
             get totalCents() {
-                return this.lineSubtotalCents + this.toCents(this.labor) + this.toCents(this.misc);
+                return this.lineSubtotalCents - this.toCents(this.discount);
             },
 
             /* ---------------- on-the-fly item creation ---------------- */

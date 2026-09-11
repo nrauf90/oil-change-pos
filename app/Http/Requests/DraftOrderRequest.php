@@ -35,6 +35,7 @@ class DraftOrderRequest extends FormRequest
 
             'labor_charge' => ['nullable', 'regex:'.SaleTotalCalculator::PATTERN, 'numeric', 'min:0', 'max:99999999'],
             'misc_charge' => ['nullable', 'regex:'.SaleTotalCalculator::PATTERN, 'numeric', 'min:0', 'max:99999999'],
+            'discount' => ['nullable', 'regex:'.SaleTotalCalculator::PATTERN, 'numeric', 'min:0', 'max:99999999'],
 
             // An empty bill is valid. That is the whole point of a draft.
             'lines' => ['nullable', 'array', 'max:200'],
@@ -76,6 +77,7 @@ class DraftOrderRequest extends FormRequest
 
         $data['labor_charge'] = SaleTotalCalculator::amount($data['labor_charge'] ?? null);
         $data['misc_charge'] = SaleTotalCalculator::amount($data['misc_charge'] ?? null);
+        $data['discount'] = SaleTotalCalculator::amount($data['discount'] ?? null);
 
         return $data;
     }

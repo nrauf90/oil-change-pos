@@ -86,14 +86,24 @@
         <td class="muted">Items &amp; repairs</td>
         <td class="right">{{ number_format((float) $sale->lineSubtotal(), 2) }}</td>
     </tr>
-    <tr>
-        <td class="muted">Labor</td>
-        <td class="right">{{ number_format((float) $sale->labor_charge, 2) }}</td>
-    </tr>
-    <tr>
-        <td class="muted">Miscellaneous</td>
-        <td class="right">{{ number_format((float) $sale->misc_charge, 2) }}</td>
-    </tr>
+    @if ((float) $sale->labor_charge > 0)
+        <tr>
+            <td class="muted">Labor</td>
+            <td class="right">{{ number_format((float) $sale->labor_charge, 2) }}</td>
+        </tr>
+    @endif
+    @if ((float) $sale->misc_charge > 0)
+        <tr>
+            <td class="muted">Miscellaneous</td>
+            <td class="right">{{ number_format((float) $sale->misc_charge, 2) }}</td>
+        </tr>
+    @endif
+    @if ((float) $sale->discount > 0)
+        <tr>
+            <td class="muted">Discount</td>
+            <td class="right">{{ number_format((float) $sale->discount, 2) }}</td>
+        </tr>
+    @endif
     <tr class="grand">
         <td>TOTAL</td>
         <td class="right">{{ number_format((float) $sale->total_amount, 2) }}</td>
