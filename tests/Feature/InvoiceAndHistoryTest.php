@@ -110,6 +110,57 @@ class InvoiceAndHistoryTest extends TestCase
             ->assertSee('1,750.00');
     }
 
+    /**
+     * The old shape: a historical sale never had a discount, only labor/misc.
+     * It must keep showing exactly what it always showed, with no stray
+     * "Discount" line implying a discount that was never applied.
+     */
+    public function test_an_invoice_with_historical_labor_and_misc_shows_no_discount_line(): void
+    {
+        $sale = Sale::factory()->create([
+            'labor_charge' => 500, 'misc_charge' => 250, 'discount' => 0, 'total_amount' => 1750,
+        ]);
+        SaleItem::factory()->for($sale, 'sale')->create(['manually_charged_price' => 1000]);
+
+        $this->get(route('sales.show', $sale))
+            ->assertOk()
+            ->assertSee('Labor')
+            ->assertSee('Miscellaneous')
+            ->assertDontSee('Discount');
+
+        $pdfHtml = view('sales.pdf', ['sale' => $sale])->render();
+
+        $this->assertStringContainsString('Labor', $pdfHtml);
+        $this->assertStringContainsString('Miscellaneous', $pdfHtml);
+        $this->assertStringNotContainsString('Discount', $pdfHtml);
+    }
+
+    /**
+     * The new shape: a sale rung up after discount replaced labor/misc always
+     * carries 0 for both — the printed breakdown must show Discount only.
+     */
+    public function test_an_invoice_with_a_discount_and_no_labor_or_misc_shows_only_the_discount_line(): void
+    {
+        $sale = Sale::factory()->create([
+            'labor_charge' => 0, 'misc_charge' => 0, 'discount' => 150, 'total_amount' => 850,
+        ]);
+        SaleItem::factory()->for($sale, 'sale')->create(['manually_charged_price' => 1000]);
+
+        $this->get(route('sales.show', $sale))
+            ->assertOk()
+            ->assertSee('Discount')
+            ->assertSee('150.00')
+            ->assertDontSee('Labor')
+            ->assertDontSee('Miscellaneous');
+
+        $pdfHtml = view('sales.pdf', ['sale' => $sale])->render();
+
+        $this->assertStringContainsString('Discount', $pdfHtml);
+        $this->assertStringContainsString('150.00', $pdfHtml);
+        $this->assertStringNotContainsString('Labor', $pdfHtml);
+        $this->assertStringNotContainsString('Miscellaneous', $pdfHtml);
+    }
+
     public function test_a_walk_in_invoice_renders_without_customer_details(): void
     {
         $sale = Sale::factory()->create([

@@ -276,6 +276,25 @@ class ServiceHistoryTest extends TestCase
             ->assertSee('777.77');
     }
 
+    /**
+     * A visit rung up with a discount instead of labor/misc shows the
+     * Discount line, formatted the same way as the other money figures.
+     */
+    public function test_a_visit_with_a_discount_shows_it_to_an_admin(): void
+    {
+        $sale = Sale::factory()->create([
+            'customer_name' => 'Ali Raza', 'phone' => '03001234567', 'vehicle_plate' => 'AAA-111',
+            'labor_charge' => 0, 'misc_charge' => 0, 'discount' => 321.99, 'total_amount' => 4242.42,
+        ]);
+        SaleItem::factory()->for($sale, 'sale')->create(['manually_charged_price' => 4564.41]);
+
+        $this->actingAs($this->admin())
+            ->get(route('service-history.index', ['q' => '03001234567']))
+            ->assertOk()
+            ->assertSee('Discount')
+            ->assertSee('321.99');
+    }
+
     public function test_a_manager_also_sees_the_amounts(): void
     {
         $this->pricedSale([
