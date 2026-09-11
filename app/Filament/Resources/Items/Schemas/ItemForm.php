@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Items\Schemas;
 use App\Enums\ItemType;
 use App\Enums\Permission;
 use App\Enums\UnitOfMeasure;
+use App\Models\Category;
 use App\Models\VehicleMake;
 use App\Models\VehicleModel;
 use Filament\Actions\Action;
@@ -60,6 +61,25 @@ class ItemForm
                     ->label('Available on the sale screen')
                     ->default(true)
                     ->helperText('Switch off to retire an item without losing its sales history.'),
+
+                Select::make('category_id')
+                    ->label('Category')
+                    ->searchable()
+                    ->preload()
+                    ->placeholder('No category')
+                    ->options(fn (): array => Category::query()->orderBy('name')->pluck('name', 'id')->all())
+                    ->createOptionForm([
+                        TextInput::make('name')
+                            ->label('Category name')
+                            ->required()
+                            ->maxLength(100),
+                    ])
+                    ->createOptionAction(fn (Action $action): Action => $action->visible(
+                        fn (): bool => auth()->user()?->isAdmin() ?? false,
+                    ))
+                    ->createOptionUsing(fn (array $data): int => Category::query()->firstOrCreate([
+                        'name' => $data['name'],
+                    ])->getKey()),
 
                 Toggle::make('is_universal')
                     ->label('Universal fit')
